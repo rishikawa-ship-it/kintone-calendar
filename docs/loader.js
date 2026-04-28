@@ -10,7 +10,7 @@
   'use strict';
 
   // ===== 設定 =====
-  var BASE_URL = 'https://anthropicai-bgi.github.io/kintone-calendar';
+  var BASE_URL = 'https://rishikawa-ship-it.github.io/kintone-calendar';
   var V = Date.now(); // キャッシュバスター（常に最新を取得）
 
   // ===== CSS 読み込み =====
