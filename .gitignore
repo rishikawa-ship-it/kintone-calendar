@@ -1,0 +1,26 @@
+# 環境変数・認証情報
+.env
+.env.local
+.env.*.local
+
+# 依存パッケージ
+node_modules/
+
+# ビルド成果物
+dist/
+build/
+
+# OS生成ファイル
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# エディタ設定
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ログ
+*.log
+npm-debug.log*

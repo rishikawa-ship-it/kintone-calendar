@@ -1,0 +1,676 @@
+/* ==========================================================================
+ * kc-calendar.css
+ * kintone Customize-View Calendar Stylesheet
+ * --------------------------------------------------------------------------
+ * GAS版 index.html の <style> をベースに、kintone環境向けに調整。
+ *  - html/body へのスタイル適用なし（kintone本体を壊さない）
+ *  - .kc-root にフルハイト・overflow制御を集約
+ *  - ダイアログ / D&D / 範囲選択ハイライト用CSSを追加
+ *  - すべてのセレクタは .kc- プレフィックスを維持
+ * ========================================================================== */
+
+/* ---------- CSS Custom Properties ---------- */
+:root {
+  --kc-bg: #fff;
+  --kc-surface: #fff;
+  --kc-text: #111827;
+  --kc-subtext: #6b7280;
+  --kc-border: #e5e7eb;
+  --kc-muted: #f3f4f6;
+  --kc-time-bg: #fafafa;
+  --kc-sticky-shadow: 0 1px 0 rgba(0,0,0,.05), 0 2px 4px rgba(0,0,0,.05);
+  --kc-radius: 12px;
+
+  --kc-col-count: 7;
+  --kc-hours: 24;
+  --kc-hour-height: 60px;
+  --kc-header-h: 48px;
+  --kc-time-col-w: 50px;
+  --kc-scrollbar-w: 0px;       /* JSで上書き: 縦スクロールバー幅（ヘッダー補正用） */
+}
+
+/* ==========================================================================
+ * 1. Root / Layout
+ * ========================================================================== */
+.kc-root * { box-sizing: border-box; }
+
+.kc-root {
+  box-sizing: border-box;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto,
+               "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
+  color: var(--kc-text);
+  background: var(--kc-bg);
+  line-height: 1.5;
+
+  /* kintoneヘッダー(約230px)を差し引いたフルハイト */
+  height: calc(100vh - 230px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+/* カレンダー外枠: 残り高さを受け取る */
+.kc-grid-wrap {
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius);
+  background: var(--kc-surface);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* スクロール本体 */
+.kc-body {
+  display: grid;
+  grid-template-columns: var(--kc-time-col-w) 1fr;
+  height: calc(100% - var(--kc-header-h));
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  flex: 1 1 auto;
+  min-height: 0;
+  scrollbar-gutter: stable;
+}
+
+/* ==========================================================================
+ * 2. Header
+ * ========================================================================== */
+.kc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius);
+  background: var(--kc-surface);
+  box-shadow: var(--kc-sticky-shadow);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.kc-head-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.kc-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 24px;
+}
+
+.kc-title,
+.kc-range {
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+/* ==========================================================================
+ * 3. Buttons
+ * ========================================================================== */
+.kc-btn {
+  border: 1px solid #c1c5ca;
+  background: #fff;
+  border-radius: 10px;
+  height: 38px;
+  padding: 0 18px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
+}
+.kc-btn:hover {
+  background: var(--kc-muted);
+  border-color: #9aa0a6;
+}
+
+.kc-today { font-weight: 600; }
+
+/* 円形ナビボタン */
+.kc-btn--icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  line-height: 32px;
+  text-align: center;
+  border: none;
+  border-radius: 50%;
+  font-size: 26px;
+  font-weight: 400;
+}
+.kc-btn--icon:hover {
+  background: var(--kc-muted);
+  border: 1px solid var(--kc-border);
+}
+
+/* ==========================================================================
+ * 4. Dropdown
+ * ========================================================================== */
+.kc-dropdown {
+  position: relative;
+  margin-right: 8px;
+}
+
+.kc-dropdown-btn {
+  border: 1px solid #b6bcc2;
+  background: #fff;
+  border-radius: 10px;
+  height: 38px;
+  padding: 0 20px;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  transition: border-color .2s, background .2s;
+}
+.kc-dropdown-btn:hover {
+  border-color: #9aa0a6;
+  background: var(--kc-muted);
+}
+
+.kc-caret {
+  font-size: 12px;
+  opacity: .8;
+}
+
+.kc-dropdown-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 220px;
+  background: #f5f6f7;
+  border: 1px solid #d6dadd;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  padding: 6px;
+  list-style: none;
+  margin: 0;
+  display: none;
+  z-index: 100;
+}
+.kc-dropdown.open .kc-dropdown-menu { display: block; }
+
+.kc-option {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.kc-option:hover  { background: #e9ecef; }
+.kc-option:focus  { outline: 2px solid #9ab; }
+
+/* 旧 select 互換 */
+.kc-view {
+  border: 1px solid #c1c5ca;
+  background: #fff;
+  border-radius: 10px;
+  height: 38px;
+  padding: 0 18px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .2s;
+}
+.kc-view:hover { border-color: #9aa0a6; }
+
+/* ==========================================================================
+ * 5. Day Headers
+ * ========================================================================== */
+.kc-days {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--kc-surface);
+  display: grid;
+  grid-template-columns:
+    var(--kc-time-col-w)
+    repeat(var(--kc-col-count, 7), minmax(0, 1fr))
+    var(--kc-scrollbar-w);
+  border-bottom: none;
+  box-shadow: var(--kc-sticky-shadow);
+  height: var(--kc-header-h);
+  flex: 0 0 auto;
+}
+.kc-days,
+.kc-time-col,
+.kc-rows,
+.kc-row,
+.kc-cell { box-sizing: border-box; }
+
+.kc-day-spacer-left {
+  background: var(--kc-time-bg);
+  border-right: 1px solid var(--kc-border);
+}
+
+.kc-days .kc-day {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  border-left: 1px solid var(--kc-border);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kc-days .kc-day .kc-day-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1;
+}
+.kc-days .kc-day .kc-day-head .w {
+  color: var(--kc-subtext);
+  font-weight: 600;
+}
+.kc-days .kc-day .kc-day-head .num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.kc-days .kc-day .kc-day-head.is-today .num {
+  background: #1a73e8;
+  color: #fff;
+}
+
+.kc-day .kc-day-label { font-weight: 600; font-size: 13px; }
+.kc-day .kc-day-sub   { color: var(--kc-subtext); font-size: 12px; }
+
+/* ==========================================================================
+ * 6. All-Day Slot
+ * ========================================================================== */
+.kc-allday {
+  position: sticky;
+  top: var(--kc-header-h);
+  z-index: 40;
+  background: var(--kc-surface);
+  display: grid;
+  grid-template-columns:
+    var(--kc-time-col-w)
+    repeat(var(--kc-col-count, 7), minmax(0, 1fr))
+    var(--kc-scrollbar-w, 0px);
+  height: calc(var(--kc-hour-height) / 2);
+  border-bottom: 1px solid var(--kc-border);
+}
+
+.kc-allday .kc-gutter {
+  background: var(--kc-time-bg);
+  border-right: 1px solid var(--kc-border);
+  height: calc(var(--kc-hour-height) / 2);
+}
+
+.kc-adcell {
+  position: relative;
+  height: calc(var(--kc-hour-height) / 2);
+  padding: 4px 6px;
+  border-left: 1px solid var(--kc-border);
+}
+
+.kc-adbox {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.kc-ad-event {
+  position: absolute;
+  inset: 4px 6px;
+  background: #eef2ff;
+  border: 1px solid var(--kc-border);
+  border-radius: 10px;
+  padding: 4px 8px;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 複数日セグメント */
+.kc-ad-event.seg-start {
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+  border-top-left-radius: 10px;
+  border-bottom-left-radius: 10px;
+}
+.kc-ad-event.seg-middle { border-radius: 4px; }
+.kc-ad-event.seg-end {
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+  border-top-right-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+
+.kc-ad-event .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #3b82f6;
+  flex: 0 0 auto;
+}
+
+/* ==========================================================================
+ * 7. Time Grid
+ * ========================================================================== */
+.kc-time-col {
+  position: sticky;
+  left: 0;
+  z-index: 30;
+  background: var(--kc-time-bg);
+  border-right: 1px solid var(--kc-border);
+  display: grid;
+  grid-template-rows: repeat(var(--kc-hours), var(--kc-hour-height));
+  width: var(--kc-time-col-w);
+  min-width: var(--kc-time-col-w);
+}
+
+.kc-time {
+  font-size: 11px;
+  color: var(--kc-subtext);
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--kc-border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+.kc-time:first-child { border-top: 1px solid var(--kc-border); }
+
+.kc-rows {
+  position: relative;
+  display: grid;
+  grid-template-rows: repeat(var(--kc-hours), var(--kc-hour-height));
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(var(--kc-hour-height) - 1px),
+      var(--kc-border) calc(var(--kc-hour-height) - 1px),
+      var(--kc-border) var(--kc-hour-height)
+    );
+  border-top: 1px solid var(--kc-border);
+}
+
+.kc-row {
+  display: grid;
+  grid-template-columns: repeat(var(--kc-col-count), minmax(0, 1fr));
+}
+
+.kc-row .kc-cell {
+  border-left: 1px solid var(--kc-border);
+  position: relative;
+}
+.kc-row .kc-cell:first-child { border-left: none; }
+
+/* ==========================================================================
+ * 8. Time Slots (30-min divisions)
+ * ========================================================================== */
+.kc-time-slot {
+  height: 50%;
+  width: 100%;
+}
+
+.kc-time-slot:hover,
+.kc-adbox:hover {
+  background: var(--kc-muted);
+}
+
+/* ==========================================================================
+ * 9. Events
+ * ========================================================================== */
+.kc-event {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--kc-border);
+  background: #eef2ff;
+  padding: 6px 8px;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  box-shadow: 0 1px 2px rgba(0,0,0,.05);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.kc-event .kc-evt-title { font-weight: 600; }
+.kc-event .kc-evt-meta  { color: var(--kc-subtext); font-size: 11px; }
+
+/* イベントオーバーレイ */
+.kc-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+ * 10. Dialog
+ * ========================================================================== */
+.kc-dialog {
+  border: none;
+  border-radius: var(--kc-radius);
+  box-shadow: 0 16px 48px rgba(0,0,0,.2);
+  padding: 0;
+  max-width: 520px;
+  width: 90vw;
+}
+.kc-dialog::backdrop { background: rgba(0,0,0,.4); }
+
+.kc-dialog-form {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.kc-dialog-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.kc-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kc-field-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--kc-subtext);
+}
+
+.kc-required { color: #e53e3e; }
+
+.kc-input,
+.kc-select,
+.kc-textarea {
+  border: 1px solid var(--kc-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.kc-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.kc-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.kc-dialog-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--kc-border);
+}
+
+.kc-dialog-spacer { flex: 1; }
+
+.kc-btn--primary {
+  background: #1a73e8;
+  color: #fff;
+  border: none;
+  font-weight: 600;
+}
+.kc-btn--primary:hover { background: #1557b0; }
+
+.kc-btn--danger {
+  color: #e53e3e;
+  border-color: #e53e3e;
+  background: transparent;
+}
+.kc-btn--danger:hover { background: #fef2f2; }
+
+/* カラーピッカー入力 */
+.kc-dlg-color {
+  width: 60px;
+  height: 36px;
+  padding: 2px;
+  cursor: pointer;
+  border: 1px solid var(--kc-border);
+  border-radius: 8px;
+}
+
+/* ==========================================================================
+ * 11. Drag & Drop / Range Selection
+ * ========================================================================== */
+.kc-event.ghost {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.kc-cell.selecting,
+.kc-time-slot.selecting {
+  background: rgba(26, 115, 232, 0.1);
+}
+
+/* ==========================================================================
+ * 12. Fullscreen
+ * ========================================================================== */
+
+/* 全画面ボタン（通常時） */
+.kc-fullscreen-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: 1px solid #c1c5ca;
+  color: var(--kc-text);
+}
+.kc-fullscreen-btn:hover {
+  background: var(--kc-muted);
+  border-color: #9aa0a6;
+}
+.kc-fullscreen-btn svg {
+  pointer-events: none;
+}
+
+/* 全画面を閉じるボタン（デフォルト非表示） */
+.kc-exit-fullscreen-btn {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid #e53e3e;
+  border-radius: 10px;
+  background: #fff;
+  color: #e53e3e;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
+  white-space: nowrap;
+}
+.kc-exit-fullscreen-btn:hover {
+  background: #fef2f2;
+}
+
+/* 全画面誘導バナー */
+.kc-fullscreen-banner {
+  position: relative;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #1a73e8, #4285f4);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  border-radius: var(--kc-radius);
+  box-shadow: 0 2px 8px rgba(26, 115, 232, 0.35);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+  flex-shrink: 0;
+}
+.kc-fullscreen-banner:hover {
+  background: linear-gradient(135deg, #1557b0, #1a73e8);
+  box-shadow: 0 4px 12px rgba(26, 115, 232, 0.5);
+}
+.kc-fullscreen-banner--hidden {
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+}
+
+/* :fullscreen 疑似クラスによるスタイル調整 */
+.kc-root:fullscreen {
+  height: 100vh;
+  background: #fff;
+}
+.kc-root:-webkit-full-screen {
+  height: 100vh;
+  background: #fff;
+}
+.kc-root:-ms-fullscreen {
+  height: 100vh;
+  background: #fff;
+}
+
+/* ---------- 13. kintone 標準UIの非表示（カレンダービュー不要要素） ---------- */
+.gaia-argoui-app-index-pager {
+  display: none !important;
+}

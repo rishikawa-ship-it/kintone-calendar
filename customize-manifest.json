@@ -1,0 +1,12 @@
+{
+  "app": "704",
+  "scope": "ALL",
+  "desktop": {
+    "js": ["src/kc-calendar.js"],
+    "css": ["src/kc-calendar.css"]
+  },
+  "mobile": {
+    "js": [],
+    "css": []
+  }
+}
