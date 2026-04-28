@@ -626,13 +626,13 @@
   background: #fef2f2;
 }
 
-/* 全画面表示（kintoneヘッダー下からビューポート全体） */
+/* 全画面表示（ビューポート全体を覆う） */
 .kc-root.kc-expanded {
   position: fixed;
-  top: 48px;   /* kintoneヘッダーの高さ（標準48px） */
+  top: 0;
   left: 0;
   width: 100vw;
-  height: calc(100vh - 48px);
+  height: 100vh;
   z-index: 9999;
   background: #fff;
   padding: 12px;
