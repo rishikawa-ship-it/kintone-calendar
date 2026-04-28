@@ -1811,71 +1811,22 @@
       );
     },
 
-    /** 全画面自動試行 + フォールバックバナー表示 */
-    _tryAutoFullscreen: function (root) {
-      var requestFs = root.requestFullscreen || root.webkitRequestFullscreen || root.msRequestFullscreen;
-      if (!requestFs) return; // Fullscreen API 非対応
-
-      // まず requestFullscreen() を試みる
-      var promise;
-      try {
-        promise = requestFs.call(root);
-      } catch (_e) {
-        // 同期的に例外が出た場合はバナー表示へ
-        this._showFullscreenBanner(root);
-        return;
-      }
-
-      // Promise を返す場合（モダンブラウザ）
-      if (promise && typeof promise.catch === 'function') {
-        var self = this;
-        promise.catch(function () {
-          self._showFullscreenBanner(root);
-        });
-      }
+    /** 全画面表示（CSS fixed方式）を有効化 */
+    _enterExpanded: function (root) {
+      root.classList.add('kc-expanded');
+      var exitBtn = document.getElementById('kc-exit-fullscreen-btn');
+      var fsBtn = document.getElementById('kc-fullscreen-btn');
+      if (exitBtn) exitBtn.style.display = 'inline-flex';
+      if (fsBtn) fsBtn.style.display = 'none';
     },
 
-    /** 「クリックして全画面で表示」バナーを表示 */
-    _showFullscreenBanner: function (root) {
-      // 既にバナーがあれば何もしない
-      if (root.querySelector('.kc-fullscreen-banner')) return;
-
-      var banner = document.createElement('div');
-      banner.className = 'kc-fullscreen-banner';
-      banner.textContent = 'クリックして全画面で表示';
-      banner.setAttribute('role', 'button');
-      banner.setAttribute('tabindex', '0');
-
-      // クリックで全画面化 + バナー消去
-      var onActivate = function () {
-        var rootEl = document.getElementById('kc-root');
-        if (rootEl) {
-          var rfs = rootEl.requestFullscreen || rootEl.webkitRequestFullscreen || rootEl.msRequestFullscreen;
-          if (rfs) {
-            try { rfs.call(rootEl); } catch (_e) { /* ignore */ }
-          }
-        }
-        banner.classList.add('kc-fullscreen-banner--hidden');
-        setTimeout(function () { if (banner.parentNode) banner.parentNode.removeChild(banner); }, 400);
-      };
-
-      banner.addEventListener('click', onActivate);
-      banner.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onActivate();
-        }
-      });
-
-      // root の先頭に挿入
-      root.insertBefore(banner, root.firstChild);
-
-      // 8秒後に自動フェードアウト（まだ残っていれば）
-      setTimeout(function () {
-        if (!banner.parentNode) return;
-        banner.classList.add('kc-fullscreen-banner--hidden');
-        setTimeout(function () { if (banner.parentNode) banner.parentNode.removeChild(banner); }, 400);
-      }, 8000);
+    /** 全画面表示を解除 */
+    _exitExpanded: function (root) {
+      root.classList.remove('kc-expanded');
+      var exitBtn = document.getElementById('kc-exit-fullscreen-btn');
+      var fsBtn = document.getElementById('kc-fullscreen-btn');
+      if (exitBtn) exitBtn.style.display = 'none';
+      if (fsBtn) fsBtn.style.display = '';
     },
 
     /** 初期化 */
@@ -1939,50 +1890,37 @@
       // 全画面ボタンのイベント登録
       var fullscreenBtn = document.getElementById('kc-fullscreen-btn');
       var exitFullscreenBtn = document.getElementById('kc-exit-fullscreen-btn');
+      var bootSelf = this;
 
       if (fullscreenBtn) {
         fullscreenBtn.addEventListener('click', function () {
           var rootEl = document.getElementById('kc-root');
-          if (!rootEl) return;
-          if (rootEl.requestFullscreen) {
-            rootEl.requestFullscreen();
-          } else if (rootEl.webkitRequestFullscreen) {
-            rootEl.webkitRequestFullscreen();
-          } else if (rootEl.msRequestFullscreen) {
-            rootEl.msRequestFullscreen();
-          }
+          if (rootEl) bootSelf._enterExpanded(rootEl);
         });
       }
 
       if (exitFullscreenBtn) {
         exitFullscreenBtn.addEventListener('click', function () {
-          if (document.exitFullscreen) {
-            document.exitFullscreen();
-          } else if (document.webkitExitFullscreen) {
-            document.webkitExitFullscreen();
-          } else if (document.msExitFullscreen) {
-            document.msExitFullscreen();
-          }
+          var rootEl = document.getElementById('kc-root');
+          if (rootEl) bootSelf._exitExpanded(rootEl);
         });
       }
 
-      // fullscreenchange イベントでボタンの表示/非表示を切り替え
-      var onFullscreenChange = function () {
-        var isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
-        var fsBtn = document.getElementById('kc-fullscreen-btn');
-        var exitBtn = document.getElementById('kc-exit-fullscreen-btn');
-        if (fsBtn) fsBtn.style.display = isFullscreen ? 'none' : '';
-        if (exitBtn) exitBtn.style.display = isFullscreen ? 'inline-flex' : 'none';
-      };
-      document.addEventListener('fullscreenchange', onFullscreenChange);
-      document.addEventListener('webkitfullscreenchange', onFullscreenChange);
-      document.addEventListener('MSFullscreenChange', onFullscreenChange);
+      // ESCキーで全画面解除
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          var rootEl = document.getElementById('kc-root');
+          if (rootEl && rootEl.classList.contains('kc-expanded')) {
+            bootSelf._exitExpanded(rootEl);
+          }
+        }
+      });
 
       // 初回描画
       R.refresh();
 
-      // 全画面自動試行 + フォールバックバナー
-      this._tryAutoFullscreen(root);
+      // 初期表示で全画面
+      this._enterExpanded(root);
 
       console.log('[KC.Boot] init complete');
     }
