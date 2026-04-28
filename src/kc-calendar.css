@@ -654,7 +654,30 @@
   overflow: hidden;
 }
 
-/* ---------- 13. kintone 標準UIの非表示（カレンダービュー不要要素） ---------- */
+/* ==========================================================================
+ * 13. Weekend & Holiday Coloring
+ * ========================================================================== */
+
+/* 土曜日 */
+.kc-day--sat .kc-day-head .w { color: #1a73e8; }
+.kc-day--sat { background: rgba(26, 115, 232, 0.03); }
+.kc-cell--sat { background: rgba(26, 115, 232, 0.03); }
+.kc-adcell--sat { background: rgba(26, 115, 232, 0.03); }
+
+/* 日曜・祝日 */
+.kc-day--sun .kc-day-head .w { color: #e53e3e; }
+.kc-day--holiday .kc-day-head .w { color: #e53e3e; }
+.kc-day--sun { background: rgba(229, 62, 62, 0.03); }
+.kc-day--holiday { background: rgba(229, 62, 62, 0.03); }
+.kc-cell--sun { background: rgba(229, 62, 62, 0.03); }
+.kc-cell--holiday { background: rgba(229, 62, 62, 0.03); }
+.kc-adcell--sun { background: rgba(229, 62, 62, 0.03); }
+.kc-adcell--holiday { background: rgba(229, 62, 62, 0.03); }
+
+/* 祝日名表示 */
+.kc-holiday-name { font-size: 10px; color: #e53e3e; font-weight: 400; }
+
+/* ---------- 14. kintone 標準UIの非表示（カレンダービュー不要要素） ---------- */
 .gaia-argoui-app-index-pager {
   display: none !important;
 }

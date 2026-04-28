@@ -161,6 +161,114 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+    },
+
+    /**
+     * 日本の祝日判定
+     * getHolidayName(date) → 祝日名 or null
+     */
+    getHolidayName: function (date) {
+      var y = date.getFullYear();
+      var m = date.getMonth() + 1; // 1-12
+      var d = date.getDate();
+      var dow = date.getDay(); // 0=日
+
+      // 第N月曜日を求めるヘルパー
+      function nthMonday(year, month, n) {
+        var first = new Date(year, month - 1, 1);
+        var firstDow = first.getDay();
+        var day = 1 + ((8 - firstDow) % 7) + (n - 1) * 7;
+        return day;
+      }
+
+      // 春分の日（簡易計算）
+      function vernalEquinox(year) {
+        if (year >= 2000 && year <= 2099) {
+          return Math.floor(20.8431 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+        }
+        return 20; // フォールバック
+      }
+
+      // 秋分の日（簡易計算）
+      function autumnalEquinox(year) {
+        if (year >= 2000 && year <= 2099) {
+          return Math.floor(23.2488 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+        }
+        return 23; // フォールバック
+      }
+
+      // 固定祝日
+      var fixedHolidays = {
+        '1-1': '元日',
+        '2-11': '建国記念の日',
+        '2-23': '天皇誕生日',
+        '4-29': '昭和の日',
+        '5-3': '憲法記念日',
+        '5-4': 'みどりの日',
+        '5-5': 'こどもの日',
+        '8-11': '山の日',
+        '11-3': '文化の日',
+        '11-23': '勤労感謝の日'
+      };
+
+      var key = m + '-' + d;
+      if (fixedHolidays[key]) return fixedHolidays[key];
+
+      // 可変祝日（第N月曜日）
+      if (m === 1 && d === nthMonday(y, 1, 2)) return '成人の日';
+      if (m === 7 && d === nthMonday(y, 7, 3)) return '海の日';
+      if (m === 9 && d === nthMonday(y, 9, 3)) return '敬老の日';
+      if (m === 10 && d === nthMonday(y, 10, 2)) return 'スポーツの日';
+
+      // 春分の日
+      if (m === 3 && d === vernalEquinox(y)) return '春分の日';
+
+      // 秋分の日
+      if (m === 9 && d === autumnalEquinox(y)) return '秋分の日';
+
+      // 振替休日: 祝日が日曜の場合、翌月曜が振替休日
+      if (dow === 1) { // 月曜日の場合、前日（日曜）が祝日かチェック
+        var yesterday = new Date(y, m - 1, d - 1);
+        var ym = yesterday.getMonth() + 1;
+        var yd = yesterday.getDate();
+        var ykey = ym + '-' + yd;
+        var isYesterdayHoliday = !!fixedHolidays[ykey];
+        if (!isYesterdayHoliday) {
+          // 可変祝日チェック
+          var yy = yesterday.getFullYear();
+          if (ym === 1 && yd === nthMonday(yy, 1, 2)) isYesterdayHoliday = true;
+          if (ym === 7 && yd === nthMonday(yy, 7, 3)) isYesterdayHoliday = true;
+          if (ym === 9 && yd === nthMonday(yy, 9, 3)) isYesterdayHoliday = true;
+          if (ym === 10 && yd === nthMonday(yy, 10, 2)) isYesterdayHoliday = true;
+          if (ym === 3 && yd === vernalEquinox(yy)) isYesterdayHoliday = true;
+          if (ym === 9 && yd === autumnalEquinox(yy)) isYesterdayHoliday = true;
+        }
+        if (isYesterdayHoliday) return '振替休日';
+      }
+
+      // 国民の休日: 祝日に挟まれた平日は休日
+      // 前日と翌日がともに祝日であれば国民の休日
+      var prevDate = new Date(y, m - 1, d - 1);
+      var nextDate = new Date(y, m - 1, d + 1);
+      var self = this;
+      // 再帰を避けるため、直接チェック（振替休日・国民の休日は除く）
+      function isBaseHoliday(dt) {
+        var dm = dt.getMonth() + 1;
+        var dd = dt.getDate();
+        var dk = dm + '-' + dd;
+        if (fixedHolidays[dk]) return true;
+        var dy = dt.getFullYear();
+        if (dm === 1 && dd === nthMonday(dy, 1, 2)) return true;
+        if (dm === 7 && dd === nthMonday(dy, 7, 3)) return true;
+        if (dm === 9 && dd === nthMonday(dy, 9, 3)) return true;
+        if (dm === 10 && dd === nthMonday(dy, 10, 2)) return true;
+        if (dm === 3 && dd === vernalEquinox(dy)) return true;
+        if (dm === 9 && dd === autumnalEquinox(dy)) return true;
+        return false;
+      }
+      if (isBaseHoliday(prevDate) && isBaseHoliday(nextDate)) return '国民の休日';
+
+      return null;
     }
   };
 
@@ -1002,9 +1110,14 @@
         d.setDate(range.start.getDate() + i);
         var ymd = U.fmtYMD(d);
         var isToday = (ymd === today);
+        var dayOfWeek = d.getDay();
+        var holidayName = U.getHolidayName(d);
 
         var div = document.createElement('div');
         div.className = 'kc-day';
+        if (dayOfWeek === 6) div.classList.add('kc-day--sat');
+        if (dayOfWeek === 0) div.classList.add('kc-day--sun');
+        if (holidayName) div.classList.add('kc-day--holiday');
 
         var head = document.createElement('div');
         head.className = 'kc-day-head' + (isToday ? ' is-today' : '');
@@ -1020,6 +1133,15 @@
 
         head.appendChild(wSpan);
         head.appendChild(numSpan);
+
+        // 祝日名表示
+        if (holidayName) {
+          var holidaySpan = document.createElement('span');
+          holidaySpan.className = 'kc-holiday-name';
+          holidaySpan.textContent = holidayName;
+          head.appendChild(holidaySpan);
+        }
+
         div.appendChild(head);
 
         if (rightSpacer) {
@@ -1048,6 +1170,11 @@
         var d = U.addDays(range.start, i);
         var cell = document.createElement('div');
         cell.className = 'kc-adcell';
+        var adDow = d.getDay();
+        var adHoliday = U.getHolidayName(d);
+        if (adDow === 6) cell.classList.add('kc-adcell--sat');
+        if (adDow === 0) cell.classList.add('kc-adcell--sun');
+        if (adHoliday) cell.classList.add('kc-adcell--holiday');
         cell.dataset.date = U.fmtYMD(d);
 
         var box = document.createElement('div');
@@ -1085,6 +1212,17 @@
       document.documentElement.style.setProperty('--kc-col-count', 7);
       document.documentElement.style.setProperty('--kc-hours', 24);
 
+      // 各列の曜日・祝日情報を事前に計算
+      var range = weekRange(S.current);
+      var colInfo = [];
+      for (var ci = 0; ci < 7; ci++) {
+        var colDate = U.addDays(range.start, ci);
+        colInfo.push({
+          dow: colDate.getDay(),
+          holiday: !!U.getHolidayName(colDate)
+        });
+      }
+
       for (var h = 0; h < 24; h++) {
         var row = document.createElement('div');
         row.className = 'kc-row';
@@ -1093,6 +1231,9 @@
         for (var c = 0; c < 7; c++) {
           var cell = document.createElement('div');
           cell.className = 'kc-cell';
+          if (colInfo[c].dow === 6) cell.classList.add('kc-cell--sat');
+          if (colInfo[c].dow === 0) cell.classList.add('kc-cell--sun');
+          if (colInfo[c].holiday) cell.classList.add('kc-cell--holiday');
           row.appendChild(cell);
         }
         rows.appendChild(row);
