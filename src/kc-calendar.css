@@ -597,9 +597,24 @@
   border: 1px solid #c1c5ca;
   color: var(--kc-text);
 }
+.kc-fullscreen-btn {
+  width: auto;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid #1a73e8;
+  background: #1a73e8;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
 .kc-fullscreen-btn:hover {
-  background: var(--kc-muted);
-  border-color: #9aa0a6;
+  background: #1557b0;
+  border-color: #1557b0;
 }
 .kc-fullscreen-btn svg {
   pointer-events: none;
