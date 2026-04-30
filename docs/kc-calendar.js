@@ -1081,7 +1081,8 @@
     /** 完全リフレッシュ（描画 + データ取得） */
     async function refresh() {
       renderTimeGutter();
-      renderGrid();
+      // KC.Render.renderGrid 経由で呼ぶことで KC.TimeSlots のパッチを通過させる
+      KC.Render.renderGrid();
 
       // データ取得
       var range = gridRange();
@@ -1094,7 +1095,7 @@
 
       try {
         S.events = await KC.Api.loadEvents(isoStart, isoEnd);
-        renderGrid();
+        KC.Render.renderGrid();
         KC.Render.refreshTitle();
       } catch (err) {
         console.error('[KC] loadEvents error:', err);
