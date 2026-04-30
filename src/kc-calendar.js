@@ -298,7 +298,6 @@
       els.nextBtn  = document.querySelector('[data-action="next"]');
       els.viewWrap = $('kc-view');
       els.viewBtn  = $('kc-view-select');
-      els.dlg      = $('kc-dialog');
     }
   };
 
@@ -504,376 +503,39 @@
   };
 
   /* ====================================================================
-   * KC.Dialog — ダイアログ（作成/編集/削除）
+   * KC.Popup — kintone標準画面をポップアップで開く
    * ==================================================================== */
-  KC.Dialog = {
-    _built: false,
-
-    /** <dialog> + フォームの DOM 生成（初回のみ） */
-    ensureDOM: function () {
-      if (this._built) return;
-      this._built = true;
-
-      var root = KC.State.els.root || document.getElementById('kc-root');
-      if (!root) return;
-
-      var dlg = document.createElement('dialog');
-      dlg.id = 'kc-dialog';
-      dlg.className = 'kc-dialog';
-
-      // フォーム HTML（textContent で値セットするため placeholder のみ）
-      // 存在しないフィールドの入力欄は非表示にする
-      var F = KC.Config.FIELD;
-      var html = '';
-      html += '<div class="kc-dlg-inner">';
-      html += '<h2 class="kc-dlg-title" id="kc-dlg-title">予定の作成</h2>';
-      html += '<form method="dialog" class="kc-dlg-form" id="kc-dlg-form">';
-
-      // 予定タイトル（必須）
-      html += '<label class="kc-dlg-label">予定タイトル <span class="kc-required">*</span>';
-      html += '<input type="text" id="kc-f-title" class="kc-dlg-input" required></label>';
-
-      // 機器名
-      html += '<label class="kc-dlg-label" id="kc-row-device"' + (F.device ? '' : ' style="display:none"') + '>機器名';
-      html += '<input type="text" id="kc-f-device" class="kc-dlg-input"></label>';
-
-      // 貸出ステータス
-      html += '<label class="kc-dlg-label" id="kc-row-status"' + (F.status ? '' : ' style="display:none"') + '>貸出ステータス';
-      html += '<select id="kc-f-status" class="kc-dlg-select">';
-      html += '<option value="">（未設定）</option>';
-      html += '<option value="予約済">予約済</option>';
-      html += '<option value="貸出中">貸出中</option>';
-      html += '<option value="返却済">返却済</option>';
-      html += '</select></label>';
-
-      // カレンダー色
-      html += '<label class="kc-dlg-label" id="kc-row-color"' + (F.color ? '' : ' style="display:none"') + '>カレンダー色';
-      html += '<input type="color" id="kc-f-color" class="kc-dlg-input kc-dlg-color" value="#eef2ff"></label>';
-
-      // 開始日時（DATE型の場合は type="date"）
-      var isDateType = (KC.Config.START_FIELD_TYPE === 'DATE');
-      var dateInputType = isDateType ? 'date' : 'datetime-local';
-      html += '<label class="kc-dlg-label">開始日時';
-      html += '<input type="' + dateInputType + '" id="kc-f-start" class="kc-dlg-input"></label>';
-
-      // 終了日時
-      html += '<label class="kc-dlg-label">終了日時';
-      html += '<input type="' + dateInputType + '" id="kc-f-end" class="kc-dlg-input"></label>';
-
-      // 終日（DATE型の場合は非表示 — 常に終日扱い）
-      var showAllday = F.allday && !isDateType;
-      html += '<label class="kc-dlg-label kc-dlg-label--check" id="kc-row-allday"' + (showAllday ? '' : ' style="display:none"') + '>';
-      html += '<input type="checkbox" id="kc-f-allday"> 終日</label>';
-
-      // 場所
-      html += '<label class="kc-dlg-label" id="kc-row-place"' + (F.place ? '' : ' style="display:none"') + '>場所';
-      html += '<input type="text" id="kc-f-place" class="kc-dlg-input"></label>';
-
-      // 利用者氏名
-      html += '<label class="kc-dlg-label" id="kc-row-userName"' + (F.userName ? '' : ' style="display:none"') + '>利用者氏名';
-      html += '<input type="text" id="kc-f-userName" class="kc-dlg-input"></label>';
-
-      // 利用者メールアドレス
-      html += '<label class="kc-dlg-label" id="kc-row-userMail"' + (F.userMail ? '' : ' style="display:none"') + '>利用者メールアドレス';
-      html += '<input type="email" id="kc-f-userMail" class="kc-dlg-input"></label>';
-
-      // 説明欄
-      html += '<label class="kc-dlg-label" id="kc-row-memo"' + (F.memo ? '' : ' style="display:none"') + '>説明欄';
-      html += '<textarea id="kc-f-memo" class="kc-dlg-textarea" rows="3"></textarea></label>';
-
-      // ボタン
-      html += '<div class="kc-dlg-actions">';
-      html += '<button type="button" id="kc-btn-delete" class="kc-dlg-btn kc-dlg-btn--danger" style="display:none">削除</button>';
-      html += '<div class="kc-dlg-actions-right">';
-      html += '<button type="button" id="kc-btn-cancel" class="kc-dlg-btn">キャンセル</button>';
-      html += '<button type="button" id="kc-btn-save" class="kc-dlg-btn kc-dlg-btn--primary">保存</button>';
-      html += '</div>';
-      html += '</div>';
-
-      html += '</form>';
-      html += '</div>';
-
-      dlg.innerHTML = html;
-      root.appendChild(dlg);
-
-      // DOM参照を更新
-      KC.State.els.dlg = dlg;
-
-      // イベントバインド
-      this._bindEvents(dlg);
-    },
-
-    /** ダイアログ内のイベントを登録 */
-    _bindEvents: function (dlg) {
-      var self = this;
-
-      // 保存
-      var saveBtn = dlg.querySelector('#kc-btn-save');
-      if (saveBtn) {
-        saveBtn.addEventListener('click', function (e) {
-          e.preventDefault();
-          self._onSave();
-        });
-      }
-
-      // キャンセル
-      var cancelBtn = dlg.querySelector('#kc-btn-cancel');
-      if (cancelBtn) {
-        cancelBtn.addEventListener('click', function (e) {
-          e.preventDefault();
-          self.close();
-        });
-      }
-
-      // 削除
-      var deleteBtn = dlg.querySelector('#kc-btn-delete');
-      if (deleteBtn) {
-        deleteBtn.addEventListener('click', function (e) {
-          e.preventDefault();
-          self._onDelete();
-        });
-      }
-
-      // ESCキーで閉じる（dialog 標準挙動だが念のため）
-      dlg.addEventListener('cancel', function () {
-        self.close();
-      });
-    },
-
-    /** 保存処理 */
-    _onSave: async function () {
-      var U = KC.Utils;
-      var S = KC.State;
-
-      var fTitle    = document.getElementById('kc-f-title');
-      var fDevice   = document.getElementById('kc-f-device');
-      var fStatus   = document.getElementById('kc-f-status');
-      var fColor    = document.getElementById('kc-f-color');
-      var fStart    = document.getElementById('kc-f-start');
-      var fEnd      = document.getElementById('kc-f-end');
-      var fAllday   = document.getElementById('kc-f-allday');
-      var fPlace    = document.getElementById('kc-f-place');
-      var fUserName = document.getElementById('kc-f-userName');
-      var fUserMail = document.getElementById('kc-f-userMail');
-      var fMemo     = document.getElementById('kc-f-memo');
-
-      var isDateType = (KC.Config.START_FIELD_TYPE === 'DATE');
-
-      var payload = {
-        title:    fTitle.value.trim(),
-        device:   fDevice ? fDevice.value.trim() : '',
-        status:   fStatus ? fStatus.value.trim() : '',
-        color:    fColor ? fColor.value : '',
-        place:    fPlace ? fPlace.value.trim() : '',
-        userName: fUserName ? fUserName.value.trim() : '',
-        userMail: fUserMail ? fUserMail.value.trim() : '',
-        memo:     fMemo ? fMemo.value : '',
-        allday:   isDateType ? true : (fAllday ? fAllday.checked : false)
-      };
-
-      if (!payload.title) { alert('予定タイトルは必須です'); return; }
-
-      if (isDateType) {
-        // DATE型: input type="date" → "YYYY-MM-DD" 値
-        var startDate = fStart.value; // "2025-11-03"
-        var endDate = fEnd.value;     // "2025-11-05"
-        if (!startDate || !endDate) { alert('開始/終了を入力してください'); return; }
-        if (startDate > endDate) { alert('終了は開始より後にしてください'); return; }
-        // 終日イベント: start=開始日0時, end=終了日の翌日0時
-        payload.start = new Date(startDate + 'T00:00:00').toISOString();
-        var endD = new Date(endDate + 'T00:00:00');
-        endD.setDate(endD.getDate() + 1);
-        payload.end = endD.toISOString();
-      } else {
-        var s  = U.fromLocalInput(fStart.value);
-        var en = U.fromLocalInput(fEnd.value);
-        if (!s || !en)      { alert('開始/終了を入力してください'); return; }
-        if (new Date(s) >= new Date(en)) { alert('終了は開始より後にしてください'); return; }
-
-        // 終日の場合、終了日を翌日0時に調整
-        if (payload.allday) {
-          var eDate = new Date(en);
-          var next0 = new Date(
-            Date.UTC(eDate.getUTCFullYear(), eDate.getUTCMonth(), eDate.getUTCDate(), 0, 0, 0)
-          );
-          payload.start = new Date(s).toISOString();
-          payload.end   = U.addMs(next0.toISOString(), 24 * 60 * 60 * 1000);
-        } else {
-          payload.start = s;
-          payload.end   = en;
-        }
-      }
-
-      // ログインユーザーの account をセット
-      try {
-        var user = KC.Api.getLoginUser();
-        if (user && user.code) {
-          payload.account = user.code;
-        }
-      } catch (_e) { /* 取得失敗時は空 */ }
-
-      try {
-        if (S.editing) {
-          payload.id = S.editing.id;
-          await KC.Api.updateEvent(payload);
-        } else {
-          await KC.Api.createEvent(payload);
-        }
-        this.close();
-        KC.Render.refresh();
-      } catch (err) {
-        alert(err.message || String(err));
-      }
-    },
-
-    /** 削除処理 */
-    _onDelete: async function () {
-      var S = KC.State;
-      if (!S.editing) return;
-      if (!confirm('この予定を削除しますか？')) return;
-
-      try {
-        await KC.Api.deleteEvent(S.editing.id);
-        this.close();
-        KC.Render.refresh();
-      } catch (err) {
-        alert(err.message || String(err));
-      }
-    },
-
-    /** 新規作成ダイアログを開く */
+  KC.Popup = {
+    /** 新規作成ポップアップを開く */
     openCreate: function (options) {
-      this.ensureDOM();
-      options = options || {};
-      var U = KC.Utils;
-      var S = KC.State;
-      S.editing = null;
-
-      var dlgTitle = document.getElementById('kc-dlg-title');
-      if (dlgTitle) dlgTitle.textContent = '予定の作成';
-
-      var fTitle    = document.getElementById('kc-f-title');
-      var fDevice   = document.getElementById('kc-f-device');
-      var fStatus   = document.getElementById('kc-f-status');
-      var fColor    = document.getElementById('kc-f-color');
-      var fStart    = document.getElementById('kc-f-start');
-      var fEnd      = document.getElementById('kc-f-end');
-      var fAllday   = document.getElementById('kc-f-allday');
-      var fPlace    = document.getElementById('kc-f-place');
-      var fUserName = document.getElementById('kc-f-userName');
-      var fUserMail = document.getElementById('kc-f-userMail');
-      var fMemo     = document.getElementById('kc-f-memo');
-      var btnDelete = document.getElementById('kc-btn-delete');
-
-      // フォームクリア
-      fTitle.value    = '';
-      if (fDevice)  fDevice.value   = '';
-      if (fStatus)  fStatus.value   = '';
-      if (fColor)   fColor.value    = '#eef2ff';
-      if (fPlace)   fPlace.value    = '';
-      if (fMemo)    fMemo.value     = '';
-
-      // ログインユーザーをデフォルトセット
-      try {
-        var user = KC.Api.getLoginUser();
-        if (user) {
-          if (fUserName) fUserName.value = user.name || '';
-          if (fUserMail) fUserMail.value = user.email || '';
-        }
-      } catch (_e) {
-        if (fUserName) fUserName.value = '';
-        if (fUserMail) fUserMail.value = '';
+      // options: { date, hour, minute, allday }
+      sessionStorage.setItem('KC_CREATE_CONTEXT', JSON.stringify(options));
+      var appId = KC.Config.getAppId();
+      var url = '/k/' + appId + '/edit';
+      var popup = window.open(url, 'kc_edit', 'width=800,height=700,scrollbars=yes,resizable=yes');
+      if (popup) {
+        var checkClosed = setInterval(function () {
+          if (popup.closed) {
+            clearInterval(checkClosed);
+            KC.Render.refresh();
+          }
+        }, 500);
       }
-
-      // 日時セット
-      var isDateType = (KC.Config.START_FIELD_TYPE === 'DATE');
-
-      if (isDateType) {
-        // DATE型: input type="date" に "YYYY-MM-DD" をセット
-        if (fAllday) fAllday.checked = true;
-        var dateStr = options.date || U.fmtYMD(new Date());
-        fStart.value = dateStr;
-        fEnd.value   = dateStr;
-      } else if (options.allday) {
-        if (fAllday) fAllday.checked = true;
-        var dateStr2 = options.date || U.fmtYMD(new Date());
-        fStart.value = dateStr2 + 'T00:00';
-        fEnd.value   = dateStr2 + 'T23:59';
-      } else if (options.date) {
-        if (fAllday) fAllday.checked = false;
-        var hour   = options.hour   != null ? options.hour   : 9;
-        var minute = options.minute != null ? options.minute : 0;
-        var startDt = new Date(options.date + 'T' + U.pad2(hour) + ':' + U.pad2(minute) + ':00');
-        var endDt   = new Date(startDt.getTime() + 30 * 60000);
-        fStart.value = U.toLocalInput(startDt.toISOString());
-        fEnd.value   = U.toLocalInput(endDt.toISOString());
-      } else {
-        if (fAllday) fAllday.checked = false;
-        var now = new Date();
-        fStart.value = U.toLocalInput(now.toISOString());
-        fEnd.value   = U.toLocalInput(new Date(now.getTime() + 30 * 60000).toISOString());
-      }
-
-      if (btnDelete) btnDelete.style.display = 'none';
-      S.els.dlg.showModal();
     },
 
-    /** 編集ダイアログを開く */
-    openEdit: function (ev) {
-      this.ensureDOM();
-      var U = KC.Utils;
-      var S = KC.State;
-      S.editing = ev;
-
-      var dlgTitle = document.getElementById('kc-dlg-title');
-      if (dlgTitle) dlgTitle.textContent = '予定の編集';
-
-      document.getElementById('kc-f-title').value    = ev.title || '';
-      var fDevice   = document.getElementById('kc-f-device');
-      var fStatus   = document.getElementById('kc-f-status');
-      var fColor    = document.getElementById('kc-f-color');
-      var fAllday   = document.getElementById('kc-f-allday');
-      var fPlace    = document.getElementById('kc-f-place');
-      var fUserName = document.getElementById('kc-f-userName');
-      var fUserMail = document.getElementById('kc-f-userMail');
-      var fMemo     = document.getElementById('kc-f-memo');
-      if (fDevice)   fDevice.value   = ev.device || '';
-      if (fStatus)   fStatus.value   = ev.status || '';
-      if (fColor)    fColor.value    = ev.color || '#eef2ff';
-
-      var isDateType = (KC.Config.START_FIELD_TYPE === 'DATE');
-      if (isDateType) {
-        // DATE型: ISO文字列 → "YYYY-MM-DD"
-        document.getElementById('kc-f-start').value = ev.start ? ev.start.substring(0, 10) : '';
-        // end は翌日0時のISO → 1日戻して表示
-        if (ev.end) {
-          var endD = new Date(ev.end);
-          endD.setDate(endD.getDate() - 1);
-          document.getElementById('kc-f-end').value = U.fmtYMD(endD);
-        } else {
-          document.getElementById('kc-f-end').value = '';
-        }
-        if (fAllday) fAllday.checked = true;
-      } else {
-        document.getElementById('kc-f-start').value = U.toLocalInput(ev.start);
-        document.getElementById('kc-f-end').value   = U.toLocalInput(ev.end);
-        if (fAllday) fAllday.checked = !!ev.allday;
+    /** 編集（レコード詳細）ポップアップを開く */
+    openEdit: function (recordId) {
+      var appId = KC.Config.getAppId();
+      var url = '/k/' + appId + '/show#record=' + recordId;
+      var popup = window.open(url, 'kc_edit', 'width=800,height=700,scrollbars=yes,resizable=yes');
+      if (popup) {
+        var checkClosed = setInterval(function () {
+          if (popup.closed) {
+            clearInterval(checkClosed);
+            KC.Render.refresh();
+          }
+        }, 500);
       }
-      if (fPlace)    fPlace.value    = ev.place || '';
-      if (fUserName) fUserName.value = ev.userName || '';
-      if (fUserMail) fUserMail.value = ev.userMail || '';
-      if (fMemo)     fMemo.value     = ev.memo || '';
-
-      var btnDelete = document.getElementById('kc-btn-delete');
-      if (btnDelete) btnDelete.style.display = 'inline-block';
-
-      S.els.dlg.showModal();
-    },
-
-    /** ダイアログを閉じる */
-    close: function () {
-      var dlg = KC.State.els.dlg || document.getElementById('kc-dialog');
-      if (dlg && dlg.open) dlg.close();
     }
   };
 
@@ -1313,7 +975,7 @@
             el.style.cursor = 'pointer';
             el.addEventListener('click', function (clickEvt) {
               clickEvt.stopPropagation();
-              KC.Dialog.openEdit(evt);
+              KC.Popup.openEdit(evt.id);
             });
 
             adCell.appendChild(el);
@@ -1390,7 +1052,7 @@
         // イベントクリック → 編集ダイアログ
         div.addEventListener('click', function (clickEvt) {
           clickEvt.stopPropagation();
-          KC.Dialog.openEdit(evt);
+          KC.Popup.openEdit(evt.id);
         });
 
         // D&D 移動（mousedown）
@@ -1670,10 +1332,11 @@
       var half = Number(slot.dataset.half || 0);
       var minute = half === 0 ? 0 : 30;
 
-      KC.Dialog.openCreate({
+      KC.Popup.openCreate({
         date: date,
         hour: hour,
-        minute: minute
+        minute: minute,
+        allday: false
       });
     },
 
@@ -1685,7 +1348,7 @@
       var cell = box.closest('.kc-adcell');
       var date = (cell && cell.dataset.date) || box.dataset.date || KC.Utils.fmtYMD(new Date());
 
-      KC.Dialog.openCreate({
+      KC.Popup.openCreate({
         date: date,
         allday: true
       });
@@ -2068,6 +1731,15 @@
   };
 
   /* ====================================================================
+   * グローバルにリフレッシュ関数を公開（ポップアップから呼ばれる）
+   * ==================================================================== */
+  window.KC_REFRESH = function () {
+    if (KC && KC.Render && KC.Render.refresh) {
+      KC.Render.refresh();
+    }
+  };
+
+  /* ====================================================================
    * kintone.events 登録
    * ==================================================================== */
   kintone.events.on('app.record.index.show', function (event) {
@@ -2080,6 +1752,87 @@
 
     KC.Boot._initialized = true;
     KC.Boot.init(); // async だが return event は即座に返す
+    return event;
+  });
+
+  /* ====================================================================
+   * 新規作成画面でのフィールド自動セット（ポップアップ内で発火）
+   * ==================================================================== */
+  kintone.events.on('app.record.create.show', function (event) {
+    var ctx = sessionStorage.getItem('KC_CREATE_CONTEXT');
+    if (!ctx) return event;
+    sessionStorage.removeItem('KC_CREATE_CONTEXT');
+
+    var data = JSON.parse(ctx);
+    var F = KC.Config.FIELD;
+    var record = event.record;
+
+    if (data.allday) {
+      // 終日イベント
+      if (KC.Config.START_FIELD_TYPE === 'DATE') {
+        record[F.start].value = data.date;
+        record[F.end].value = data.date;
+      } else {
+        record[F.start].value = data.date + 'T00:00:00+09:00';
+        // 終了は翌日
+        var endDate = new Date(data.date);
+        endDate.setDate(endDate.getDate() + 1);
+        record[F.end].value = KC.Utils.fmtYMD(endDate) + 'T00:00:00+09:00';
+      }
+      if (F.allday && record[F.allday]) {
+        record[F.allday].value = [KC.Config.ALLDAY_LABEL];
+      }
+    } else {
+      var pad2 = KC.Utils.pad2;
+      var startTime = pad2(data.hour) + ':' + pad2(data.minute) + ':00';
+      var endMinute = data.minute + 30;
+      var endHour = data.hour;
+      if (endMinute >= 60) { endMinute -= 60; endHour += 1; }
+      var endTime = pad2(endHour) + ':' + pad2(endMinute) + ':00';
+
+      if (KC.Config.START_FIELD_TYPE === 'DATE') {
+        record[F.start].value = data.date;
+        record[F.end].value = data.date;
+      } else {
+        record[F.start].value = data.date + 'T' + startTime + '+09:00';
+        record[F.end].value = data.date + 'T' + endTime + '+09:00';
+      }
+    }
+
+    // ログインユーザー情報をセット
+    var user = kintone.getLoginUser();
+    if (F.userName && record[F.userName]) record[F.userName].value = user.name || '';
+    if (F.userMail && record[F.userMail]) record[F.userMail].value = user.email || '';
+    if (F.account && record[F.account]) record[F.account].value = [{ code: user.code }];
+
+    return event;
+  });
+
+  /* ====================================================================
+   * 保存成功後にポップアップを閉じてカレンダーを更新
+   * ==================================================================== */
+  kintone.events.on([
+    'app.record.create.submit.success',
+    'app.record.edit.submit.success'
+  ], function (event) {
+    if (window.opener) {
+      // 親ウィンドウのカレンダーをリフレッシュ
+      try { window.opener.KC_REFRESH && window.opener.KC_REFRESH(); } catch (e) {}
+      window.close();
+      return event;
+    }
+    return event;
+  });
+
+  /* ====================================================================
+   * 削除成功後も同様
+   * ==================================================================== */
+  kintone.events.on('app.record.detail.delete.submit', function (event) {
+    if (window.opener) {
+      try { window.opener.KC_REFRESH && window.opener.KC_REFRESH(); } catch (e) {}
+      // 削除の場合はリダイレクトを防ぎ、ウィンドウを閉じる
+      setTimeout(function () { window.close(); }, 500);
+    }
     return event;
   });
 

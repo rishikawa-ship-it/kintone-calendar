@@ -469,83 +469,8 @@
 }
 
 /* ==========================================================================
- * 10. Dialog
+ * 10. Buttons (Primary / Danger) — used by header buttons
  * ========================================================================== */
-.kc-dialog {
-  border: none;
-  border-radius: var(--kc-radius);
-  box-shadow: 0 16px 48px rgba(0,0,0,.2);
-  padding: 0;
-  max-width: 520px;
-  width: 90vw;
-}
-.kc-dialog::backdrop { background: rgba(0,0,0,.4); }
-
-.kc-dialog-form {
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.kc-dialog-title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.kc-dialog-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.kc-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.kc-field-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--kc-subtext);
-}
-
-.kc-required { color: #e53e3e; }
-
-.kc-input,
-.kc-select,
-.kc-textarea {
-  border: 1px solid var(--kc-border);
-  border-radius: 8px;
-  padding: 8px 12px;
-  font-size: 14px;
-  font-family: inherit;
-}
-
-.kc-field-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.kc-field--inline {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-}
-
-.kc-dialog-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--kc-border);
-}
-
-.kc-dialog-spacer { flex: 1; }
-
 .kc-btn--primary {
   background: #1a73e8;
   color: #fff;
@@ -560,16 +485,6 @@
   background: transparent;
 }
 .kc-btn--danger:hover { background: #fef2f2; }
-
-/* カラーピッカー入力 */
-.kc-dlg-color {
-  width: 60px;
-  height: 36px;
-  padding: 2px;
-  cursor: pointer;
-  border: 1px solid var(--kc-border);
-  border-radius: 8px;
-}
 
 /* ==========================================================================
  * 11. Drag & Drop / Range Selection
