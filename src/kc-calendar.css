@@ -337,6 +337,10 @@
 .kc-ad-event {
   position: absolute;
   inset: 4px 6px;
+  /* .kc-allday (z-index: 40) のローカル文脈内で .kc-adcell の border より前面に来るよう z-index: 1 を設定。
+   * seg-start / seg-middle / seg-end で right/left: -1px として隣セルへ張り出した部分が
+   * 隣セルの border-left に隠れないようにするための最小値。 */
+  z-index: 1;
   background: #eef2ff;
   border: 1px solid var(--kc-border);
   border-radius: 10px;
