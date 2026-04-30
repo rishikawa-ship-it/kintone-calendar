@@ -1040,16 +1040,17 @@
 
         var metaDiv = document.createElement('div');
         metaDiv.className = 'kc-evt-meta';
-        // 同日なら "HH:MM ~ HH:MM"、跨ぎなら "MM/DD HH:MM ~ MM/DD HH:MM"
+        // 同日: "M/D HH:MM ~ HH:MM" / 跨ぎ: "M/D HH:MM ~ M/D HH:MM"
         var sameDay = (s.getFullYear() === e.getFullYear()) &&
                       (s.getMonth() === e.getMonth()) &&
                       (s.getDate() === e.getDate());
         var sTime = U.pad2(s.getHours()) + ':' + U.pad2(s.getMinutes());
         var eTime = U.pad2(e.getHours()) + ':' + U.pad2(e.getMinutes());
+        var sDate = (s.getMonth() + 1) + '/' + s.getDate();
+        var eDate = (e.getMonth() + 1) + '/' + e.getDate();
         var timeStr = sameDay
-          ? (sTime + ' ~ ' + eTime)
-          : ((s.getMonth() + 1) + '/' + s.getDate() + ' ' + sTime + ' ~ ' +
-             (e.getMonth() + 1) + '/' + e.getDate() + ' ' + eTime);
+          ? (sDate + ' ' + sTime + ' ~ ' + eTime)
+          : (sDate + ' ' + sTime + ' ~ ' + eDate + ' ' + eTime);
         metaDiv.textContent = timeStr + (evt.device ? ' / ' + evt.device : '');
 
         // 色指定時はメタの文字色も調整
