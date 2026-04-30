@@ -525,8 +525,14 @@
 
     /** 編集（レコード詳細）ポップアップを開く */
     openEdit: function (recordId) {
+      if (recordId === undefined || recordId === null || recordId === '') {
+        console.error('[KC.Popup.openEdit] recordId が取得できていません:', recordId);
+        alert('レコードIDの取得に失敗しました。コンソールを確認してください。');
+        return;
+      }
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/show#record=' + recordId;
+      console.log('[KC.Popup.openEdit] open:', url);
       var popup = window.open(url, 'kc_edit', 'width=800,height=700,scrollbars=yes,resizable=yes');
       if (popup) {
         var checkClosed = setInterval(function () {
@@ -1034,8 +1040,16 @@
 
         var metaDiv = document.createElement('div');
         metaDiv.className = 'kc-evt-meta';
-        var timeStr = U.pad2(s.getHours()) + ':' + U.pad2(s.getMinutes()) + ' - ' +
-                      U.pad2(e.getHours()) + ':' + U.pad2(e.getMinutes());
+        // 同日なら "HH:MM ~ HH:MM"、跨ぎなら "MM/DD HH:MM ~ MM/DD HH:MM"
+        var sameDay = (s.getFullYear() === e.getFullYear()) &&
+                      (s.getMonth() === e.getMonth()) &&
+                      (s.getDate() === e.getDate());
+        var sTime = U.pad2(s.getHours()) + ':' + U.pad2(s.getMinutes());
+        var eTime = U.pad2(e.getHours()) + ':' + U.pad2(e.getMinutes());
+        var timeStr = sameDay
+          ? (sTime + ' ~ ' + eTime)
+          : ((s.getMonth() + 1) + '/' + s.getDate() + ' ' + sTime + ' ~ ' +
+             (e.getMonth() + 1) + '/' + e.getDate() + ' ' + eTime);
         metaDiv.textContent = timeStr + (evt.device ? ' / ' + evt.device : '');
 
         // 色指定時はメタの文字色も調整

@@ -24,6 +24,7 @@
   --kc-col-count: 7;
   --kc-hours: 24;
   --kc-hour-height: 60px;
+  --kc-allday-h: 40px;
   --kc-header-h: 48px;
   --kc-time-col-w: 50px;
   --kc-scrollbar-w: 0px;       /* JSで上書き: 縦スクロールバー幅（ヘッダー補正用） */
@@ -310,19 +311,19 @@
     var(--kc-time-col-w)
     repeat(var(--kc-col-count, 7), minmax(0, 1fr))
     var(--kc-scrollbar-w, 0px);
-  height: calc(var(--kc-hour-height) / 2);
+  height: var(--kc-allday-h);
   border-bottom: 1px solid var(--kc-border);
 }
 
 .kc-allday .kc-gutter {
   background: var(--kc-time-bg);
   border-right: 1px solid var(--kc-border);
-  height: calc(var(--kc-hour-height) / 2);
+  height: var(--kc-allday-h);
 }
 
 .kc-adcell {
   position: relative;
-  height: calc(var(--kc-hour-height) / 2);
+  height: var(--kc-allday-h);
   padding: 4px 6px;
   border-left: 1px solid var(--kc-border);
 }
@@ -339,14 +340,15 @@
   background: #eef2ff;
   border: 1px solid var(--kc-border);
   border-radius: 10px;
-  padding: 4px 8px;
-  font-size: 12px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 600;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 /* 複数日セグメント */
@@ -365,8 +367,8 @@
 }
 
 .kc-ad-event .dot {
-  width: 6px;
-  height: 6px;
+  width: 9px;
+  height: 9px;
   border-radius: 999px;
   background: #3b82f6;
   flex: 0 0 auto;
@@ -448,17 +450,26 @@
   border-radius: 10px;
   border: 1px solid var(--kc-border);
   background: #eef2ff;
-  padding: 6px 8px;
-  font-size: 12px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.4;
   overflow: hidden;
-  white-space: nowrap;
+  white-space: normal;
   text-overflow: ellipsis;
   box-shadow: 0 1px 2px rgba(0,0,0,.05);
   cursor: pointer;
   pointer-events: auto;
 }
-.kc-event .kc-evt-title { font-weight: 600; }
-.kc-event .kc-evt-meta  { color: var(--kc-subtext); font-size: 11px; }
+.kc-event .kc-evt-title {
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.kc-event .kc-evt-meta {
+  color: var(--kc-subtext);
+  font-size: 12px;
+  margin-top: 2px;
+}
 
 /* イベントオーバーレイ */
 .kc-overlay {
