@@ -950,34 +950,59 @@
           var dates = spanDates(evt.start, new Date(e.getFullYear(), e.getMonth(), e.getDate() - 1).toISOString());
           var overlap = dates.filter(function (d) { return weekYMD.indexOf(d) >= 0; });
 
+          // 全期間の日付レンジ表示用（API では終端=翌日0時で保存しているので -1 日が実際の終了日）
+          var adStartDate = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+          var adEndDate   = new Date(e.getFullYear(), e.getMonth(), e.getDate() - 1);
+          var adStartStr  = (adStartDate.getMonth() + 1) + '/' + adStartDate.getDate();
+          var adEndStr    = (adEndDate.getMonth() + 1) + '/' + adEndDate.getDate();
+          var adDateRange = (adStartStr === adEndStr) ? adStartStr : (adStartStr + ' ~ ' + adEndStr);
+
+          var isMulti = overlap.length > 1;
+
           overlap.forEach(function (ymd, idx) {
             var adCell = alldayWrap ? alldayWrap.querySelector('.kc-adcell[data-date="' + ymd + '"] .kc-adbox') : null;
             if (!adCell) return;
 
             var el = document.createElement('div');
             el.className = 'kc-ad-event';
-            if (overlap.length > 1) {
-              el.classList.add(idx === 0 ? 'seg-start' : (idx === overlap.length - 1 ? 'seg-end' : 'seg-middle'));
+            var isFirst = (idx === 0);
+            if (isMulti) {
+              el.classList.add(isFirst ? 'seg-start' : (idx === overlap.length - 1 ? 'seg-end' : 'seg-middle'));
             }
 
-            // XSS安全: textContent 使用
-            var dot = document.createElement('span');
-            dot.className = 'dot';
-            var titleSpan = document.createElement('span');
-            titleSpan.textContent = evt.title || '(無題)';
+            // 単独 or 先頭セグメントのみ内容を描画。中間/末尾はバーのみで連結表現。
+            if (!isMulti || isFirst) {
+              var dot = document.createElement('span');
+              dot.className = 'dot';
 
-            // カレンダー色の反映
+              var contentDiv = document.createElement('div');
+              contentDiv.className = 'kc-ad-evt-content';
+
+              var titleSpan = document.createElement('span');
+              titleSpan.className = 'kc-ad-evt-title';
+              titleSpan.textContent = evt.title || '(無題)';
+
+              var dateSpan = document.createElement('span');
+              dateSpan.className = 'kc-ad-evt-date';
+              dateSpan.textContent = adDateRange;
+
+              contentDiv.appendChild(titleSpan);
+              contentDiv.appendChild(dateSpan);
+              el.appendChild(dot);
+              el.appendChild(contentDiv);
+
+              if (evt.color) {
+                dot.style.background = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
+              }
+            }
+
+            // 色適用（バー本体は全セグメントに）
             if (evt.color) {
               el.style.background = evt.color;
               el.style.borderColor = evt.color;
               el.style.color = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
-              dot.style.background = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
             }
 
-            el.appendChild(dot);
-            el.appendChild(titleSpan);
-
-            // イベントクリック → 編集ダイアログ
             el.style.cursor = 'pointer';
             el.addEventListener('click', function (clickEvt) {
               clickEvt.stopPropagation();
@@ -989,113 +1014,86 @@
           return;
         }
 
-        // 通常イベント配置（日跨ぎ対応: 表示週内の各日にセグメントを配置）
-        // メタ用の日付文字列を事前生成
-        var sTime = U.pad2(s.getHours()) + ':' + U.pad2(s.getMinutes());
-        var eTime = U.pad2(e.getHours()) + ':' + U.pad2(e.getMinutes());
-        var sDate = (s.getMonth() + 1) + '/' + s.getDate();
-        var eDate = (e.getMonth() + 1) + '/' + e.getDate();
+        // 通常イベント配置（開始日のみに配置、跨ぎは24:00で切る）
+        var dayIdx = weekYMD.indexOf(U.fmtYMD(s));
+        if (dayIdx < 0) return;
+
+        var startMin = s.getHours() * 60 + s.getMinutes();
+        var endMin   = e.getHours() * 60 + e.getMinutes();
+        if (U.fmtYMD(s) !== U.fmtYMD(e) || endMin <= startMin) {
+          endMin = 24 * 60;
+        }
+        var totalMin = 24 * 60;
+        var topPct    = (startMin / totalMin) * 100;
+        var heightPct = ((endMin - startMin) / totalMin) * 100;
+
+        var firstHourRow = rows.children[0];
+        if (!firstHourRow) return;
+        var colCell = firstHourRow.children[dayIdx];
+        if (!colCell) return;
+
+        var overlay = colCell.querySelector('.kc-overlay');
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.className = 'kc-overlay';
+          overlay.style.position = 'relative';
+          overlay.style.height = 'calc(var(--kc-hours) * var(--kc-hour-height))';
+          overlay.style.width = '100%';
+          overlay.style.pointerEvents = 'none';
+          colCell.appendChild(overlay);
+        }
+
+        var div = document.createElement('div');
+        div.className = 'kc-event';
+        div.style.top    = 'calc(' + topPct + '% + 0px)';
+        div.style.height = 'calc(' + heightPct + '% - 2px)';
+        div.style.pointerEvents = 'auto';
+
+        if (evt.color) {
+          div.style.background = evt.color;
+          div.style.borderColor = evt.color;
+          div.style.color = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
+        }
+
+        // XSS安全: textContent 使用
+        var titleDiv = document.createElement('div');
+        titleDiv.className = 'kc-evt-title';
+        titleDiv.textContent = evt.title || '(無題)';
+
+        var metaDiv = document.createElement('div');
+        metaDiv.className = 'kc-evt-meta';
+        // 同日: "M/D HH:MM ~ HH:MM" / 跨ぎ: "M/D HH:MM ~ M/D HH:MM"
+        var sTimeStr = U.pad2(s.getHours()) + ':' + U.pad2(s.getMinutes());
+        var eTimeStr = U.pad2(e.getHours()) + ':' + U.pad2(e.getMinutes());
+        var sDateStr = (s.getMonth() + 1) + '/' + s.getDate();
+        var eDateStr = (e.getMonth() + 1) + '/' + e.getDate();
         var sameDayWhole = (s.getFullYear() === e.getFullYear()) &&
                            (s.getMonth() === e.getMonth()) &&
                            (s.getDate() === e.getDate());
         var fullTimeStr = sameDayWhole
-          ? (sDate + ' ' + sTime + ' ~ ' + eTime)
-          : (sDate + ' ' + sTime + ' ~ ' + eDate + ' ' + eTime);
+          ? (sDateStr + ' ' + sTimeStr + ' ~ ' + eTimeStr)
+          : (sDateStr + ' ' + sTimeStr + ' ~ ' + eDateStr + ' ' + eTimeStr);
+        metaDiv.textContent = fullTimeStr + (evt.device ? ' / ' + evt.device : '');
 
-        // 表示週の各日について、イベントが含まれるか判定して配置情報を作成
-        var dayPlacements = [];
-        for (var di = 0; di < 7; di++) {
-          var dayDate = U.addDays(range.start, di);
-          var dayStart = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate(), 0, 0, 0, 0);
-          var dayEndExclusive = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
-          if (s >= dayEndExclusive || e <= dayStart) continue;
-
-          var dayMS = dayStart.getTime();
-          var startMin = Math.max(0, Math.floor((s.getTime() - dayMS) / 60000));
-          var endMin   = Math.min(24 * 60, Math.ceil((e.getTime() - dayMS) / 60000));
-          if (endMin <= startMin) continue;
-          dayPlacements.push({ dayIdx: di, startMin: startMin, endMin: endMin });
+        if (evt.color) {
+          metaDiv.style.color = isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
         }
-        if (dayPlacements.length === 0) return;
 
-        var isMultiDay = dayPlacements.length > 1;
+        div.appendChild(titleDiv);
+        div.appendChild(metaDiv);
+        div.title = (evt.title || '') + '\n' + fullTimeStr;
 
-        dayPlacements.forEach(function (p, segIdx) {
-          var totalMin = 24 * 60;
-          var topPct    = (p.startMin / totalMin) * 100;
-          var heightPct = ((p.endMin - p.startMin) / totalMin) * 100;
-
-          var firstHourRow = rows.children[0];
-          if (!firstHourRow) return;
-          var colCell = firstHourRow.children[p.dayIdx];
-          if (!colCell) return;
-
-          var overlay = colCell.querySelector('.kc-overlay');
-          if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.className = 'kc-overlay';
-            overlay.style.position = 'relative';
-            overlay.style.height = 'calc(var(--kc-hours) * var(--kc-hour-height))';
-            overlay.style.width = '100%';
-            overlay.style.pointerEvents = 'none';
-            colCell.appendChild(overlay);
-          }
-
-          var div = document.createElement('div');
-          div.className = 'kc-event';
-
-          // 跨ぎセグメントクラス（連続する見た目にする）
-          if (isMultiDay) {
-            if (segIdx === 0) div.classList.add('kc-event--seg-start');
-            else if (segIdx === dayPlacements.length - 1) div.classList.add('kc-event--seg-end');
-            else div.classList.add('kc-event--seg-middle');
-          }
-
-          div.style.top    = 'calc(' + topPct + '% + 0px)';
-          div.style.height = 'calc(' + heightPct + '% - 2px)';
-          div.style.pointerEvents = 'auto';
-
-          // カレンダー色の反映
-          if (evt.color) {
-            div.style.background = evt.color;
-            div.style.borderColor = evt.color;
-            div.style.color = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
-          }
-
-          // XSS安全: textContent 使用
-          var titleDiv = document.createElement('div');
-          titleDiv.className = 'kc-evt-title';
-          titleDiv.textContent = evt.title || '(無題)';
-
-          var metaDiv = document.createElement('div');
-          metaDiv.className = 'kc-evt-meta';
-          metaDiv.textContent = fullTimeStr + (evt.device ? ' / ' + evt.device : '');
-
-          // 色指定時はメタの文字色も調整
-          if (evt.color) {
-            metaDiv.style.color = isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
-          }
-
-          div.appendChild(titleDiv);
-          div.appendChild(metaDiv);
-
-          // ツールチップ
-          div.title = (evt.title || '') + '\n' + fullTimeStr;
-
-          // イベントクリック → 編集
-          div.addEventListener('click', function (clickEvt) {
-            clickEvt.stopPropagation();
-            KC.Popup.openEdit(evt.id);
-          });
-
-          // D&D 移動（mousedown）
-          div.addEventListener('mousedown', function (mdEvt) {
-            if (mdEvt.button !== 0) return;
-            KC.DnD.startMove(evt, mdEvt);
-          });
-
-          overlay.appendChild(div);
+        div.addEventListener('click', function (clickEvt) {
+          clickEvt.stopPropagation();
+          KC.Popup.openEdit(evt.id);
         });
+
+        div.addEventListener('mousedown', function (mdEvt) {
+          if (mdEvt.button !== 0) return;
+          KC.DnD.startMove(evt, mdEvt);
+        });
+
+        overlay.appendChild(div);
       });
     }
 
