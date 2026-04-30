@@ -450,9 +450,9 @@
   border-radius: 10px;
   border: 1px solid var(--kc-border);
   background: #eef2ff;
-  padding: 8px 10px;
-  font-size: 13px;
-  line-height: 1.4;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.25;
   overflow: hidden;
   white-space: normal;
   text-overflow: ellipsis;
@@ -462,13 +462,27 @@
 }
 .kc-event .kc-evt-title {
   font-weight: 700;
-  font-size: 14px;
-  line-height: 1.3;
+  font-size: 13px;
+  line-height: 1.25;
 }
 .kc-event .kc-evt-meta {
   color: var(--kc-subtext);
-  font-size: 12px;
-  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.25;
+  margin-top: 1px;
+}
+
+/* 日跨ぎセグメント（同じ予定が複数日にわたる場合の見た目を連結） */
+.kc-event.kc-event--seg-start {
+  border-bottom-left-radius: 2px;
+  border-bottom-right-radius: 2px;
+}
+.kc-event.kc-event--seg-middle {
+  border-radius: 2px;
+}
+.kc-event.kc-event--seg-end {
+  border-top-left-radius: 2px;
+  border-top-right-radius: 2px;
 }
 
 /* イベントオーバーレイ */

@@ -989,94 +989,113 @@
           return;
         }
 
-        // 通常イベント配置
-        var dayIdx = weekYMD.indexOf(U.fmtYMD(s));
-        if (dayIdx < 0) return;
-
-        var startMin = s.getHours() * 60 + s.getMinutes();
-        var endMin   = e.getHours() * 60 + e.getMinutes();
-        // 日を跨ぐ場合は終了を24:00とする
-        if (U.fmtYMD(s) !== U.fmtYMD(e) || endMin <= startMin) {
-          endMin = 24 * 60;
-        }
-        var totalMin = 24 * 60;
-        var topPct    = (startMin / totalMin) * 100;
-        var heightPct = ((endMin - startMin) / totalMin) * 100;
-
-        // 最初の行の対象列にオーバーレイを作成
-        var firstHourRow = rows.children[0];
-        if (!firstHourRow) return;
-        var colCell = firstHourRow.children[dayIdx];
-        if (!colCell) return;
-
-        var overlay = colCell.querySelector('.kc-overlay');
-        if (!overlay) {
-          overlay = document.createElement('div');
-          overlay.className = 'kc-overlay';
-          overlay.style.position = 'relative';
-          overlay.style.height = 'calc(var(--kc-hours) * var(--kc-hour-height))';
-          overlay.style.width = '100%';
-          overlay.style.pointerEvents = 'none';
-          colCell.appendChild(overlay);
-        }
-
-        var div = document.createElement('div');
-        div.className = 'kc-event';
-        div.style.top    = 'calc(' + topPct + '% + 0px)';
-        div.style.height = 'calc(' + heightPct + '% - 2px)';
-        div.style.pointerEvents = 'auto';
-
-        // カレンダー色の反映
-        if (evt.color) {
-          div.style.background = evt.color;
-          div.style.borderColor = evt.color;
-          div.style.color = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
-        }
-
-        // XSS安全: textContent 使用
-        var titleDiv = document.createElement('div');
-        titleDiv.className = 'kc-evt-title';
-        titleDiv.textContent = evt.title || '(無題)';
-
-        var metaDiv = document.createElement('div');
-        metaDiv.className = 'kc-evt-meta';
-        // 同日: "M/D HH:MM ~ HH:MM" / 跨ぎ: "M/D HH:MM ~ M/D HH:MM"
-        var sameDay = (s.getFullYear() === e.getFullYear()) &&
-                      (s.getMonth() === e.getMonth()) &&
-                      (s.getDate() === e.getDate());
+        // 通常イベント配置（日跨ぎ対応: 表示週内の各日にセグメントを配置）
+        // メタ用の日付文字列を事前生成
         var sTime = U.pad2(s.getHours()) + ':' + U.pad2(s.getMinutes());
         var eTime = U.pad2(e.getHours()) + ':' + U.pad2(e.getMinutes());
         var sDate = (s.getMonth() + 1) + '/' + s.getDate();
         var eDate = (e.getMonth() + 1) + '/' + e.getDate();
-        var timeStr = sameDay
+        var sameDayWhole = (s.getFullYear() === e.getFullYear()) &&
+                           (s.getMonth() === e.getMonth()) &&
+                           (s.getDate() === e.getDate());
+        var fullTimeStr = sameDayWhole
           ? (sDate + ' ' + sTime + ' ~ ' + eTime)
           : (sDate + ' ' + sTime + ' ~ ' + eDate + ' ' + eTime);
-        metaDiv.textContent = timeStr + (evt.device ? ' / ' + evt.device : '');
 
-        // 色指定時はメタの文字色も調整
-        if (evt.color) {
-          metaDiv.style.color = isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
+        // 表示週の各日について、イベントが含まれるか判定して配置情報を作成
+        var dayPlacements = [];
+        for (var di = 0; di < 7; di++) {
+          var dayDate = U.addDays(range.start, di);
+          var dayStart = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate(), 0, 0, 0, 0);
+          var dayEndExclusive = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+          if (s >= dayEndExclusive || e <= dayStart) continue;
+
+          var dayMS = dayStart.getTime();
+          var startMin = Math.max(0, Math.floor((s.getTime() - dayMS) / 60000));
+          var endMin   = Math.min(24 * 60, Math.ceil((e.getTime() - dayMS) / 60000));
+          if (endMin <= startMin) continue;
+          dayPlacements.push({ dayIdx: di, startMin: startMin, endMin: endMin });
         }
+        if (dayPlacements.length === 0) return;
 
-        div.appendChild(titleDiv);
-        div.appendChild(metaDiv);
+        var isMultiDay = dayPlacements.length > 1;
 
-        // ツールチップ
-        div.title = (evt.title || '') + '\n' + timeStr;
+        dayPlacements.forEach(function (p, segIdx) {
+          var totalMin = 24 * 60;
+          var topPct    = (p.startMin / totalMin) * 100;
+          var heightPct = ((p.endMin - p.startMin) / totalMin) * 100;
 
-        // イベントクリック → 編集ダイアログ
-        div.addEventListener('click', function (clickEvt) {
-          clickEvt.stopPropagation();
-          KC.Popup.openEdit(evt.id);
+          var firstHourRow = rows.children[0];
+          if (!firstHourRow) return;
+          var colCell = firstHourRow.children[p.dayIdx];
+          if (!colCell) return;
+
+          var overlay = colCell.querySelector('.kc-overlay');
+          if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.className = 'kc-overlay';
+            overlay.style.position = 'relative';
+            overlay.style.height = 'calc(var(--kc-hours) * var(--kc-hour-height))';
+            overlay.style.width = '100%';
+            overlay.style.pointerEvents = 'none';
+            colCell.appendChild(overlay);
+          }
+
+          var div = document.createElement('div');
+          div.className = 'kc-event';
+
+          // 跨ぎセグメントクラス（連続する見た目にする）
+          if (isMultiDay) {
+            if (segIdx === 0) div.classList.add('kc-event--seg-start');
+            else if (segIdx === dayPlacements.length - 1) div.classList.add('kc-event--seg-end');
+            else div.classList.add('kc-event--seg-middle');
+          }
+
+          div.style.top    = 'calc(' + topPct + '% + 0px)';
+          div.style.height = 'calc(' + heightPct + '% - 2px)';
+          div.style.pointerEvents = 'auto';
+
+          // カレンダー色の反映
+          if (evt.color) {
+            div.style.background = evt.color;
+            div.style.borderColor = evt.color;
+            div.style.color = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
+          }
+
+          // XSS安全: textContent 使用
+          var titleDiv = document.createElement('div');
+          titleDiv.className = 'kc-evt-title';
+          titleDiv.textContent = evt.title || '(無題)';
+
+          var metaDiv = document.createElement('div');
+          metaDiv.className = 'kc-evt-meta';
+          metaDiv.textContent = fullTimeStr + (evt.device ? ' / ' + evt.device : '');
+
+          // 色指定時はメタの文字色も調整
+          if (evt.color) {
+            metaDiv.style.color = isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
+          }
+
+          div.appendChild(titleDiv);
+          div.appendChild(metaDiv);
+
+          // ツールチップ
+          div.title = (evt.title || '') + '\n' + fullTimeStr;
+
+          // イベントクリック → 編集
+          div.addEventListener('click', function (clickEvt) {
+            clickEvt.stopPropagation();
+            KC.Popup.openEdit(evt.id);
+          });
+
+          // D&D 移動（mousedown）
+          div.addEventListener('mousedown', function (mdEvt) {
+            if (mdEvt.button !== 0) return;
+            KC.DnD.startMove(evt, mdEvt);
+          });
+
+          overlay.appendChild(div);
         });
-
-        // D&D 移動（mousedown）
-        div.addEventListener('mousedown', function (mdEvt) {
-          if (mdEvt.button !== 0) return;
-          KC.DnD.startMove(evt, mdEvt);
-        });
-
-        overlay.appendChild(div);
       });
     }
 
