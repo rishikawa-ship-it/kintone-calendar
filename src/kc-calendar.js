@@ -516,7 +516,7 @@
       sessionStorage.setItem('KC_CREATE_CONTEXT', JSON.stringify(options));
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/edit';
-      var popup = window.open(url, 'kc_edit', 'width=800,height=700,scrollbars=yes,resizable=yes');
+      var popup = window.open(url, 'kc_edit', 'width=1200,height=700,scrollbars=yes,resizable=yes');
       if (popup) {
         var checkClosed = setInterval(function () {
           if (popup.closed) {
@@ -537,7 +537,7 @@
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/show#record=' + recordId;
       console.log('[KC.Popup.openEdit] open:', url);
-      var popup = window.open(url, 'kc_edit', 'width=800,height=700,scrollbars=yes,resizable=yes');
+      var popup = window.open(url, 'kc_edit', 'width=1200,height=700,scrollbars=yes,resizable=yes');
       if (popup) {
         var checkClosed = setInterval(function () {
           if (popup.closed) {
