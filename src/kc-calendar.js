@@ -696,27 +696,31 @@
      * @param {string} newEnd - 新しい終了 ISO 文字列
      */
     function _commitOptimistic(origEv, newStart, newEnd) {
-      // State をインプレース更新（ID で検索: placeEvents が Object.assign でコピーするため）
-      var idx = -1;
+      // State をインプレース更新（Object.assign でコピーせず live reference を維持する）
+      // NOTE: Object.assign でオブジェクトを置き換えると rev が古いままになり、
+      //       連続ドラッグ時に 2 回目以降が 409 エラーになるため、直接プロパティを更新する
+      var currentEv = null;
       for (var i = 0; i < KC.State.events.length; i++) {
-        if (KC.State.events[i].id === origEv.id) { idx = i; break; }
+        if (KC.State.events[i].id === origEv.id) { currentEv = KC.State.events[i]; break; }
       }
-      if (idx >= 0) {
-        KC.State.events[idx] = Object.assign({}, KC.State.events[idx], { start: newStart, end: newEnd });
+      if (currentEv) {
+        currentEv.start = newStart;
+        currentEv.end = newEnd;
       }
 
       // 即時 UI 反映
       KC.Render.renderGrid();
 
       // API を非同期送信（楽観的: レスポンスを待たない）
-      var payload = Object.assign({}, origEv, { start: newStart, end: newEnd });
+      // クロージャが保持する origEv.rev は古い可能性があるため、State の currentEv.rev を使う
+      var payload = Object.assign({}, origEv, { start: newStart, end: newEnd, rev: currentEv ? currentEv.rev : origEv.rev });
       KC.Api.updateEvent(payload)
         .then(function (resp) {
           // API 成功時、戻り値の revision を State に反映（要件 §3.10.1）
           // resp は { ok: true, revision: "N" } 形式
-          if (resp && resp.revision) {
-            var event = KC.State.events.find(function (e) { return e.id === origEv.id; });
-            if (event) event.rev = resp.revision;
+          // currentEv は live reference なので、ここで更新すれば次回ドラッグ時も最新 rev が使われる
+          if (resp && resp.revision && currentEv) {
+            currentEv.rev = resp.revision;
           }
         })
         .catch(function (err) {
