@@ -510,13 +510,30 @@
    * KC.Popup — kintone標準画面をポップアップで開く
    * ==================================================================== */
   KC.Popup = {
+    /**
+     * 画面幅の 80%（最大 1400px）・画面高の 85%（最大 900px）を基準にポップアップを開く。
+     * 画面中央に配置する共通ヘルパー。
+     * @param {string} url - 開く URL
+     * @returns {Window|null}
+     */
+    _openWindow: function (url) {
+      var width  = Math.min(1400, Math.floor(window.screen.availWidth * 0.8));
+      var height = Math.min(900, Math.floor(window.screen.availHeight * 0.85));
+      var left   = Math.max(0, Math.floor((window.screen.availWidth - width) / 2));
+      var top    = Math.max(0, Math.floor((window.screen.availHeight - height) / 2));
+      var features = 'width=' + width + ',height=' + height +
+                     ',left=' + left + ',top=' + top +
+                     ',scrollbars=yes,resizable=yes';
+      return window.open(url, 'kc_edit', features);
+    },
+
     /** 新規作成ポップアップを開く */
     openCreate: function (options) {
       // options: { date, hour, minute, allday }
       sessionStorage.setItem('KC_CREATE_CONTEXT', JSON.stringify(options));
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/edit';
-      var popup = window.open(url, 'kc_edit', 'width=1200,height=700,scrollbars=yes,resizable=yes');
+      var popup = this._openWindow(url);
       if (popup) {
         var checkClosed = setInterval(function () {
           if (popup.closed) {
@@ -537,7 +554,7 @@
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/show#record=' + recordId;
       console.log('[KC.Popup.openEdit] open:', url);
-      var popup = window.open(url, 'kc_edit', 'width=1200,height=700,scrollbars=yes,resizable=yes');
+      var popup = this._openWindow(url);
       if (popup) {
         var checkClosed = setInterval(function () {
           if (popup.closed) {
