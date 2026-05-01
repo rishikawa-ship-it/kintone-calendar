@@ -994,6 +994,9 @@
         el.style.color = isLightColor(ev.color) ? '#1f2937' : '#ffffff';
       }
 
+      // ホバーツールチップ（件名 + 日付範囲）
+      el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
+
       // ドット
       var dot = document.createElement('span');
       dot.className = 'dot';
@@ -1001,22 +1004,13 @@
         dot.style.background = isLightColor(ev.color) ? '#1f2937' : '#ffffff';
       }
 
-      // コンテンツ領域
-      var contentDiv = document.createElement('div');
-      contentDiv.className = 'kc-ad-evt-content';
-
+      // 件名のみ（Google カレンダー方式: 単一行・件名のみ表示）
       var titleSpan = document.createElement('span');
       titleSpan.className = 'kc-ad-evt-title';
       titleSpan.textContent = ev.title || '(無題)';  /* XSS 対策: textContent */
 
-      var dateSpan = document.createElement('span');
-      dateSpan.className = 'kc-ad-evt-date';
-      dateSpan.textContent = ev.adDateRange;
-
-      contentDiv.appendChild(titleSpan);
-      contentDiv.appendChild(dateSpan);
       el.appendChild(dot);
-      el.appendChild(contentDiv);
+      el.appendChild(titleSpan);
 
       // クリック → 編集ポップアップ（AC 4.7）
       el.addEventListener('click', function (clickEvt) {

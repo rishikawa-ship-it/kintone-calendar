@@ -364,9 +364,11 @@
   background: #eef2ff;
   border: 1px solid var(--kc-border);
   border-radius: 10px;
-  padding: 2px 8px;
+  padding: 0 8px;
   font-size: 13px;
   overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -403,36 +405,23 @@
 }
 
 .kc-ad-event .dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   background: #3b82f6;
   flex: 0 0 auto;
 }
 
-/* 件名 + 日付の縦並び */
-.kc-ad-evt-content {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-}
+/* 件名（Google カレンダー方式: 単一行・件名のみ表示） */
 .kc-ad-evt-title {
-  font-weight: 700;
-  font-size: 13px;
-  line-height: 1.2;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.kc-ad-evt-date {
-  font-size: 11px;
-  line-height: 1.2;
-  color: var(--kc-subtext);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 /* ==========================================================================
