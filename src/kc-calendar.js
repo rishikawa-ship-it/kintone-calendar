@@ -481,12 +481,13 @@
       if (Object.keys(record).length === 0) return { ok: true };
 
       var url = kintone.api.url('/k/v1/record.json', true);
-      await kintone.api(url, 'PUT', {
+      var resp = await kintone.api(url, 'PUT', {
         app: KC.Config.getAppId(),
         id: ev.id,
+        revision: ev.rev,   // 楽観ロック: 競合時は kintone が 409 を返す（要件 §3.10.2）
         record: record
       });
-      return { ok: true };
+      return { ok: true, revision: resp.revision };
     },
 
     /** 削除 */
@@ -550,184 +551,490 @@
 
   /* ====================================================================
    * KC.DnD — ドラッグ&ドロップ（移動/リサイズ）
+   *
+   * Phase 1: 終日予定の DnD（移動・左右リサイズ）＋共通基盤
+   * Phase 2: 時間予定の DnD は別途実装（startMove / startResize は温存）
    * ==================================================================== */
-  KC.DnD = {
-    _drag: null,
+  KC.DnD = (function () {
+    /** DnD 定数 */
+    var DND_THRESHOLD = 5;   // ドラッグ発動閾値（px）
 
-    /** セルから日付を取得 */
-    _dayFromEvent: function (e) {
-      var t = e.target.closest('.kc-cell');
-      if (!t) return null;
-      return new Date(t.dataset.date);
-    },
+    /** DnD 中の状態（null = 非ドラッグ中） */
+    var _drag = null;
 
-    /** イベント移動開始 */
-    startMove: function (ev, mousedown) {
-      mousedown.preventDefault();
-      var self = this;
-      var U = KC.Utils;
-      var S = KC.State;
+    // =========================================================================
+    // 共通内部ヘルパー
+    // =========================================================================
 
-      var ghost = document.createElement('div');
-      ghost.className = 'kc-event kc-ghost';
-      ghost.textContent = ev.title || '(無題)';
-
-      // 期間を日付配列に展開
-      var dates = this._spanDates(ev.start, ev.end, ev.allday);
-
-      this._drag = {
-        type: 'move',
-        ev: ev,
-        ghost: ghost,
-        baseDates: dates,
-        startCellDay: this._dayFromEvent(mousedown),
-        delta: 0
-      };
-
-      document.body.style.userSelect = 'none';
-
-      var onOver = function (e) {
-        if (!self._drag) return;
-        var day = self._dayFromEvent(e);
-        if (!day) return;
-        var delta = Math.round((day - self._drag.startCellDay) / 86400000);
-        if (delta === self._drag.delta) return;
-        self._drag.delta = delta;
-
-        // ゴーストクリア
-        S.els.rows.querySelectorAll('.kc-ghost').forEach(function (el) { el.remove(); });
-
-        // 新しいゴースト配置
-        self._drag.baseDates.forEach(function (ymd) {
-          var d = U.fmtYMD(U.addDays(new Date(ymd), delta));
-          var cell = S.els.rows.querySelector('.kc-cell[data-date="' + d + '"]');
-          if (!cell) return;
-          var g = ghost.cloneNode(true);
-          cell.appendChild(g);
-        });
-      };
-
-      var onUp = function () {
-        document.removeEventListener('mouseover', onOver);
-        document.removeEventListener('mouseup', onUp);
-        document.body.style.userSelect = '';
-        S.els.rows.querySelectorAll('.kc-ghost').forEach(function (el) { el.remove(); });
-
-        if (!self._drag) return;
-        var drag = self._drag;
-        self._drag = null;
-        if (drag.delta === 0) return;
-
-        var newStart = new Date(new Date(drag.ev.start).getTime() + drag.delta * 86400000).toISOString();
-        var newEnd   = new Date(new Date(drag.ev.end).getTime() + drag.delta * 86400000).toISOString();
-
-        KC.Api.updateEvent({ id: drag.ev.id, start: newStart, end: newEnd })
-          .then(function () { KC.Render.refresh(); })
-          .catch(function (err) { alert(err.message || err); });
-      };
-
-      document.addEventListener('mouseover', onOver);
-      document.addEventListener('mouseup', onUp);
-    },
-
-    /** イベントリサイズ開始 */
-    startResize: function (ev, side, mousedown) {
-      mousedown.preventDefault();
-      var self = this;
-      var U = KC.Utils;
-      var S = KC.State;
-
-      this._drag = {
-        type: 'resize',
-        ev: ev,
-        side: side,
-        delta: 0,
-        startCellDay: this._dayFromEvent(mousedown)
-      };
-
-      document.body.style.userSelect = 'none';
-
-      var onOver = function (evt) {
-        if (!self._drag) return;
-        var day = self._dayFromEvent(evt);
-        if (!day) return;
-        var delta = Math.round((day - self._drag.startCellDay) / 86400000);
-        if (delta === self._drag.delta) return;
-        self._drag.delta = delta;
-
-        S.els.rows.querySelectorAll('.kc-ghost').forEach(function (el) { el.remove(); });
-
-        var evOrig = self._drag.ev;
-        var s = new Date(evOrig.start);
-        var e = new Date(evOrig.end);
-
-        if (self._drag.side === 'left') {
-          s = U.addDays(s, delta);
-          if (s >= e) s = U.addDays(e, -1);
-        } else {
-          e = U.addDays(e, delta);
-          if (e <= s) e = U.addDays(s, 1);
+    /**
+     * .kc-adcell[data-date] から列インデックスと日付文字列を取得する
+     * @param {number} clientX - カーソルの clientX
+     * @returns {{ colIdx: number, dateYMD: string } | null}
+     */
+    function _adcellFromX(clientX) {
+      var cells = document.querySelectorAll('.kc-adcell[data-date]');
+      for (var i = 0; i < cells.length; i++) {
+        var r = cells[i].getBoundingClientRect();
+        if (clientX >= r.left && clientX <= r.right) {
+          return { colIdx: i, dateYMD: cells[i].dataset.date };
         }
-
-        var arr = self._spanDates(s.toISOString(), e.toISOString(), evOrig.allday);
-        arr.forEach(function (ymd) {
-          var cell = S.els.rows.querySelector('.kc-cell[data-date="' + ymd + '"]');
-          if (!cell) return;
-          var g = document.createElement('div');
-          g.className = 'kc-event kc-ghost';
-          g.textContent = evOrig.title || '(無題)';
-          cell.appendChild(g);
-        });
-      };
-
-      var onUp = function () {
-        document.removeEventListener('mouseover', onOver);
-        document.removeEventListener('mouseup', onUp);
-        document.body.style.userSelect = '';
-        S.els.rows.querySelectorAll('.kc-ghost').forEach(function (el) { el.remove(); });
-
-        if (!self._drag) return;
-        var drag = self._drag;
-        self._drag = null;
-        if (drag.delta === 0) return;
-
-        var newStart = drag.ev.start;
-        var newEnd   = drag.ev.end;
-
-        if (drag.side === 'left') {
-          newStart = new Date(new Date(drag.ev.start).getTime() + drag.delta * 86400000).toISOString();
-          if (new Date(newStart) >= new Date(newEnd)) {
-            newStart = new Date(new Date(newEnd).getTime() - 86400000).toISOString();
-          }
-        } else {
-          newEnd = new Date(new Date(drag.ev.end).getTime() + drag.delta * 86400000).toISOString();
-          if (new Date(newEnd) <= new Date(newStart)) {
-            newEnd = new Date(new Date(newStart).getTime() + 86400000).toISOString();
-          }
-        }
-
-        KC.Api.updateEvent({ id: drag.ev.id, start: newStart, end: newEnd })
-          .then(function () { KC.Render.refresh(); })
-          .catch(function (err) { alert(err.message || err); });
-      };
-
-      document.addEventListener('mouseover', onOver);
-      document.addEventListener('mouseup', onUp);
-    },
-
-    /** 期間を日ごとの配列へ展開 */
-    _spanDates: function (isoStart, isoEnd, allday) {
-      var U = KC.Utils;
-      var s = new Date(isoStart);
-      var e = new Date(isoEnd);
-      var last = allday ? U.addDays(e, -1) : e;
-      var arr = [];
-      for (var d = new Date(s.getFullYear(), s.getMonth(), s.getDate()); d <= last; d = U.addDays(d, 1)) {
-        arr.push(U.fmtYMD(d));
       }
-      return arr;
+      return null;
     }
-  };
+
+    /**
+     * 終日予定ゴースト要素を生成する
+     * @param {Object} ev - KcEvent
+     * @param {string} labelText - ゴースト内の日付ラベル文字列
+     * @returns {HTMLElement}
+     */
+    function _buildAlldayGhost(ev, labelText) {
+      var ghost = document.createElement('div');
+      ghost.className = 'kc-ad-event kc-event--ghost';
+      ghost.style.position = 'absolute';
+      ghost.style.zIndex = '9999';
+      ghost.style.pointerEvents = 'none';
+
+      if (ev.color) {
+        ghost.style.background = ev.color;
+        ghost.style.borderColor = ev.color;
+      }
+
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      if (ev.color) dot.style.background = ev.color;
+
+      var titleSpan = document.createElement('span');
+      titleSpan.className = 'kc-ad-evt-title';
+      titleSpan.textContent = ev.title || '(無題)';
+
+      var timeSpan = document.createElement('span');
+      timeSpan.className = 'kc-evt-ghost-time';
+      timeSpan.textContent = labelText;
+
+      ghost.appendChild(dot);
+      ghost.appendChild(titleSpan);
+      ghost.appendChild(timeSpan);
+      return ghost;
+    }
+
+    /**
+     * 終日ゴーストの位置・幅を更新する
+     * @param {HTMLElement} ghost
+     * @param {number} colStart - 開始列インデックス（0〜6）
+     * @param {number} span - 列数（1〜）
+     * @param {number} lane - レーン番号（元バーの lane）
+     */
+    function _positionAlldayGhost(ghost, colStart, span, lane) {
+      var BAR_H   = 22;
+      var BAR_GAP = 3;
+      var BAR_TOP = 4;
+      ghost.style.left   = ((colStart / 7) * 100) + '%';
+      ghost.style.width  = ((span / 7) * 100) + '%';
+      ghost.style.top    = (BAR_TOP + lane * (BAR_H + BAR_GAP)) + 'px';
+      ghost.style.height = BAR_H + 'px';
+    }
+
+    /**
+     * ゴーストの日付ラベルを更新する（終日予定用: "M/D ~ M/D" or "M/D"）
+     * @param {HTMLElement} ghost
+     * @param {Date} newStart - 新しい開始日
+     * @param {Date} newEnd - 新しい終了日（exclusive: 翌日0時）
+     */
+    function _updateAlldayGhostLabel(ghost, newStart, newEnd) {
+      var timeSpan = ghost.querySelector('.kc-evt-ghost-time');
+      if (!timeSpan) return;
+      var s = newStart;
+      // end は翌日0時なので1日戻して表示
+      var e = new Date(newEnd.getTime() - 86400000);
+      var sStr = (s.getMonth() + 1) + '/' + s.getDate();
+      var eStr = (e.getMonth() + 1) + '/' + e.getDate();
+      timeSpan.textContent = (sStr === eStr) ? sStr : sStr + ' ~ ' + eStr;
+    }
+
+    /**
+     * ESC キーのキャンセルハンドラ
+     */
+    function _onKeyDown(e) {
+      if (e.key !== 'Escape') return;
+      _cancel();
+    }
+
+    /**
+     * 共通キャンセル処理（ESC / window blur 時）
+     */
+    function _cancel() {
+      if (!_drag) return;
+      var drag = _drag;
+      _drag = null;
+
+      // ゴースト除去
+      if (drag.ghost && drag.ghost.parentNode) {
+        drag.ghost.parentNode.removeChild(drag.ghost);
+      }
+
+      // 元バーの薄表示解除
+      if (drag.origBar) {
+        drag.origBar.classList.remove('kc-ad-event--dragging');
+        drag.origBar.classList.remove('kc-event--dragging');
+      }
+
+      // リスナ除去
+      document.removeEventListener('mousemove', _onMouseMoveAllday);
+      document.removeEventListener('mouseup', _onMouseUpAllday);
+      document.removeEventListener('keydown', _onKeyDown);
+      window.removeEventListener('blur', _cancel);
+
+      document.body.classList.remove('kc-dnd-active');
+      document.body.style.userSelect = '';
+    }
+
+    /**
+     * 楽観的 UI 更新: State をインプレース更新 → renderGrid → API 送信
+     * @param {Object} origEv - 元のイベントオブジェクト
+     * @param {string} newStart - 新しい開始 ISO 文字列
+     * @param {string} newEnd - 新しい終了 ISO 文字列
+     */
+    function _commitOptimistic(origEv, newStart, newEnd) {
+      // State をインプレース更新（ID で検索: placeEvents が Object.assign でコピーするため）
+      var idx = -1;
+      for (var i = 0; i < KC.State.events.length; i++) {
+        if (KC.State.events[i].id === origEv.id) { idx = i; break; }
+      }
+      if (idx >= 0) {
+        KC.State.events[idx] = Object.assign({}, KC.State.events[idx], { start: newStart, end: newEnd });
+      }
+
+      // 即時 UI 反映
+      KC.Render.renderGrid();
+
+      // API を非同期送信（楽観的: レスポンスを待たない）
+      var payload = Object.assign({}, origEv, { start: newStart, end: newEnd });
+      KC.Api.updateEvent(payload)
+        .then(function (resp) {
+          // API 成功時、戻り値の revision を State に反映（要件 §3.10.1）
+          // resp は { ok: true, revision: "N" } 形式
+          if (resp && resp.revision) {
+            var event = KC.State.events.find(function (e) { return e.id === origEv.id; });
+            if (event) event.rev = resp.revision;
+          }
+        })
+        .catch(function (err) {
+          var msg = (err && err.message) ? err.message : String(err);
+          // 409 競合も含む全エラーで alert + ロールバック
+          alert('予定の更新に失敗しました: ' + msg);
+          KC.Render.refresh();
+        });
+    }
+
+    // =========================================================================
+    // 終日予定 DnD — 移動（Phase 1）
+    // =========================================================================
+
+    /** mousemove ハンドラ（終日予定移動・リサイズ共用） */
+    function _onMouseMoveAllday(e) {
+      if (!_drag) return;
+
+      // 5px 閾値判定（バグ E 修正）
+      if (!_drag.started) {
+        var dist = Math.hypot(e.clientX - _drag.startX, e.clientY - _drag.startY);
+        if (dist < DND_THRESHOLD) return;
+
+        // 閾値を超えた: DnD 開始
+        _drag.started = true;
+        document.body.classList.add('kc-dnd-active');
+        document.body.style.userSelect = 'none';
+
+        // 元バーを薄表示
+        if (_drag.origBar) {
+          _drag.origBar.classList.add('kc-ad-event--dragging');
+        }
+
+        // ゴーストを allday レイヤに追加
+        var alldayWrap = document.getElementById('kc-allday');
+        var eventsLayer = alldayWrap ? alldayWrap.querySelector('.kc-ad-events') : null;
+        if (eventsLayer && _drag.ghost) {
+          eventsLayer.appendChild(_drag.ghost);
+        }
+
+        // ESC / blur キャンセル登録
+        document.addEventListener('keydown', _onKeyDown);
+        window.addEventListener('blur', _cancel);
+      }
+
+      if (_drag.type === 'move-allday') {
+        _onMoveAlldayMove(e);
+      } else if (_drag.type === 'resize-left' || _drag.type === 'resize-right') {
+        _onResizeAlldayMove(e);
+      }
+    }
+
+    /** 終日移動の mousemove 処理 */
+    function _onMoveAlldayMove(e) {
+      var info = _adcellFromX(e.clientX);
+      if (!info) return;
+
+      var origEv = _drag.ev;
+      var U = KC.Utils;
+
+      // 元の期間を日数で計算（終日予定は end が翌日0時）
+      var origStartD = new Date(origEv.start);
+      var origEndD   = new Date(origEv.end);
+      var origStartDate = new Date(origStartD.getFullYear(), origStartD.getMonth(), origStartD.getDate());
+      var origEndDate   = new Date(origEndD.getFullYear(), origEndD.getMonth(), origEndD.getDate());
+      var spanDays = Math.round((origEndDate.getTime() - origStartDate.getTime()) / 86400000);
+      if (spanDays < 1) spanDays = 1;
+
+      // 開始列インデックスから新しい開始日を算出
+      var weekYMDs = _getWeekYMDs();
+      var newStartYMD = weekYMDs[info.colIdx];
+      if (!newStartYMD) return;
+
+      // ISO 文字列を生成（kintone 形式: T00:00:00+09:00 で送信）
+      var newStart = new Date(newStartYMD + 'T00:00:00');
+      var newEnd   = U.addDays(newStart, spanDays);
+
+      _drag.newStart = KC.Utils.fmtYMD(newStart) + 'T00:00:00+09:00';
+      _drag.newEnd   = KC.Utils.fmtYMD(newEnd)   + 'T00:00:00+09:00';
+
+      // ゴースト位置更新
+      var clampedSpan = Math.min(spanDays, 7 - info.colIdx);
+      _positionAlldayGhost(_drag.ghost, info.colIdx, clampedSpan, _drag.lane);
+      _updateAlldayGhostLabel(_drag.ghost, newStart, newEnd);
+    }
+
+    /** mouseup ハンドラ（終日予定移動・リサイズ共用） */
+    function _onMouseUpAllday(e) {
+      document.removeEventListener('mousemove', _onMouseMoveAllday);
+      document.removeEventListener('mouseup', _onMouseUpAllday);
+      document.removeEventListener('keydown', _onKeyDown);
+      window.removeEventListener('blur', _cancel);
+
+      if (!_drag) return;
+
+      var drag = _drag;
+      _drag = null;
+
+      // ゴースト除去
+      if (drag.ghost && drag.ghost.parentNode) {
+        drag.ghost.parentNode.removeChild(drag.ghost);
+      }
+
+      // 元バー薄表示解除
+      if (drag.origBar) {
+        drag.origBar.classList.remove('kc-ad-event--dragging');
+      }
+
+      document.body.classList.remove('kc-dnd-active');
+      document.body.style.userSelect = '';
+
+      // DnD が発動していない（5px 未満）場合はクリックとして通過（AC4.3）
+      if (!drag.started) return;
+
+      // DnD 発動後は次の click イベントをキャプチャフェーズで一度だけブロック（誤ポップアップ防止）
+      function suppressClick(ev) {
+        ev.stopPropagation();
+        document.removeEventListener('click', suppressClick, true);
+      }
+      document.addEventListener('click', suppressClick, true);
+
+      // delta なし（移動・リサイズがゼロ）場合は何もしない
+      if (!drag.newStart || !drag.newEnd) return;
+      if (drag.newStart === drag.ev.start && drag.newEnd === drag.ev.end) return;
+
+      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd);
+    }
+
+    /**
+     * 終日予定の移動 DnD を開始する（バグ B 修正）
+     * @param {Object} ev - KcEvent
+     * @param {MouseEvent} mousedown
+     * @param {HTMLElement} barEl - クリックされた .kc-ad-event 要素
+     */
+    function startMoveAllday(ev, mousedown, barEl) {
+      mousedown.preventDefault();
+
+      var ghost = _buildAlldayGhost(ev, '');
+      _positionAlldayGhost(ghost, ev.colStart || 0, ev.span || 1, ev.lane || 0);
+
+      _drag = {
+        type:     'move-allday',
+        ev:       ev,
+        ghost:    ghost,
+        origBar:  barEl,
+        startX:   mousedown.clientX,
+        startY:   mousedown.clientY,
+        started:  false,
+        lane:     ev.lane || 0,
+        newStart: null,
+        newEnd:   null
+      };
+
+      document.addEventListener('mousemove', _onMouseMoveAllday);
+      document.addEventListener('mouseup', _onMouseUpAllday);
+    }
+
+    // =========================================================================
+    // 終日予定 DnD — リサイズ（左端・右端）（Phase 1）
+    // =========================================================================
+
+    /** 終日リサイズの mousemove 処理 */
+    function _onResizeAlldayMove(e) {
+      var info = _adcellFromX(e.clientX);
+      if (!info) return;
+
+      var origEv = _drag.ev;
+      var U = KC.Utils;
+
+      // 元のイベントの日付（ローカル日付ベース）
+      var origStartD = new Date(origEv.start);
+      var origEndD   = new Date(origEv.end);
+      var origStartDate = new Date(origStartD.getFullYear(), origStartD.getMonth(), origStartD.getDate());
+      // end は翌日0時: そのまま使う（end の日付が終了日の翌日を指す）
+      var origEndDate = new Date(origEndD.getFullYear(), origEndD.getMonth(), origEndD.getDate());
+
+      var weekYMDs = _getWeekYMDs();
+      var targetYMD = weekYMDs[info.colIdx];
+      if (!targetYMD) return;
+
+      var targetDate = new Date(targetYMD + 'T00:00:00');
+      var newStartDate, newEndDate;
+
+      if (_drag.type === 'resize-left') {
+        // 左端リサイズ: 開始日を変更（終了日は固定）
+        newStartDate = targetDate;
+        newEndDate   = origEndDate;
+        // 最小スパン: 1 日（newStartDate < newEndDate）
+        if (newStartDate.getTime() >= newEndDate.getTime()) {
+          newStartDate = U.addDays(newEndDate, -1);
+        }
+      } else {
+        // 右端リサイズ: 終了日を変更（開始日は固定）
+        // targetYMD はドラッグ先の表示終了日 → kintone の end は翌日なので +1 日
+        newStartDate = origStartDate;
+        newEndDate   = U.addDays(targetDate, 1);
+        // 最小スパン: 1 日
+        if (newEndDate.getTime() <= newStartDate.getTime()) {
+          newEndDate = U.addDays(newStartDate, 1);
+        }
+      }
+
+      // ISO 文字列（kintone 形式）
+      _drag.newStart = U.fmtYMD(newStartDate) + 'T00:00:00+09:00';
+      _drag.newEnd   = U.fmtYMD(newEndDate)   + 'T00:00:00+09:00';
+
+      // ゴースト位置更新
+      var colStart = weekYMDs.indexOf(U.fmtYMD(newStartDate));
+      // 表示終了日は newEndDate の1日前
+      var displayEndDate = U.addDays(newEndDate, -1);
+      var colEnd   = weekYMDs.indexOf(U.fmtYMD(displayEndDate));
+      if (colStart < 0) colStart = 0;
+      if (colEnd < 0) colEnd = 6;
+      var span = colEnd - colStart + 1;
+      if (span < 1) span = 1;
+
+      _positionAlldayGhost(_drag.ghost, colStart, span, _drag.lane);
+      _updateAlldayGhostLabel(_drag.ghost, newStartDate, newEndDate);
+    }
+
+    /**
+     * 終日予定のリサイズ DnD を開始する（左端・右端）
+     * @param {Object} ev - KcEvent
+     * @param {'left'|'right'} side
+     * @param {MouseEvent} mousedown
+     * @param {HTMLElement} barEl - .kc-ad-event 要素
+     */
+    function startResizeAllday(ev, side, mousedown, barEl) {
+      mousedown.preventDefault();
+
+      var ghost = _buildAlldayGhost(ev, '');
+      _positionAlldayGhost(ghost, ev.colStart || 0, ev.span || 1, ev.lane || 0);
+
+      _drag = {
+        type:     side === 'left' ? 'resize-left' : 'resize-right',
+        ev:       ev,
+        ghost:    ghost,
+        origBar:  barEl,
+        startX:   mousedown.clientX,
+        startY:   mousedown.clientY,
+        started:  false,
+        lane:     ev.lane || 0,
+        newStart: null,
+        newEnd:   null
+      };
+
+      document.addEventListener('mousemove', _onMouseMoveAllday);
+      document.addEventListener('mouseup', _onMouseUpAllday);
+    }
+
+    // =========================================================================
+    // 時間予定 DnD — Phase 2 で再構成（既存実装を温存）
+    // =========================================================================
+
+    /**
+     * 時間予定の移動 DnD（Phase 2 で実装予定）
+     * 現在は既存の壊れた実装を温存しているが、Phase 2 では _onMouseMoveAllday と同様の
+     * 5px 閾値 + ゴースト生成パターンに書き換える。
+     * @param {Object} ev - KcEvent
+     * @param {MouseEvent} mousedown
+     */
+    function startMove(ev, mousedown) {
+      // Phase 2 で実装
+      // TODO: 5px 閾値、単一ゴースト、楽観更新を適用する
+    }
+
+    /**
+     * 時間予定のリサイズ DnD（Phase 2 で実装予定）
+     * @param {Object} ev - KcEvent
+     * @param {'top'|'bottom'} side
+     * @param {MouseEvent} mousedown
+     */
+    function startResize(ev, side, mousedown) {
+      // Phase 2 で実装
+    }
+
+    // =========================================================================
+    // ユーティリティ
+    // =========================================================================
+
+    /**
+     * 現在表示週の 7 日分の YYYY-MM-DD 文字列配列を返す
+     * @returns {string[]}
+     */
+    function _getWeekYMDs() {
+      var S = KC.State;
+      var U = KC.Utils;
+      var d = new Date(S.current);
+      d.setDate(d.getDate() - d.getDay());
+      d.setHours(0, 0, 0, 0);
+      var res = [];
+      for (var i = 0; i < 7; i++) {
+        res.push(U.fmtYMD(U.addDays(d, i)));
+      }
+      return res;
+    }
+
+    /**
+     * KC.DnD.beginSelection — DESIGN.md §206 に記載があるが未実装（スタブ）
+     * Phase 2 以降で範囲選択による新規作成が必要な場合に実装する
+     */
+    function beginSelection() {
+      // スタブ: 未実装
+    }
+
+    // =========================================================================
+    // 公開 API
+    // =========================================================================
+    return {
+      get _drag() { return _drag; },
+      startMoveAllday:   startMoveAllday,
+      startResizeAllday: startResizeAllday,
+      startMove:         startMove,
+      startResize:       startResize,
+      beginSelection:    beginSelection,
+      _cancel:           _cancel
+    };
+  }());
 
   /* ====================================================================
    * KC.RenderWeek — 週ビューレンダラー
@@ -1012,10 +1319,39 @@
       el.appendChild(dot);
       el.appendChild(titleSpan);
 
+      // 左端リサイズハンドル
+      var leftHandle = document.createElement('div');
+      leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
+      leftHandle.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        mdEvt.stopPropagation();
+        KC.DnD.startResizeAllday(ev, 'left', mdEvt, el);
+      });
+
+      // 右端リサイズハンドル
+      var rightHandle = document.createElement('div');
+      rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
+      rightHandle.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        mdEvt.stopPropagation();
+        KC.DnD.startResizeAllday(ev, 'right', mdEvt, el);
+      });
+
+      el.appendChild(leftHandle);
+      el.appendChild(rightHandle);
+
       // クリック → 編集ポップアップ（AC 4.7）
+      // 注: 5px 未満の mousedown→mouseup は click として処理される
       el.addEventListener('click', function (clickEvt) {
         clickEvt.stopPropagation();
         KC.Popup.openEdit(ev.id);
+      });
+
+      // mousedown → 終日 DnD 開始（バグ B 修正）
+      el.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        // リサイズハンドルからの mousedown は stopPropagation されるためここには届かない
+        KC.DnD.startMoveAllday(ev, mdEvt, el);
       });
 
       return el;

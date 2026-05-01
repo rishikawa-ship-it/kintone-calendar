@@ -372,7 +372,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  cursor: pointer;
+  cursor: grab;
   pointer-events: auto;   /* レイヤは pointer-events: none だがバー自体はクリック受付 */
   box-sizing: border-box;
 }
@@ -506,7 +506,7 @@
   white-space: normal;
   text-overflow: ellipsis;
   box-shadow: 0 1px 2px rgba(0,0,0,.05);
-  cursor: pointer;
+  cursor: grab;
   pointer-events: auto;
 }
 .kc-event .kc-evt-title {
@@ -550,9 +550,96 @@
 /* ==========================================================================
  * 11. Drag & Drop / Range Selection
  * ========================================================================== */
-.kc-event.ghost {
-  opacity: 0.5;
+
+/* ゴーストバー（時間予定・終日予定共通）— バグ C 修正: .kc-event.ghost 廃止 */
+.kc-event--ghost {
+  opacity: 0.85;
   pointer-events: none;
+  border: 2px dashed var(--kc-border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 9999;
+}
+
+/* ゴーストバー内の時刻ラベル（終日予定: "M/D ~ M/D"、時間予定: "HH:MM〜HH:MM"） */
+.kc-evt-ghost-time {
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
+/* 時間予定リサイズハンドル（ホバー時のみ出現） */
+.kc-resize-handle--top,
+.kc-resize-handle--bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--kc-dnd-handle-h, 8px);
+  cursor: ns-resize;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.kc-resize-handle--top    { top: 0; }
+.kc-resize-handle--bottom { bottom: 0; }
+
+/* 時間予定バーホバー時にリサイズハンドルを表示 */
+.kc-event:hover .kc-resize-handle--top,
+.kc-event:hover .kc-resize-handle--bottom {
+  opacity: 1;
+}
+
+/* 終日予定リサイズハンドル（ホバー時のみ出現、幅 6px） */
+.kc-resize-handle--left,
+.kc-resize-handle--right {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+.kc-resize-handle--left  { left: 0; }
+.kc-resize-handle--right { right: 0; }
+
+/* 終日予定バーホバー時にリサイズハンドルを表示 */
+.kc-ad-event:hover .kc-resize-handle--left,
+.kc-ad-event:hover .kc-resize-handle--right {
+  opacity: 1;
+}
+
+/* ドラッグ中の元バー薄表示 */
+.kc-event--dragging {
+  opacity: 0.4;
+}
+
+/* 終日予定ドラッグ中の元バー薄表示 */
+.kc-ad-event--dragging {
+  opacity: 0.4;
+}
+
+/* ドラッグ中のカーソル変更 */
+body.kc-dnd-active,
+body.kc-dnd-active * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+/* 日跨ぎ時間予定の角丸調整 */
+.kc-event--span-start {
+  border-bottom-left-radius: 1px;
+  border-bottom-right-radius: 1px;
+}
+
+.kc-event--span-end {
+  border-top-left-radius: 1px;
+  border-top-right-radius: 1px;
+}
+
+.kc-event--span-middle {
+  border-radius: 1px;
 }
 
 .kc-cell.selecting,
