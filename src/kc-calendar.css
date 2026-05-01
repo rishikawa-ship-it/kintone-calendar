@@ -24,7 +24,12 @@
   --kc-col-count: 7;
   --kc-hours: 24;
   --kc-hour-height: 60px;
-  --kc-allday-h: 50px;
+  --kc-allday-h: 104px;         /* 折りたたみ時の最大高（3レーン分）: 4+25*3-3+4+24=104 */
+  --kc-allday-lane-h: 25px;     /* 1レーン分の高さ（bar-h + bar-gap = 22 + 3） */
+  --kc-ad-bar-h: 22px;          /* 終日イベントバー 1本の高さ */
+  --kc-ad-bar-gap: 3px;         /* バー間の縦隙間 */
+  --kc-ad-bar-top: 4px;         /* .kc-ad-events 上端からの最初のバーまでのオフセット */
+  --kc-allday-toggle-h: 24px;   /* 行下部横断トグルバーの高さ */
   --kc-header-h: 48px;
   --kc-time-col-w: 50px;
   --kc-scrollbar-w: 0px;       /* JSで上書き: 縦スクロールバー幅（ヘッダー補正用） */
@@ -306,67 +311,95 @@
   top: var(--kc-header-h);
   z-index: 40;
   background: var(--kc-surface);
+  /* grid: time-col + 7列 + scrollbar-spacer。イベントバーレイヤは absolute で乗せる */
   display: grid;
   grid-template-columns:
     var(--kc-time-col-w)
     repeat(var(--kc-col-count, 7), minmax(0, 1fr))
     var(--kc-scrollbar-w, 0px);
+  /* 高さは JS（placeEvents）が style.height で動的に設定する */
   height: var(--kc-allday-h);
   border-bottom: 1px solid var(--kc-border);
+  /* .kc-ad-events と .kc-allday-toggle を絶対配置するために
+   * overflow: visible を維持。position: sticky 内でも子要素の
+   * absolute 配置は機能する。 */
+  overflow: visible;
 }
 
 .kc-allday .kc-gutter {
   background: var(--kc-time-bg);
   border-right: 1px solid var(--kc-border);
-  height: var(--kc-allday-h);
+  /* 高さは JS が allday と合わせて同期する */
 }
 
 .kc-adcell {
   position: relative;
-  height: var(--kc-allday-h);
-  padding: 4px 6px;
+  /* 高さは .kc-allday の height に追随する（grid アイテムのため自動） */
   border-left: 1px solid var(--kc-border);
 }
 
-.kc-adbox {
-  position: relative;
-  width: 100%;
-  height: 100%;
+/* 終日セルのホバー効果（.kc-adbox:hover の代替） — AC 4.17 対応 */
+.kc-adcell:hover {
+  background: var(--kc-muted);
 }
 
+/* 終日イベントバー専用絶対配置レイヤ — AC 4.2 列境界線干渉問題の解決 */
+.kc-ad-events {
+  position: absolute;
+  top: 0;
+  /* time-col 幅分オフセット: left/right で JS の位置計算（colStart/7*100%）の基準を 7列分に揃える */
+  left: var(--kc-time-col-w);
+  right: var(--kc-scrollbar-w, 0px);
+  /* トグルバー分の余白を下部に確保 */
+  bottom: var(--kc-allday-toggle-h, 24px);
+  pointer-events: none;   /* .kc-adcell へのクリックを透過させる */
+  z-index: 1;
+  overflow: hidden;
+}
+
+/* 新方式の終日イベントバー（1イベント = 1要素、位置は JS が絶対座標で設定） */
 .kc-ad-event {
   position: absolute;
-  inset: 4px 6px;
-  /* .kc-allday (z-index: 40) のローカル文脈内で .kc-adcell の border より前面に来るよう z-index: 1 を設定。
-   * seg-start / seg-middle / seg-end で right/left: -1px として隣セルへ張り出した部分が
-   * 隣セルの border-left に隠れないようにするための最小値。 */
-  z-index: 1;
+  height: var(--kc-ad-bar-h, 22px);
   background: #eef2ff;
   border: 1px solid var(--kc-border);
   border-radius: 10px;
-  padding: 4px 10px;
+  padding: 2px 8px;
   font-size: 13px;
   overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  cursor: pointer;
+  pointer-events: auto;   /* レイヤは pointer-events: none だがバー自体はクリック受付 */
+  box-sizing: border-box;
 }
 
-/* 複数日セグメント: セル境界をブリッジしてバーが連続して見えるようにする */
-.kc-ad-event.seg-start {
-  right: -1px;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+/* レーン展開トグルバー（行最下部横断）— AC 4.11〜4.13 対応 */
+.kc-allday-toggle {
+  /* grid の外に出るために absolute で配置（grid ではなく allday 全体の最下部） */
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--kc-allday-toggle-h, 24px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: auto;
+  font-size: 12px;
+  color: var(--kc-subtext);
+  gap: 4px;
+  white-space: nowrap;
+  border-top: 1px solid var(--kc-border);
+  background: transparent;
+  box-sizing: border-box;
+  z-index: 2;   /* .kc-ad-events (z-index: 1) より前面 */
 }
-.kc-ad-event.seg-middle {
-  left: -1px;
-  right: -1px;
-  border-radius: 0;
-}
-.kc-ad-event.seg-end {
-  left: -1px;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
+.kc-allday-toggle:hover {
+  color: var(--kc-text);
+  background: var(--kc-muted);
 }
 
 .kc-ad-event .dot {
@@ -463,8 +496,7 @@
   width: 100%;
 }
 
-.kc-time-slot:hover,
-.kc-adbox:hover {
+.kc-time-slot:hover {
   background: var(--kc-muted);
 }
 

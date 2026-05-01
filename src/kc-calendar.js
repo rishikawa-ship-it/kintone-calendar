@@ -280,6 +280,7 @@
     current: new Date(),
     events: [],
     editing: null,
+    alldayExpanded: false,   /* レーン展開トグル状態。初期値 false（折りたたみ）*/
     els: {},
 
     /** DOM参照の再取得 */
@@ -323,6 +324,7 @@
       var ev = {
         id:       rec.$id.value,
         rev:      rec.$revision.value,
+        created:  rec.$created ? rec.$created.value : '',  /* 作成日時 (ISO 8601) — assignLanes のソートキー */
         title:    self._safeVal(rec, F.title),
         device:   self._safeVal(rec, F.device),
         status:   self._safeVal(rec, F.status),
@@ -382,7 +384,8 @@
       var query = conditions.join(' and ') + ' order by ' + F.start + ' asc limit ' + KC.Config.QUERY_LIMIT;
 
       // fields パラメータ（存在するフィールドのみ）
-      var fieldList = ['$id', '$revision'];
+      // $created はシステムフィールドのため FIELD オブジェクトに含まれず明示追加
+      var fieldList = ['$id', '$revision', '$created'];
       for (var key in F) {
         if (F[key]) fieldList.push(F[key]);
       }
@@ -833,7 +836,7 @@
       gutter.className = 'kc-gutter';
       wrap.appendChild(gutter);
 
-      // 7日分のセル
+      // 7日分のセル（背景色・クリック領域・border-left 担当のみ。イベントバーは .kc-ad-events に分離）
       for (var i = 0; i < 7; i++) {
         var d = U.addDays(range.start, i);
         var cell = document.createElement('div');
@@ -844,10 +847,6 @@
         if (adDow === 0) cell.classList.add('kc-adcell--sun');
         if (adHoliday) cell.classList.add('kc-adcell--holiday');
         cell.dataset.date = U.fmtYMD(d);
-
-        var box = document.createElement('div');
-        box.className = 'kc-adbox';
-        cell.appendChild(box);
         wrap.appendChild(cell);
       }
 
@@ -856,7 +855,203 @@
       spacer.setAttribute('aria-hidden', 'true');
       wrap.appendChild(spacer);
 
+      // イベントバー専用絶対配置レイヤ（.kc-ad-events）
+      var eventsLayer = document.createElement('div');
+      eventsLayer.className = 'kc-ad-events';
+      wrap.appendChild(eventsLayer);
+
+      // 行最下部横断トグルバー（必要レーン数 > 3 のときのみ表示、初期は非表示）
+      var toggleEl = document.createElement('div');
+      toggleEl.className = 'kc-allday-toggle';
+      toggleEl.style.display = 'none';
+      wrap.appendChild(toggleEl);
+
       S.els.allday = wrap;
+    }
+
+    /**
+     * 当週におけるイベントの表示位置を計算する
+     * @param {Object} evt - KcEvent オブジェクト
+     * @param {string[]} weekYMD - 当週 7 日の YYYY-MM-DD 文字列配列（index 0 = 日曜）
+     * @returns {{ colStart: number, span: number, adDateRange: string } | null}
+     *   当週に表示範囲がない場合は null
+     */
+    function eventToBarPosition(evt, weekYMD) {
+      var s = new Date(evt.start);
+      var e = new Date(evt.end);
+
+      // kintone は終日イベントの end を「翌日 0 時 UTC」で保存する想定。
+      // JST 環境では getDate() - 1 が正しく実日付の終了日を返す（国内 kintone 環境前提）。
+      var startDate = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+      var endDate   = new Date(e.getFullYear(), e.getMonth(), e.getDate() - 1);
+
+      // 日付レンジ表示用文字列
+      var adStartStr  = (startDate.getMonth() + 1) + '/' + startDate.getDate();
+      var adEndStr    = (endDate.getMonth() + 1) + '/' + endDate.getDate();
+      var adDateRange = (adStartStr === adEndStr) ? adStartStr : (adStartStr + ' ~ ' + adEndStr);
+
+      // 当週の開始・終了を YYYY-MM-DD で取得
+      var weekStartYMD = weekYMD[0];
+      var weekEndYMD   = weekYMD[6];
+
+      // 表示する開始列: max(イベント開始日, 週開始日)
+      var evStartYMD = U.fmtYMD(startDate);
+      var evEndYMD   = U.fmtYMD(endDate);
+
+      // 当週に重なりがなければ null を返す
+      if (evStartYMD > weekEndYMD || evEndYMD < weekStartYMD) return null;
+
+      // 週内でクランプ
+      var clampedStartYMD = (evStartYMD < weekStartYMD) ? weekStartYMD : evStartYMD;
+      var clampedEndYMD   = (evEndYMD > weekEndYMD)     ? weekEndYMD   : evEndYMD;
+
+      var colStart = weekYMD.indexOf(clampedStartYMD);
+      var colEnd   = weekYMD.indexOf(clampedEndYMD);
+
+      if (colStart < 0 || colEnd < 0) return null;
+
+      return {
+        colStart:    colStart,
+        span:        colEnd - colStart + 1,
+        adDateRange: adDateRange
+      };
+    }
+
+    /**
+     * 当週の終日イベントにレーン番号を付与する（破壊的変更）
+     * ソート規則: created 昇順 → id 昇順（AC 4.16・4.17 対応）
+     * @param {Array} weekEvents - eventToBarPosition の結果配列（colStart, span, created, id を含む）
+     * @returns {Array} lane プロパティが付与された配列
+     */
+    function assignLanes(weekEvents) {
+      // 作成日時昇順 → ID 昇順でソート
+      weekEvents.sort(function (a, b) {
+        if (a.created < b.created) return -1;
+        if (a.created > b.created) return 1;
+        return Number(a.id) - Number(b.id);
+      });
+
+      // レーン占有テーブル: laneOccupied[lane] = [{ endCol: number }, ...]
+      var laneOccupied = [];
+
+      weekEvents.forEach(function (ev) {
+        var lane = 0;
+
+        // 最小の空きレーンをグリーディに探す
+        while (true) {
+          if (!laneOccupied[lane]) {
+            laneOccupied[lane] = [];
+            break;
+          }
+          var conflict = laneOccupied[lane].some(function (r) {
+            // 既存バーの終端が今回の開始より後ならば衝突
+            return r.endCol > ev.colStart;
+          });
+          if (!conflict) break;
+          lane++;
+        }
+
+        laneOccupied[lane].push({ endCol: ev.colStart + ev.span });
+        ev.lane = lane;
+      });
+
+      return weekEvents;
+    }
+
+    /**
+     * 折りたたみ時の表示レーン数を算出する
+     * @param {number} maxLane - 当週の最大レーン番号（0 始まり）
+     * @returns {number} 表示レーン数（1〜3 の範囲）
+     */
+    function calcCollapsedLanes(maxLane) {
+      return Math.max(1, Math.min(maxLane + 1, 3));
+    }
+
+    /**
+     * .kc-ad-event DOM 要素を生成する（1イベント = 1バー）
+     * @param {Object} ev - 位置情報付き KcEvent（colStart, span, lane, adDateRange を含む）
+     * @returns {HTMLElement}
+     */
+    function buildAlldayBar(ev) {
+      // 高さ計算定数（CSS 変数と同値を使用）
+      var BAR_H   = 22;   /* --kc-ad-bar-h */
+      var BAR_GAP = 3;    /* --kc-ad-bar-gap */
+      var BAR_TOP = 4;    /* --kc-ad-bar-top */
+
+      var el = document.createElement('div');
+      el.className = 'kc-ad-event';
+
+      // 絶対配置の位置計算（§3.3 の計算式）
+      el.style.left   = ((ev.colStart / 7) * 100) + '%';
+      el.style.width  = ((ev.span / 7) * 100) + '%';
+      el.style.top    = (BAR_TOP + ev.lane * (BAR_H + BAR_GAP)) + 'px';
+      el.style.height = BAR_H + 'px';
+
+      // 色適用
+      if (ev.color) {
+        el.style.background  = ev.color;
+        el.style.borderColor = ev.color;
+        el.style.color = isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      }
+
+      // ドット
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      if (ev.color) {
+        dot.style.background = isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      }
+
+      // コンテンツ領域
+      var contentDiv = document.createElement('div');
+      contentDiv.className = 'kc-ad-evt-content';
+
+      var titleSpan = document.createElement('span');
+      titleSpan.className = 'kc-ad-evt-title';
+      titleSpan.textContent = ev.title || '(無題)';  /* XSS 対策: textContent */
+
+      var dateSpan = document.createElement('span');
+      dateSpan.className = 'kc-ad-evt-date';
+      dateSpan.textContent = ev.adDateRange;
+
+      contentDiv.appendChild(titleSpan);
+      contentDiv.appendChild(dateSpan);
+      el.appendChild(dot);
+      el.appendChild(contentDiv);
+
+      // クリック → 編集ポップアップ（AC 4.7）
+      el.addEventListener('click', function (clickEvt) {
+        clickEvt.stopPropagation();
+        KC.Popup.openEdit(ev.id);
+      });
+
+      return el;
+    }
+
+    /**
+     * レーン展開トグル UI を更新する
+     * @param {HTMLElement} toggleEl - .kc-allday-toggle 要素
+     * @param {number} maxLane - 当週の最大レーン番号（0 始まり）
+     * @param {boolean} expanded - 現在の展開状態
+     * @param {number} hiddenCount - 折りたたみ時に非表示になるイベント数（"+N" 表示用）
+     */
+    function updateAlldayToggle(toggleEl, maxLane, expanded, hiddenCount) {
+      if (!toggleEl) return;
+
+      if (maxLane < 3) {
+        // 必要レーン数 ≤ 3 のときはトグルを非表示（AC 4.11）
+        toggleEl.style.display = 'none';
+        return;
+      }
+
+      toggleEl.style.display = 'flex';
+
+      // ラベルを更新（XSS 対策: textContent）
+      toggleEl.textContent = '';
+      if (expanded) {
+        toggleEl.textContent = '▲ 折りたたむ';
+      } else {
+        toggleEl.textContent = '▼ もっと表示 (+' + hiddenCount + ')';
+      }
     }
 
     /** 時間ガター描画 */
@@ -908,30 +1103,18 @@
       }
     }
 
-    /** 期間を日付配列に展開 */
-    function spanDates(isoStart, isoEnd) {
-      var s = new Date(isoStart);
-      var e = new Date(isoEnd);
-      var days = [];
-      for (var d = new Date(s.getFullYear(), s.getMonth(), s.getDate()); d <= e; d = U.addDays(d, 1)) {
-        days.push(U.fmtYMD(d));
-      }
-      return days;
-    }
-
     /** イベント配置 */
     function placeEvents() {
-      // 終日クリア
       var alldayWrap = S.els.allday;
-      if (alldayWrap) {
-        alldayWrap.querySelectorAll('.kc-adbox').forEach(function (b) { b.innerHTML = ''; });
-      }
 
-      // 通常クリア
+      // イベントバーレイヤをクリア
+      var eventsLayer = alldayWrap ? alldayWrap.querySelector('.kc-ad-events') : null;
+      var toggleEl    = alldayWrap ? alldayWrap.querySelector('.kc-allday-toggle') : null;
+      if (eventsLayer) eventsLayer.innerHTML = '';
+
+      // 通常イベントのオーバーレイをクリア（セル自体は保持）
       var rows = S.els.rows;
       if (!rows) return;
-
-      // overlay をクリア（セル自体は保持）
       rows.querySelectorAll('.kc-overlay').forEach(function (o) { o.remove(); });
 
       var range = weekRange(S.current);
@@ -940,79 +1123,80 @@
         weekYMD.push(U.fmtYMD(U.addDays(range.start, wi)));
       }
 
+      // ===== 終日イベント: Google カレンダー方式（単一絶対配置バー）=====
+      var weekEvents = [];
       (S.events || []).forEach(function (evt) {
-        var allday = !!evt.allday;
+        if (!evt.allday) return;
+        var pos = eventToBarPosition(evt, weekYMD);
+        if (!pos) return;
+        // イベントオブジェクトと位置情報をマージ（元オブジェクトは破壊しない）
+        weekEvents.push(Object.assign({}, evt, pos));
+      });
+
+      // レーン割り当て（created 昇順 → id 昇順ソート後にレーン計算）
+      assignLanes(weekEvents);
+
+      // 最大レーン番号を算出（イベントが 0 件のときは -1）
+      var maxLane = weekEvents.reduce(function (m, ev) {
+        return Math.max(m, ev.lane || 0);
+      }, -1);
+
+      // 折りたたみ時の表示レーン数: min(必要レーン数, 3)
+      var collapsedLaneCount = calcCollapsedLanes(maxLane);
+
+      // 展開時に隠れるイベント数（トグルラベル "+N" 用）
+      var hiddenCount = weekEvents.filter(function (ev) { return ev.lane >= 3; }).length;
+
+      // トグル UI を更新（maxLane < 3 のときは非表示）
+      if (toggleEl) updateAlldayToggle(toggleEl, maxLane, S.alldayExpanded, hiddenCount);
+
+      // トグルクリックハンドラ（毎回新規バインド: renderAlldayRow で再生成されるため）
+      if (toggleEl && maxLane >= 3) {
+        toggleEl.onclick = function () {
+          S.alldayExpanded = !S.alldayExpanded;
+          KC.Render.renderGrid();
+        };
+      }
+
+      // 各イベントをバーとして .kc-ad-events レイヤに追加
+      weekEvents.forEach(function (ev) {
+        if (!eventsLayer) return;
+        var bar = buildAlldayBar(ev);
+        eventsLayer.appendChild(bar);
+      });
+
+      // ===== 行高の動的制御（AC 4.10・4.11・4.12 対応）=====
+      if (alldayWrap) {
+        // 高さ計算定数（CSS 変数と同値）
+        var BAR_H    = 22;   /* --kc-ad-bar-h */
+        var BAR_GAP  = 3;    /* --kc-ad-bar-gap */
+        var BAR_TOP  = 4;    /* --kc-ad-bar-top */
+        var BAR_BTM  = 4;    /* 下部パディング */
+        var TOGGLE_H = 24;   /* --kc-allday-toggle-h */
+
+        var displayLanes = S.alldayExpanded ? (maxLane + 1) : collapsedLaneCount;
+        // 終日イベントが 0 件でも最低 1 レーン分の高さを確保
+        if (displayLanes < 1) displayLanes = 1;
+
+        var totalH = BAR_TOP + (BAR_H + BAR_GAP) * displayLanes - BAR_GAP + BAR_BTM + TOGGLE_H;
+        alldayWrap.style.height = totalH + 'px';
+
+        // .kc-gutter の高さも同期（grid 行高と合わせるため）
+        var gutter = alldayWrap.querySelector('.kc-gutter');
+        if (gutter) gutter.style.height = totalH + 'px';
+
+        // .kc-ad-events の overflow を展開/折りたたみで切り替える
+        if (eventsLayer) {
+          eventsLayer.style.overflow = S.alldayExpanded ? 'visible' : 'hidden';
+        }
+      }
+
+      // ===== 通常イベント配置 =====
+      (S.events || []).forEach(function (evt) {
+        if (evt.allday) return;  // 終日は上記で処理済み
+
         var s = new Date(evt.start);
         var e = new Date(evt.end);
-
-        if (allday) {
-          // 終日イベント配置
-          var dates = spanDates(evt.start, new Date(e.getFullYear(), e.getMonth(), e.getDate() - 1).toISOString());
-          var overlap = dates.filter(function (d) { return weekYMD.indexOf(d) >= 0; });
-
-          // 全期間の日付レンジ表示用（API では終端=翌日0時で保存しているので -1 日が実際の終了日）
-          var adStartDate = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-          var adEndDate   = new Date(e.getFullYear(), e.getMonth(), e.getDate() - 1);
-          var adStartStr  = (adStartDate.getMonth() + 1) + '/' + adStartDate.getDate();
-          var adEndStr    = (adEndDate.getMonth() + 1) + '/' + adEndDate.getDate();
-          var adDateRange = (adStartStr === adEndStr) ? adStartStr : (adStartStr + ' ~ ' + adEndStr);
-
-          var isMulti = overlap.length > 1;
-
-          overlap.forEach(function (ymd, idx) {
-            var adCell = alldayWrap ? alldayWrap.querySelector('.kc-adcell[data-date="' + ymd + '"] .kc-adbox') : null;
-            if (!adCell) return;
-
-            var el = document.createElement('div');
-            el.className = 'kc-ad-event';
-            var isFirst = (idx === 0);
-            if (isMulti) {
-              el.classList.add(isFirst ? 'seg-start' : (idx === overlap.length - 1 ? 'seg-end' : 'seg-middle'));
-            }
-
-            // 単独 or 先頭セグメントのみ内容を描画。中間/末尾はバーのみで連結表現。
-            if (!isMulti || isFirst) {
-              var dot = document.createElement('span');
-              dot.className = 'dot';
-
-              var contentDiv = document.createElement('div');
-              contentDiv.className = 'kc-ad-evt-content';
-
-              var titleSpan = document.createElement('span');
-              titleSpan.className = 'kc-ad-evt-title';
-              titleSpan.textContent = evt.title || '(無題)';
-
-              var dateSpan = document.createElement('span');
-              dateSpan.className = 'kc-ad-evt-date';
-              dateSpan.textContent = adDateRange;
-
-              contentDiv.appendChild(titleSpan);
-              contentDiv.appendChild(dateSpan);
-              el.appendChild(dot);
-              el.appendChild(contentDiv);
-
-              if (evt.color) {
-                dot.style.background = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
-              }
-            }
-
-            // 色適用（バー本体は全セグメントに）
-            if (evt.color) {
-              el.style.background = evt.color;
-              el.style.borderColor = evt.color;
-              el.style.color = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
-            }
-
-            el.style.cursor = 'pointer';
-            el.addEventListener('click', function (clickEvt) {
-              clickEvt.stopPropagation();
-              KC.Popup.openEdit(evt.id);
-            });
-
-            adCell.appendChild(el);
-          });
-          return;
-        }
 
         // 通常イベント配置（開始日のみに配置、跨ぎは24:00で切る）
         var dayIdx = weekYMD.indexOf(U.fmtYMD(s));
@@ -1328,14 +1512,14 @@
       });
     },
 
-    /** 終日セルにクリックイベント付与 */
+    /** 終日セルにクリックイベント付与（.kc-adbox 廃止につき .kc-adcell に変更） */
     bindAllDayBoxes: function () {
       var self = this;
-      var boxes = document.querySelectorAll('.kc-adbox');
-      boxes.forEach(function (box) {
-        if (box.dataset.kcClickBound === '1') return;
-        box.dataset.kcClickBound = '1';
-        box.addEventListener('click', function (e) { self._onAllDayClick(e); });
+      var cells = document.querySelectorAll('.kc-adcell');
+      cells.forEach(function (cell) {
+        if (cell.dataset.kcClickBound === '1') return;
+        cell.dataset.kcClickBound = '1';
+        cell.addEventListener('click', function (e) { self._onAllDayClick(e); });
       });
     },
 
@@ -1373,13 +1557,12 @@
       });
     },
 
-    /** 終日セルクリック → ダイアログ表示 */
+    /** 終日セルクリック → ダイアログ表示（.kc-adcell を直接イベント発火元として使用） */
     _onAllDayClick: function (e) {
       e.preventDefault();
       e.stopPropagation();
-      var box  = e.currentTarget;
-      var cell = box.closest('.kc-adcell');
-      var date = (cell && cell.dataset.date) || box.dataset.date || KC.Utils.fmtYMD(new Date());
+      var cell = e.currentTarget;
+      var date = cell.dataset.date || KC.Utils.fmtYMD(new Date());
 
       KC.Popup.openCreate({
         date: date,
@@ -1686,6 +1869,7 @@
 
       if (S.els.prevBtn) {
         S.els.prevBtn.addEventListener('click', function () {
+          S.alldayExpanded = false;   // 週切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
           S.current.setDate(S.current.getDate() - 7);
           R.refresh();
         });
@@ -1693,6 +1877,7 @@
 
       if (S.els.todayBtn) {
         S.els.todayBtn.addEventListener('click', function () {
+          S.alldayExpanded = false;   // 週切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
           S.current = new Date();
           R.refresh();
         });
@@ -1700,6 +1885,7 @@
 
       if (S.els.nextBtn) {
         S.els.nextBtn.addEventListener('click', function () {
+          S.alldayExpanded = false;   // 週切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
           S.current.setDate(S.current.getDate() + 7);
           R.refresh();
         });
