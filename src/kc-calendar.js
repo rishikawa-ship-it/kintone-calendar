@@ -2423,7 +2423,9 @@
     // バー高さ定数（週ビューの buildAlldayBar と同値）
     var BAR_H   = 22;  /* --kc-ad-bar-h */
     var BAR_GAP = 3;   /* --kc-ad-bar-gap */
-    var BAR_TOP = 4;   /* --kc-ad-bar-top */
+    // BAR_TOP: .kc-month-ad-events の top が CSS で --kc-month-dateline-h (28px) に設定されたため
+    // adLayer 自体が dateline の下から始まる。バー個別の top オフセットは 0 で OK。
+    var BAR_TOP = 0;   /* adLayer top = --kc-month-dateline-h (CSS) で日付行を回避済み */
 
     /** セル内の表示件数上限（フォールバック用） */
     var MAX_CELL_ITEMS = 5;
@@ -2434,9 +2436,9 @@
      *
      * 計算前提:
      *   - 月ビューはセル内に [日付行 + 終日バー領域 + chip 群 + +N more] が縦積み
-     *   - .kc-month-dateline（24px）が日付＋祝日名を 1 行に含むため dateHeadH は維持
+     *   - .kc-month-dateline の min-height は --kc-month-dateline-h (28px) に設定済み
      *   - itemH は 1 件分の高さ（chip = BAR_H + BAR_GAP, 暗黙的に終日バーと同等）
-     *   - safety は overflow: hidden が効いてもギリギリで日付行と被らないための余白
+     *   - .kc-month-ad-events の top が CSS で 28px に固定されるため safety マージンは不要
      * @returns {number} 最低 1、最大 10
      */
     function _calcMaxItems() {
@@ -2444,12 +2446,11 @@
       if (!firstCell) return MAX_CELL_ITEMS;
       var cellH = firstCell.getBoundingClientRect().height;
       if (!cellH || cellH <= 0) return MAX_CELL_ITEMS;
-      var dateHeadH = 24;        // 日付ヘッダー（dateline）高
+      var dateHeadH = 28;        // 日付ヘッダー（dateline）高: --kc-month-dateline-h と同値
       var padding   = 4;         // セル padding 上下合計（CSS: padding 2px）
       var moreH     = 16;        // +N more 行高
-      var safety    = 6;         // 日付行と被らないための安全マージン
       var itemH     = BAR_H + BAR_GAP; // 1 件あたりの高さ（25px）
-      var available = cellH - dateHeadH - padding - moreH - safety;
+      var available = cellH - dateHeadH - padding - moreH;
       var max = Math.floor(available / itemH);
       return Math.max(1, Math.min(max, 10));
     }
@@ -2668,14 +2669,19 @@
       // 終日バーが占有する高さ分のスペーサーを挿入（chip がバーに隠れないよう）
       // .kc-month-dateline の直後に配置して、chip を終日バーの下に押し下げる
       // （.kc-month-dateline は datehead + 祝日名を内包する flex 行ラッパー）
+      //
+      // spacer 高さの設計:
+      //   .kc-month-ad-events の top は CSS で --kc-month-dateline-h (28px) に設定済み。
+      //   dateline が 28px を占有した後に spacer がバー群高さ分 (usedSlots 本分) を確保すれば
+      //   chip 開始位置 = dateline(28px) + spacer(usedSlots*25px) = adLayer.top + バー群 下端 と一致する。
+      //   BAR_TOP は 0 のため spacerH = usedSlots * BAR_H + (usedSlots - 1) * BAR_GAP。
       if (usedSlots > 0) {
         var spacer = cellEl.querySelector('.kc-month-chip-spacer');
         if (!spacer) {
           spacer = document.createElement('div');
           spacer.className = 'kc-month-chip-spacer';
-          // セル個別の usedSlots 基準で正確な高さを計算する
-          // 末尾の BAR_GAP を含めないことで adLayer との高さ不一致（3px誤差）を解消
-          var spacerH = BAR_TOP + usedSlots * BAR_H + (usedSlots - 1) * BAR_GAP;
+          // adLayer.top が CSS で固定されたため BAR_TOP 分は不要。バー群の正味高さのみ確保する。
+          var spacerH = usedSlots * BAR_H + (usedSlots - 1) * BAR_GAP;
           spacer.style.height = spacerH + 'px';
           spacer.style.flex = '0 0 auto';
           spacer.style.pointerEvents = 'none';
@@ -3588,8 +3594,71 @@
     if (F.userMail && record[F.userMail]) record[F.userMail].value = user.email || '';
     if (F.account && record[F.account]) record[F.account].value = [{ code: user.code }];
 
+    // ポップアップ内でキャンセルボタンを監視して自動クローズする
+    // kintone の新規作成キャンセルはURLを変えず任意のkintoneイベントも発火しないため、
+    // DOM のキャンセルボタンを直接 MutationObserver で検知して window.close() を呼ぶ。
+    if (window.opener) {
+      _kcWatchCancelButton();
+    }
+
     return event;
   });
+
+  /**
+   * kintone 新規作成フォームのキャンセルボタンを MutationObserver で待ち受け、
+   * クリック時にポップアップを閉じる。
+   * kintone の DOM は遅延描画されるため MutationObserver で確実に捕捉する。
+   * 複数の selector を候補として試し、最初に見つかったボタンに listener を付ける。
+   */
+  function _kcWatchCancelButton() {
+    // kintone 標準のキャンセルボタン selector 候補（バージョン差異に対応）
+    var CANCEL_SELECTORS = [
+      'a.gaia-ui-actionmenu-cancel',
+      'button.gaia-ui-actionmenu-cancel',
+      '[data-action="cancel"]',
+      '.gaia-argoui-record-toolbar-cancel',
+      'a[href*="cancel"]'
+    ];
+
+    var _attached = false;
+
+    function _attachListener(btn) {
+      if (_attached) return;
+      _attached = true;
+      btn.addEventListener('click', function () {
+        // kintone のフォームリセット完了後に閉じる（遅延なしでも動作するが念のため）
+        setTimeout(function () {
+          try { window.close(); } catch (e) { console.warn('[KC] cancel close failed:', e); }
+        }, 100);
+      });
+      console.log('[KC] cancel button listener attached:', btn.className || btn.tagName);
+    }
+
+    function _findAndAttach() {
+      for (var si = 0; si < CANCEL_SELECTORS.length; si++) {
+        var btn = document.querySelector(CANCEL_SELECTORS[si]);
+        if (btn) {
+          _attachListener(btn);
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // 即時チェック（DOM がすでに描画済みの場合）
+    if (_findAndAttach()) return;
+
+    // MutationObserver で DOM の変化を監視しキャンセルボタン出現を待つ
+    var observer = new MutationObserver(function () {
+      if (_findAndAttach()) {
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // 10 秒後に自動切断（永続監視防止）
+    setTimeout(function () { observer.disconnect(); }, 10000);
+  }
 
   /* ====================================================================
    * 保存成功後にポップアップを閉じてカレンダーを更新

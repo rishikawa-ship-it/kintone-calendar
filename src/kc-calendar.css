@@ -30,6 +30,7 @@
   --kc-ad-bar-gap: 3px;         /* バー間の縦隙間 */
   --kc-ad-bar-top: 4px;         /* .kc-ad-events 上端からの最初のバーまでのオフセット */
   --kc-month-cell-min-h: 90px;  /* 月ビュー: セルの最小高（REQ_month-view §7.1 確定値） */
+  --kc-month-dateline-h: 28px;  /* 月ビュー: 日付行（dateline）の確保高（祝日名インライン対応で 24px + 4px バッファ） */
   --kc-fullscreen-header-h: 0px; /* 全画面時 kintone ヘッダー高（kc-expanded は fixed で隠れるため 0px） */
   --kc-allday-toggle-h: 24px;   /* 行下部横断トグルバーの高さ */
   --kc-header-h: 48px;
@@ -846,7 +847,7 @@ body.kc-dnd-active * {
   white-space: nowrap;
   overflow: hidden;
   flex: 0 0 auto;
-  min-height: 24px;
+  min-height: var(--kc-month-dateline-h, 28px);
 }
 
 /* セル内日付数字（左上）*/
@@ -864,11 +865,13 @@ body.kc-dnd-active * {
 /* 終日バー専用絶対配置レイヤ（週行全幅に張る）*/
 /* position: absolute により grid フローから外れるが height は内部バー依存（height: auto）*/
 /* bottom: 0 を設定するとセル全体を覆いクリック競合が生じるため除去（NG#5対応）*/
+/* top を --kc-month-dateline-h に設定することで日付行と終日バーが被らなくなる。
+ * adLayer を dateline の下から開始させ、BAR_TOP (JS) は 0 に変更して整合させる。 */
 .kc-month-ad-events {
   position: absolute;
   left: 0;
   right: 0;
-  top: 0;
+  top: var(--kc-month-dateline-h, 28px);
   pointer-events: none;
   z-index: 1;
 }
