@@ -359,9 +359,10 @@
       return ev;
     },
 
-    /** 一覧取得 */
+    /** 一覧取得（cursor API: 500件超も全件取得） */
     loadEvents: async function (isoStart, isoEnd) {
       var F = KC.Config.FIELD;
+      var self = this;
 
       // DATE型の場合は "YYYY-MM-DD" 形式でクエリを組む
       var qStart = isoStart;
@@ -371,7 +372,7 @@
         qEnd = isoEnd.substring(0, 10);
       }
 
-      // クエリ構築（動的）
+      // クエリ構築（動的。cursor API では limit 句は不要）
       var conditions = [];
       conditions.push('(' + F.start + ' < "' + qEnd + '")');
       conditions.push('(' + F.end + ' > "' + qStart + '")');
@@ -381,7 +382,7 @@
         conditions.push('(' + F.status + ' not in (' + excluded + '))');
       }
 
-      var query = conditions.join(' and ') + ' order by ' + F.start + ' asc limit ' + KC.Config.QUERY_LIMIT;
+      var query = conditions.join(' and ') + ' order by ' + F.start + ' asc';
 
       // fields パラメータ（存在するフィールドのみ）
       // $created はシステムフィールドのため FIELD オブジェクトに含まれず明示追加
@@ -390,16 +391,45 @@
         if (F[key]) fieldList.push(F[key]);
       }
 
-      var url = kintone.api.url('/k/v1/records.json', true);
-      var params = {
-        app: KC.Config.getAppId(),
-        query: query,
-        fields: fieldList
+      var cursorUrl = kintone.api.url('/k/v1/records/cursor.json', true);
+      var createParams = {
+        app:    KC.Config.getAppId(),
+        query:  query,
+        fields: fieldList,
+        size:   500
       };
 
-      var resp = await kintone.api(url, 'GET', params);
-      var self = this;
-      return (resp.records || []).map(function (r) { return self._recordToEvent(r); });
+      // cursor API による全件取得（kintone-rules.md §3 準拠）
+      var cursorId = null;
+      try {
+        var createResp = await kintone.api(cursorUrl, 'POST', createParams);
+        cursorId = createResp.id;
+
+        var allRecords = [];
+        var hasNext = true;
+        while (hasNext) {
+          var getResp = await kintone.api(cursorUrl, 'GET', { id: cursorId });
+          allRecords = allRecords.concat(getResp.records || []);
+          hasNext = getResp.next;
+          // レート制限緩衝: 次の GET まで 50ms 待機（req: §3.10）
+          if (hasNext) {
+            await new Promise(function (r) { setTimeout(r, 50); });
+          }
+        }
+
+        return allRecords.map(function (r) { return self._recordToEvent(r); });
+      } catch (err) {
+        // cursor リソースリーク防止: エラー時に cursor を破棄する
+        if (cursorId) {
+          try {
+            await kintone.api(cursorUrl, 'DELETE', { id: cursorId });
+          } catch (e2) {
+            console.error('[KC.Api.loadEvents] cursor DELETE 失敗:', e2);
+          }
+        }
+        console.error('[KC.Api.loadEvents] cursor API エラー:', err);
+        throw err;
+      }
     },
 
     /** 作成 */
@@ -1446,13 +1476,17 @@
   }());
 
   /* ====================================================================
-   * KC.RenderWeek — 週ビューレンダラー
+   * KC.Lanes — レーン計算ユーティリティ（週ビュー・月ビュー共通）
+   * KC.RenderWeek から切り出し。KC.RenderWeek より前に定義すること。
    * ==================================================================== */
-  KC.RenderWeek = (function () {
+  KC.Lanes = (function () {
     var U = KC.Utils;
-    var S = KC.State;
 
-    /** 色が明るいかどうかを判定するヘルパー */
+    /**
+     * 色が明るいかどうかを判定する（文字色選択に使用）
+     * @param {string} color - CSS カラー文字列
+     * @returns {boolean} true = 明るい色（文字を黒にする）
+     */
     function isLightColor(color) {
       var canvas = document.createElement('canvas');
       canvas.width = canvas.height = 1;
@@ -1463,6 +1497,109 @@
       var luminance = (0.299 * data[0] + 0.587 * data[1] + 0.114 * data[2]) / 255;
       return luminance > 0.6;
     }
+
+    /**
+     * 週内でのイベントのバー位置を算出する
+     * @param {Object} evt - KcEvent（start, end を含む）
+     * @param {string[]} weekYMD - 7 要素の YYYY-MM-DD 配列（index 0 = 日曜）
+     * @returns {{ colStart: number, span: number, adDateRange: string } | null}
+     *   当週に表示範囲がない場合は null
+     */
+    function eventToBarPosition(evt, weekYMD) {
+      var s = new Date(evt.start);
+      var e = new Date(evt.end);
+
+      // kintone は終日イベントの end を「翌日 0 時 UTC」で保存する想定。
+      // JST 環境では getDate() - 1 が正しく実日付の終了日を返す（国内 kintone 環境前提）。
+      var startDate = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+      var endDate   = new Date(e.getFullYear(), e.getMonth(), e.getDate() - 1);
+
+      // 日付レンジ表示用文字列
+      var adStartStr  = (startDate.getMonth() + 1) + '/' + startDate.getDate();
+      var adEndStr    = (endDate.getMonth() + 1) + '/' + endDate.getDate();
+      var adDateRange = (adStartStr === adEndStr) ? adStartStr : (adStartStr + ' ~ ' + adEndStr);
+
+      // 当週の開始・終了を YYYY-MM-DD で取得
+      var weekStartYMD = weekYMD[0];
+      var weekEndYMD   = weekYMD[6];
+
+      // 表示する開始列: max(イベント開始日, 週開始日)
+      var evStartYMD = U.fmtYMD(startDate);
+      var evEndYMD   = U.fmtYMD(endDate);
+
+      // 当週に重なりがなければ null を返す
+      if (evStartYMD > weekEndYMD || evEndYMD < weekStartYMD) return null;
+
+      // 週内でクランプ
+      var clampedStartYMD = (evStartYMD < weekStartYMD) ? weekStartYMD : evStartYMD;
+      var clampedEndYMD   = (evEndYMD > weekEndYMD)     ? weekEndYMD   : evEndYMD;
+
+      var colStart = weekYMD.indexOf(clampedStartYMD);
+      var colEnd   = weekYMD.indexOf(clampedEndYMD);
+
+      if (colStart < 0 || colEnd < 0) return null;
+
+      return {
+        colStart:    colStart,
+        span:        colEnd - colStart + 1,
+        adDateRange: adDateRange
+      };
+    }
+
+    /**
+     * 週イベント配列にレーン番号を付与する（破壊的変更）
+     * ソート規則: created 昇順 → id 昇順
+     * @param {Array} weekEvents - { colStart, span, created, id } を含む配列
+     * @returns {Array} lane プロパティが付与された配列
+     */
+    function assignLanes(weekEvents) {
+      // 作成日時昇順 → ID 昇順でソート
+      weekEvents.sort(function (a, b) {
+        if (a.created < b.created) return -1;
+        if (a.created > b.created) return 1;
+        return Number(a.id) - Number(b.id);
+      });
+
+      // レーン占有テーブル: laneOccupied[lane] = [{ endCol: number }, ...]
+      var laneOccupied = [];
+
+      weekEvents.forEach(function (ev) {
+        var lane = 0;
+
+        // 最小の空きレーンをグリーディに探す
+        while (true) {
+          if (!laneOccupied[lane]) {
+            laneOccupied[lane] = [];
+            break;
+          }
+          var conflict = laneOccupied[lane].some(function (r) {
+            // 既存バーの終端が今回の開始より後ならば衝突
+            return r.endCol > ev.colStart;
+          });
+          if (!conflict) break;
+          lane++;
+        }
+
+        laneOccupied[lane].push({ endCol: ev.colStart + ev.span });
+        ev.lane = lane;
+      });
+
+      return weekEvents;
+    }
+
+    return {
+      isLightColor:       isLightColor,
+      eventToBarPosition: eventToBarPosition,
+      assignLanes:        assignLanes
+    };
+  }());
+
+  /* ====================================================================
+   * KC.RenderWeek — 週ビューレンダラー
+   * ==================================================================== */
+  KC.RenderWeek = (function () {
+    var U = KC.Utils;
+    var S = KC.State;
 
     /** 週の開始日（日曜）を返す */
     function weekStart(date) {
@@ -1586,95 +1723,6 @@
     }
 
     /**
-     * 当週におけるイベントの表示位置を計算する
-     * @param {Object} evt - KcEvent オブジェクト
-     * @param {string[]} weekYMD - 当週 7 日の YYYY-MM-DD 文字列配列（index 0 = 日曜）
-     * @returns {{ colStart: number, span: number, adDateRange: string } | null}
-     *   当週に表示範囲がない場合は null
-     */
-    function eventToBarPosition(evt, weekYMD) {
-      var s = new Date(evt.start);
-      var e = new Date(evt.end);
-
-      // kintone は終日イベントの end を「翌日 0 時 UTC」で保存する想定。
-      // JST 環境では getDate() - 1 が正しく実日付の終了日を返す（国内 kintone 環境前提）。
-      var startDate = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-      var endDate   = new Date(e.getFullYear(), e.getMonth(), e.getDate() - 1);
-
-      // 日付レンジ表示用文字列
-      var adStartStr  = (startDate.getMonth() + 1) + '/' + startDate.getDate();
-      var adEndStr    = (endDate.getMonth() + 1) + '/' + endDate.getDate();
-      var adDateRange = (adStartStr === adEndStr) ? adStartStr : (adStartStr + ' ~ ' + adEndStr);
-
-      // 当週の開始・終了を YYYY-MM-DD で取得
-      var weekStartYMD = weekYMD[0];
-      var weekEndYMD   = weekYMD[6];
-
-      // 表示する開始列: max(イベント開始日, 週開始日)
-      var evStartYMD = U.fmtYMD(startDate);
-      var evEndYMD   = U.fmtYMD(endDate);
-
-      // 当週に重なりがなければ null を返す
-      if (evStartYMD > weekEndYMD || evEndYMD < weekStartYMD) return null;
-
-      // 週内でクランプ
-      var clampedStartYMD = (evStartYMD < weekStartYMD) ? weekStartYMD : evStartYMD;
-      var clampedEndYMD   = (evEndYMD > weekEndYMD)     ? weekEndYMD   : evEndYMD;
-
-      var colStart = weekYMD.indexOf(clampedStartYMD);
-      var colEnd   = weekYMD.indexOf(clampedEndYMD);
-
-      if (colStart < 0 || colEnd < 0) return null;
-
-      return {
-        colStart:    colStart,
-        span:        colEnd - colStart + 1,
-        adDateRange: adDateRange
-      };
-    }
-
-    /**
-     * 当週の終日イベントにレーン番号を付与する（破壊的変更）
-     * ソート規則: created 昇順 → id 昇順（AC 4.16・4.17 対応）
-     * @param {Array} weekEvents - eventToBarPosition の結果配列（colStart, span, created, id を含む）
-     * @returns {Array} lane プロパティが付与された配列
-     */
-    function assignLanes(weekEvents) {
-      // 作成日時昇順 → ID 昇順でソート
-      weekEvents.sort(function (a, b) {
-        if (a.created < b.created) return -1;
-        if (a.created > b.created) return 1;
-        return Number(a.id) - Number(b.id);
-      });
-
-      // レーン占有テーブル: laneOccupied[lane] = [{ endCol: number }, ...]
-      var laneOccupied = [];
-
-      weekEvents.forEach(function (ev) {
-        var lane = 0;
-
-        // 最小の空きレーンをグリーディに探す
-        while (true) {
-          if (!laneOccupied[lane]) {
-            laneOccupied[lane] = [];
-            break;
-          }
-          var conflict = laneOccupied[lane].some(function (r) {
-            // 既存バーの終端が今回の開始より後ならば衝突
-            return r.endCol > ev.colStart;
-          });
-          if (!conflict) break;
-          lane++;
-        }
-
-        laneOccupied[lane].push({ endCol: ev.colStart + ev.span });
-        ev.lane = lane;
-      });
-
-      return weekEvents;
-    }
-
-    /**
      * 折りたたみ時の表示レーン数を算出する
      * @param {number} maxLane - 当週の最大レーン番号（0 始まり）
      * @returns {number} 表示レーン数（1〜3 の範囲）
@@ -1707,7 +1755,7 @@
       if (ev.color) {
         el.style.background  = ev.color;
         el.style.borderColor = ev.color;
-        el.style.color = isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+        el.style.color = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
       }
 
       // ホバーツールチップ（件名 + 日付範囲）
@@ -1717,7 +1765,7 @@
       var dot = document.createElement('span');
       dot.className = 'dot';
       if (ev.color) {
-        dot.style.background = isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+        dot.style.background = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
       }
 
       // 件名のみ（Google カレンダー方式: 単一行・件名のみ表示）
@@ -1869,14 +1917,14 @@
       var weekEvents = [];
       (S.events || []).forEach(function (evt) {
         if (!evt.allday) return;
-        var pos = eventToBarPosition(evt, weekYMD);
+        var pos = KC.Lanes.eventToBarPosition(evt, weekYMD);
         if (!pos) return;
         // イベントオブジェクトと位置情報をマージ（元オブジェクトは破壊しない）
         weekEvents.push(Object.assign({}, evt, pos));
       });
 
       // レーン割り当て（created 昇順 → id 昇順ソート後にレーン計算）
-      assignLanes(weekEvents);
+      KC.Lanes.assignLanes(weekEvents);
 
       // 最大レーン番号を算出（イベントが 0 件のときは -1）
       var maxLane = weekEvents.reduce(function (m, ev) {
@@ -2020,7 +2068,7 @@
           if (evt.color) {
             div.style.background  = evt.color;
             div.style.borderColor = evt.color;
-            div.style.color = isLightColor(evt.color) ? '#1f2937' : '#ffffff';
+            div.style.color = KC.Lanes.isLightColor(evt.color) ? '#1f2937' : '#ffffff';
           }
 
           // XSS 安全: textContent 使用
@@ -2032,7 +2080,7 @@
           metaDiv.className = 'kc-evt-meta';
           metaDiv.textContent = fullTimeStr + (evt.device ? ' / ' + evt.device : '');
           if (evt.color) {
-            metaDiv.style.color = isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
+            metaDiv.style.color = KC.Lanes.isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
           }
 
           // NG#6 修正: リサイズハンドルは開始セグメント（dayIdx === hitDayIndices[0]）のみに追加する
