@@ -563,6 +563,8 @@
       sessionStorage.setItem('KC_CREATE_CONTEXT', JSON.stringify(options));
       // 親ウィンドウで検出済みの FIELD 設定を保存（ポップアップ側の detectFields 未完了を補完）
       sessionStorage.setItem('KC_FIELD_CONFIG', JSON.stringify(KC.Config.FIELD));
+      // START_FIELD_TYPE（DATE / DATETIME）も保存する（ポップアップ側で値フォーマットの判定に使用）
+      sessionStorage.setItem('KC_START_FIELD_TYPE', KC.Config.START_FIELD_TYPE || 'DATETIME');
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/edit';
       var popup = this._openWindow(url);
@@ -3489,11 +3491,16 @@
     } else {
       F = KC.Config.FIELD;
     }
+    // START_FIELD_TYPE を sessionStorage から取得する
+    // ポップアップ側では detectFields が完了していないため KC.Config.START_FIELD_TYPE が未設定の場合がある
+    var savedFieldType = sessionStorage.getItem('KC_START_FIELD_TYPE');
+    var fieldType = savedFieldType || KC.Config.START_FIELD_TYPE || 'DATETIME';
+
     var record = event.record;
 
     if (data.allday) {
       // 終日イベント
-      if (KC.Config.START_FIELD_TYPE === 'DATE') {
+      if (fieldType === 'DATE') {
         record[F.start].value = data.date;
         record[F.end].value = data.date;
       } else {
@@ -3514,7 +3521,7 @@
       if (endMinute >= 60) { endMinute -= 60; endHour += 1; }
       var endTime = pad2(endHour) + ':' + pad2(endMinute) + ':00';
 
-      if (KC.Config.START_FIELD_TYPE === 'DATE') {
+      if (fieldType === 'DATE') {
         record[F.start].value = data.date;
         record[F.end].value = data.date;
       } else {
@@ -3561,6 +3568,19 @@
   });
 
   /* ====================================================================
+   * ポップアップウィンドウ制御用フラグ
+   * openEdit 起動時の初回 detail.show と、編集後キャンセルの detail.show を区別する。
+   * 編集画面に入った場合のみ true になり、detail.show 時に close する。
+   * ==================================================================== */
+  var _kcWasInEditMode = false;
+
+  // 編集画面が開かれた時にフラグを立てる
+  kintone.events.on('app.record.edit.show', function (event) {
+    _kcWasInEditMode = true;
+    return event;
+  });
+
+  /* ====================================================================
    * 新規作成画面でキャンセル → 一覧画面へ遷移後、ポップアップを閉じる
    * window.opener がある場合のみ動作（親ウィンドウでは何もしない）
    * ==================================================================== */
@@ -3572,11 +3592,12 @@
   });
 
   /* ====================================================================
-   * 編集画面でキャンセル → 詳細画面へ遷移後、ポップアップを閉じる
+   * 編集 → キャンセル → 詳細画面に戻った時のみポップアップを閉じる
+   * openEdit 起動直後の初回 detail.show では close しない（_kcWasInEditMode が false のため）
    * window.opener がある場合のみ動作（親ウィンドウでは何もしない）
    * ==================================================================== */
   kintone.events.on('app.record.detail.show', function (event) {
-    if (window.opener) {
+    if (window.opener && _kcWasInEditMode) {
       window.close();
     }
     return event;
