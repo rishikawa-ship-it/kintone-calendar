@@ -565,6 +565,10 @@
       sessionStorage.setItem('KC_FIELD_CONFIG', JSON.stringify(KC.Config.FIELD));
       // START_FIELD_TYPE（DATE / DATETIME）も保存する（ポップアップ側で値フォーマットの判定に使用）
       sessionStorage.setItem('KC_START_FIELD_TYPE', KC.Config.START_FIELD_TYPE || 'DATETIME');
+      // ALLDAY_LABEL（終日チェックボックスのラベル文字列）も保存する
+      // ポップアップ側では KC.Config.ALLDAY_LABEL がデフォルト値のままになるケースがあり、
+      // アプリで設定されたラベルと不一致だと終日 ON が反映されない（DATETIME + 終日 不具合）
+      sessionStorage.setItem('KC_ALLDAY_LABEL', KC.Config.ALLDAY_LABEL || '終日');
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/edit';
       var popup = this._openWindow(url);
@@ -2338,19 +2342,27 @@
         var holidayName = U.getHolidayName(cellDate);
         if (holidayName) cell.classList.add('kc-month-cell--holiday');
 
-        // 日付数字（左上）
+        // 日付数字 + 祝日名を 1 行（インライン）で並べるラッパー
+        // .kc-month-dateline は flex コンテナで、日付数字（青丸スタイル維持）の右隣に
+        // 祝日名を ellipsis で詰める。祝日がない日は dateline の中に datehead のみ。
+        var dateline = document.createElement('div');
+        dateline.className = 'kc-month-dateline';
+
+        // 日付数字（.kc-month-cell--today の青丸スタイルを維持するため className は変更しない）
         var datehead = document.createElement('div');
         datehead.className = 'kc-month-datehead';
         datehead.textContent = String(cellDate.getDate());
-        cell.appendChild(datehead);
+        dateline.appendChild(datehead);
 
-        // 祝日名表示（祝日のみ。textContent で XSS 安全）
+        // 祝日名表示（祝日のみ。textContent で XSS 安全。inline の span として並べる）
         if (holidayName) {
-          var holidayLabel = document.createElement('div');
+          var holidayLabel = document.createElement('span');
           holidayLabel.className = 'kc-month-holiday-name';
           holidayLabel.textContent = holidayName;
-          cell.appendChild(holidayLabel);
+          dateline.appendChild(holidayLabel);
         }
+
+        cell.appendChild(dateline);
 
         // セルクリック → 新規作成（Phase 1B-1: クリックハンドラ配線）
         cell.addEventListener('click', (function (capturedYMD) {
@@ -2419,6 +2431,12 @@
     /**
      * セル実高から表示可能な最大イベント件数を動的計算する
      * DOM が未構築の場合は MAX_CELL_ITEMS をフォールバックとして返す
+     *
+     * 計算前提:
+     *   - 月ビューはセル内に [日付行 + 終日バー領域 + chip 群 + +N more] が縦積み
+     *   - .kc-month-dateline（24px）が日付＋祝日名を 1 行に含むため dateHeadH は維持
+     *   - itemH は 1 件分の高さ（chip = BAR_H + BAR_GAP, 暗黙的に終日バーと同等）
+     *   - safety は overflow: hidden が効いてもギリギリで日付行と被らないための余白
      * @returns {number} 最低 1、最大 10
      */
     function _calcMaxItems() {
@@ -2426,11 +2444,12 @@
       if (!firstCell) return MAX_CELL_ITEMS;
       var cellH = firstCell.getBoundingClientRect().height;
       if (!cellH || cellH <= 0) return MAX_CELL_ITEMS;
-      var dateHeadH = 24;        // 日付ヘッダー高（padding 込み実測値）
-      var padding   = 4;         // セル padding 上下合計
+      var dateHeadH = 24;        // 日付ヘッダー（dateline）高
+      var padding   = 4;         // セル padding 上下合計（CSS: padding 2px）
       var moreH     = 16;        // +N more 行高
+      var safety    = 6;         // 日付行と被らないための安全マージン
       var itemH     = BAR_H + BAR_GAP; // 1 件あたりの高さ（25px）
-      var available = cellH - dateHeadH - padding - moreH;
+      var available = cellH - dateHeadH - padding - moreH - safety;
       var max = Math.floor(available / itemH);
       return Math.max(1, Math.min(max, 10));
     }
@@ -2647,7 +2666,8 @@
       if (!timedEvents || timedEvents.length === 0) return 0;
 
       // 終日バーが占有する高さ分のスペーサーを挿入（chip がバーに隠れないよう）
-      // .kc-month-datehead の直後に配置して、chip を終日バーの下に押し下げる
+      // .kc-month-dateline の直後に配置して、chip を終日バーの下に押し下げる
+      // （.kc-month-dateline は datehead + 祝日名を内包する flex 行ラッパー）
       if (usedSlots > 0) {
         var spacer = cellEl.querySelector('.kc-month-chip-spacer');
         if (!spacer) {
@@ -2659,8 +2679,11 @@
           spacer.style.height = spacerH + 'px';
           spacer.style.flex = '0 0 auto';
           spacer.style.pointerEvents = 'none';
-          var datehead = cellEl.querySelector('.kc-month-datehead');
-          var insertBefore = datehead ? datehead.nextSibling : null;
+          // dateline（祝日名を含む行）の直後を基準にする。dateline がない場合は
+          // 旧構造の datehead 直接 children へのフォールバック。
+          var dateline = cellEl.querySelector('.kc-month-dateline');
+          var anchor = dateline || cellEl.querySelector('.kc-month-datehead');
+          var insertBefore = anchor ? anchor.nextSibling : null;
           cellEl.insertBefore(spacer, insertBefore);
         }
       }
@@ -2784,7 +2807,12 @@
         S.events = await KC.Api.loadEvents(isoStart, isoEnd);
         // グリッドを再描画してからイベントを配置する（Phase 1B-2）
         renderGrid();
-        placeMonthEvents();
+        // 1 フレーム待ってセル高が確定してから placeMonthEvents を呼ぶ
+        // （renderGrid 直後は flex layout が未確定で _calcMaxItems が
+        // フォールバック値で計算してしまうケースがある = chip が日付と被る原因）
+        requestAnimationFrame(function () {
+          placeMonthEvents();
+        });
       } catch (err) {
         console.error('[KC.RenderMonth] loadEvents error:', err);
       }
@@ -3405,7 +3433,10 @@
           if (KC.State.view === 'month' && KC.RenderMonth) {
             // データ再取得なし・レイアウト再計算のみ
             KC.RenderMonth.renderGrid();
-            KC.RenderMonth.placeMonthEvents();
+            // セル高が確定してから placeMonthEvents を呼ぶ（refresh と同様）
+            requestAnimationFrame(function () {
+              KC.RenderMonth.placeMonthEvents();
+            });
           }
         }, 200);
       });
@@ -3512,6 +3543,10 @@
     // ポップアップ側では detectFields が完了していないため KC.Config.START_FIELD_TYPE が未設定の場合がある
     var savedFieldType = sessionStorage.getItem('KC_START_FIELD_TYPE');
     var fieldType = savedFieldType || KC.Config.START_FIELD_TYPE || 'DATETIME';
+    // ALLDAY_LABEL を sessionStorage から取得する（DATETIME + 終日ケースで必須）
+    // KC.Config.ALLDAY_LABEL のデフォルト値とアプリ設定値が不一致の環境で「終日」チェックが入らない問題に対処
+    var savedAlldayLabel = sessionStorage.getItem('KC_ALLDAY_LABEL');
+    var alldayLabel = savedAlldayLabel || KC.Config.ALLDAY_LABEL || '終日';
 
     var record = event.record;
 
@@ -3528,7 +3563,7 @@
         record[F.end].value = KC.Utils.fmtYMD(endDate) + 'T00:00:00+09:00';
       }
       if (F.allday && record[F.allday]) {
-        record[F.allday].value = [KC.Config.ALLDAY_LABEL];
+        record[F.allday].value = [alldayLabel];
       }
     } else {
       var pad2 = KC.Utils.pad2;
@@ -3585,38 +3620,89 @@
   });
 
   /* ====================================================================
-   * ポップアップウィンドウ制御用フラグ
-   * openEdit 起動時の初回 detail.show と、編集後キャンセルの detail.show を区別する。
-   * 編集画面に入った場合のみ true になり、detail.show 時に close する。
+   * ポップアップウィンドウ自動クローズ
+   *
+   * 仕様:
+   *   - openCreate で開いた場合: 初回が create.show。ユーザーがキャンセルすると
+   *     index.show / detail.show / edit.show のいずれかへ遷移する。いずれの
+   *     遷移でも close する。
+   *   - openEdit で開いた場合: 初回が detail.show。ユーザーが編集ボタンで
+   *     edit.show に入った後にキャンセルすると detail.show に戻る。
+   *     edit.show 経由かどうかをフラグで判定し、戻り後に close する。
+   *
+   * 単発の index.show / edit.show は kintone のバージョン・設定により
+   *   - URL `/k/{appId}/edit` でキャンセル → 親ウィンドウ URL は `/k/{appId}/`
+   *     になるが、ポップアップではポップアップ自身の遷移として index.show /
+   *     edit.show / detail.show のいずれかが発火する（環境差あり）
+   * という挙動のばらつきがあるため、初回イベントを起点にした状態遷移で
+   * 確実に close する。
+   *
+   * window.opener が null（= 親ウィンドウからの通常導線でない）の場合は
+   * 何もしない（親ウィンドウ側の index.show は KC.Boot.init を発火させる
+   * ので、ここでは扱わない）
    * ==================================================================== */
-  var _kcWasInEditMode = false;
+  var _kcInitialEvent = null;     // ポップアップで最初に発火したイベント名
+  var _kcWasInEditMode = false;   // openEdit 起動後 edit.show を経由したか
 
-  // 編集画面が開かれた時にフラグを立てる
-  kintone.events.on('app.record.edit.show', function (event) {
-    _kcWasInEditMode = true;
-    return event;
-  });
-
-  /* ====================================================================
-   * 新規作成画面でキャンセル → 一覧画面へ遷移後、ポップアップを閉じる
-   * window.opener がある場合のみ動作（親ウィンドウでは何もしない）
-   * ==================================================================== */
-  kintone.events.on('app.record.index.show', function (event) {
+  /**
+   * ポップアップを閉じる（window.opener がある場合のみ）
+   * 一覧 KC.Boot のリフレッシュは親ウィンドウのウィンドウクローズ監視
+   * （openCreate / openEdit 内 setInterval）に任せる
+   */
+  function _kcClosePopupIfNeeded() {
     if (window.opener) {
-      window.close();
+      try { window.close(); } catch (e) { console.warn('[KC] popup close failed:', e); }
     }
-    return event;
-  });
+  }
 
-  /* ====================================================================
-   * 編集 → キャンセル → 詳細画面に戻った時のみポップアップを閉じる
-   * openEdit 起動直後の初回 detail.show では close しない（_kcWasInEditMode が false のため）
-   * window.opener がある場合のみ動作（親ウィンドウでは何もしない）
-   * ==================================================================== */
-  kintone.events.on('app.record.detail.show', function (event) {
-    if (window.opener && _kcWasInEditMode) {
-      window.close();
+  /**
+   * ポップアップ内のすべてのナビゲーションイベントを統合ハンドリングする
+   * 初回イベントを記録し、以降の遷移パターンに応じて close するか判断する
+   */
+  kintone.events.on([
+    'app.record.create.show',
+    'app.record.edit.show',
+    'app.record.detail.show',
+    'app.record.index.show'
+  ], function (event) {
+    // 親ウィンドウ（一覧画面）の場合は別の index.show ハンドラに委ねる
+    if (!window.opener) return event;
+
+    if (_kcInitialEvent === null) {
+      // 初回イベント: 起動画面を記録するだけで close しない
+      _kcInitialEvent = event.type;
+      if (event.type === 'app.record.edit.show') {
+        // openEdit ではないルートで直接 edit.show 起動 = 通常ない想定
+        _kcWasInEditMode = true;
+      }
+      return event;
     }
+
+    // 2回目以降: 起動画面に応じて close 判断
+    if (_kcInitialEvent === 'app.record.create.show') {
+      // 新規作成からの遷移はすべてキャンセル扱い → close
+      _kcClosePopupIfNeeded();
+      return event;
+    }
+
+    if (_kcInitialEvent === 'app.record.detail.show') {
+      // openEdit 起動: detail.show → edit.show → ... の遷移を追跡
+      if (event.type === 'app.record.edit.show') {
+        _kcWasInEditMode = true;
+        return event;
+      }
+      // edit.show 経由後に detail.show に戻った = 編集キャンセル → close
+      if (event.type === 'app.record.detail.show' && _kcWasInEditMode) {
+        _kcClosePopupIfNeeded();
+        return event;
+      }
+      // edit.show を経由していないのに index.show 等に遷移した場合も close
+      if (event.type === 'app.record.index.show') {
+        _kcClosePopupIfNeeded();
+        return event;
+      }
+    }
+
     return event;
   });
 

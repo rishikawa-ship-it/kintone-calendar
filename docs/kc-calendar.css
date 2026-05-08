@@ -832,7 +832,21 @@ body.kc-dnd-active * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto;
+  margin: 0;  /* dateline の flex レイアウトに合わせる（旧: margin: 0 auto） */
+}
+
+/* 日付行ラッパー（datehead + 祝日名を横並びに）
+ * セル上端に配置し、祝日名は ellipsis で詰める。
+ * .kc-month-cell--today の青丸は datehead 自体に当たるため、ラッパー化しても影響なし。
+ */
+.kc-month-dateline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  flex: 0 0 auto;
+  min-height: 24px;
 }
 
 /* セル内日付数字（左上）*/
@@ -843,7 +857,7 @@ body.kc-dnd-active * {
   padding: 2px;
   line-height: 1;
   flex: 0 0 auto;
-  align-self: flex-start;
+  align-self: center;
   width: 24px;
 }
 
@@ -945,14 +959,16 @@ body.kc-dnd-active * {
 .kc-month-cell--today.kc-month-cell--holiday { background: rgba(229, 62, 62, 0.03); }
 .kc-month-cell--today.kc-month-cell--sat { background: rgba(26, 115, 232, 0.03); }
 
-/* 祝日名表示（セル内日付の下） */
+/* 祝日名表示（.kc-month-dateline 内で日付数字の右隣にインライン配置）
+ * flex: 1 で残幅を占有し、ellipsis で末尾を詰める。
+ */
 .kc-month-holiday-name {
   font-size: 10px;
   color: #e53e3e;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   line-height: 1.2;
-  padding: 0 2px;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
 }
