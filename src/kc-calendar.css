@@ -848,13 +848,13 @@ body.kc-dnd-active * {
 }
 
 /* 終日バー専用絶対配置レイヤ（週行全幅に張る）*/
-/* position: absolute により grid フローから外れ、.kc-month-week 全体を覆う */
+/* position: absolute により grid フローから外れるが height は内部バー依存（height: auto）*/
+/* bottom: 0 を設定するとセル全体を覆いクリック競合が生じるため除去（NG#5対応）*/
 .kc-month-ad-events {
   position: absolute;
   left: 0;
   right: 0;
   top: 0;
-  bottom: 0;
   pointer-events: none;
   z-index: 1;
 }
@@ -873,6 +873,8 @@ body.kc-dnd-active * {
   margin-top: 1px;
   pointer-events: auto;
   flex: 0 0 auto;
+  position: relative;
+  z-index: 2;  /* .kc-month-ad-events (z-index: 1) より前面に表示 */
 }
 .kc-month-chip:hover { filter: brightness(0.95); }
 
@@ -908,6 +910,8 @@ body.kc-dnd-active * {
   cursor: default;
   flex: 0 0 auto;
   margin-top: 1px;
+  position: relative;
+  z-index: 2;  /* .kc-month-ad-events (z-index: 1) より前面に表示 */
 }
 
 /* 全画面モード時の月グリッド高（REQ_month-view §7.2）*/

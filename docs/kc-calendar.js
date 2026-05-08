@@ -2387,40 +2387,334 @@
       return monthRange(S.current);
     }
 
+    // バー高さ定数（週ビューの buildAlldayBar と同値）
+    var BAR_H   = 22;  /* --kc-ad-bar-h */
+    var BAR_GAP = 3;   /* --kc-ad-bar-gap */
+    var BAR_TOP = 4;   /* --kc-ad-bar-top */
+
+    /** セル内の表示件数上限 */
+    var MAX_CELL_ITEMS = 5;
+
     /**
-     * 月ビューの終日イベントを配置する（Phase 1B-2 で実装）
-     * TODO(builder): Phase 1B-2 で placeMonthAlldayEvents を実装する
+     * 任意の CSS color 文字列を 15% 透過 rgba に変換する
+     * canvas を使って hex / rgb() / hsl() / 色名を統一処理する（KC.Lanes.isLightColor と同方式）
+     * @param {string} color - 任意の CSS カラー文字列
+     * @returns {string} rgba() 文字列（変換失敗時は青系フォールバック）
+     */
+    function _toRgba15(color) {
+      if (!color) return 'rgba(59,130,246,0.15)';
+      try {
+        var canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, 1, 1);
+        var d = ctx.getImageData(0, 0, 1, 1).data;
+        return 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',0.15)';
+      } catch (e) {
+        return 'rgba(59,130,246,0.15)';
+      }
+    }
+
+    /**
+     * chip の背景色を計算する（15% 透過）
+     * hex / rgb() / hsl() / 色名すべてに対応する
+     * @param {string} color - evt.color（未設定時は #3b82f6）
+     * @returns {string} CSS background 値
+     */
+    function _chipBg(color) {
+      return _toRgba15(color || '#3b82f6');
+    }
+
+    /**
+     * .kc-ad-event 要素を月ビュー用に生成する（週ビューの DnD ハンドルなし版）
+     * @param {Object} ev - 位置情報付き KcEvent（colStart, span, lane, adDateRange を含む）
+     * @returns {HTMLElement}
+     */
+    function buildMonthAlldayBar(ev) {
+      var el = document.createElement('div');
+      el.className = 'kc-ad-event';
+
+      // 絶対配置の位置計算
+      el.style.left   = ((ev.colStart / 7) * 100) + '%';
+      el.style.width  = ((ev.span / 7) * 100) + '%';
+      el.style.top    = (BAR_TOP + ev.lane * (BAR_H + BAR_GAP)) + 'px';
+      el.style.height = BAR_H + 'px';
+      el.style.pointerEvents = 'auto';
+
+      if (ev.color) {
+        el.style.background  = ev.color;
+        el.style.borderColor = ev.color;
+        el.style.color = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      }
+
+      el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
+
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      if (ev.color) {
+        dot.style.background = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      }
+
+      var titleSpan = document.createElement('span');
+      titleSpan.className = 'kc-ad-evt-title';
+      titleSpan.textContent = ev.title || '(無題)';
+
+      el.appendChild(dot);
+      el.appendChild(titleSpan);
+
+      el.addEventListener('click', function (clickEvt) {
+        clickEvt.stopPropagation();
+        KC.Popup.openEdit(ev.id);
+      });
+
+      return el;
+    }
+
+    /**
+     * .kc-month-chip 要素を生成する
+     * @param {Object} evt - KcEvent
+     * @returns {HTMLElement}
+     */
+    function buildMonthChip(evt) {
+      var color = evt.color || '#3b82f6';
+      var chip = document.createElement('div');
+      chip.className = 'kc-month-chip';
+      chip.dataset.evId = evt.id;
+      chip.style.background = _chipBg(color);
+      chip.style.color = '#1f2937';  // 15% 透過背景は薄いため常にダークで可読
+
+      var dot = document.createElement('span');
+      dot.className = 'kc-month-chip-dot';
+      dot.style.background = color;
+
+      var evStart = new Date(evt.start);
+      var timeSpan = document.createElement('span');
+      timeSpan.className = 'kc-month-chip-time';
+      timeSpan.textContent = U.pad2(evStart.getHours()) + ':' + U.pad2(evStart.getMinutes());
+
+      var titleSpan = document.createElement('span');
+      titleSpan.className = 'kc-month-chip-title';
+      titleSpan.textContent = evt.title || '(無題)';
+
+      chip.appendChild(dot);
+      chip.appendChild(timeSpan);
+      chip.appendChild(titleSpan);
+
+      chip.addEventListener('click', function (e) {
+        e.stopPropagation();
+        KC.Popup.openEdit(evt.id);
+      });
+
+      return chip;
+    }
+
+    /**
+     * 月ビューの終日イベントを配置する
+     * 当月外セルへのバー描画を除外（§3.4 / §6.3 準拠）
      * @param {HTMLElement} weekEl - .kc-month-week 要素
      * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
      * @param {Array} alldayEvents - 当週の終日イベント配列
      * @param {number} currentMonth - 表示月（0〜11）
+     * @returns {{ laneCount: number, colLaneCounts: number[] }}
+     *   laneCount: 週全体の最大レーン数
+     *   colLaneCounts: 各列（0〜6）のレーン占有数
      */
     function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents, currentMonth) {
-      // TODO(builder): Phase 1B-2 で実装する
-      // KC.Lanes.eventToBarPosition / assignLanes を使用して終日バーを描画
+      var adLayer = weekEl.querySelector('.kc-month-ad-events');
+      var result = { laneCount: 0, colLaneCounts: [0, 0, 0, 0, 0, 0, 0] };
+      if (!adLayer || !alldayEvents || alldayEvents.length === 0) return result;
+
+      // 当月に属する weekYMD のインデックス範囲を求める
+      var minIdx = -1;
+      var maxIdx = -1;
+      for (var i = 0; i < 7; i++) {
+        // 'YYYY-MM-DD' はUTC午前0時解釈されるためローカル時刻として解釈させる（行1097と同パターン）
+        var d = new Date(weekYMD[i] + 'T00:00:00');
+        if (d.getMonth() === currentMonth) {
+          if (minIdx === -1) minIdx = i;
+          maxIdx = i;
+        }
+      }
+      // 当月セルがこの週に 1 つもない場合はスキップ
+      if (minIdx === -1) return result;
+
+      // 各イベントに対して barPosition を求め、当月範囲にクランプする
+      var weekEvents = [];
+      alldayEvents.forEach(function (evt) {
+        var pos = KC.Lanes.eventToBarPosition(evt, weekYMD);
+        if (!pos) return;
+
+        var cs = pos.colStart;
+        var ce = cs + pos.span - 1;
+
+        // 当月範囲との交差判定
+        if (ce < minIdx || cs > maxIdx) return;
+
+        // 当月範囲にクランプ
+        var clampedStart = Math.max(cs, minIdx);
+        var clampedEnd   = Math.min(ce, maxIdx);
+        var clampedSpan  = clampedEnd - clampedStart + 1;
+        if (clampedSpan <= 0) return;
+
+        weekEvents.push(Object.assign({}, evt, {
+          colStart:    clampedStart,
+          span:        clampedSpan,
+          adDateRange: pos.adDateRange
+        }));
+      });
+
+      if (weekEvents.length === 0) return result;
+
+      KC.Lanes.assignLanes(weekEvents);
+
+      var maxLane = weekEvents.reduce(function (m, ev) {
+        return Math.max(m, ev.lane || 0);
+      }, -1);
+      result.laneCount = maxLane + 1;
+
+      // 各セル列ごとのレーン占有数を計算
+      weekEvents.forEach(function (ev) {
+        for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
+          if (ci >= 0 && ci < 7) {
+            // そのセルにかかるレーン番号の最大値 + 1 = 使用スロット数
+            result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], (ev.lane || 0) + 1);
+          }
+        }
+      });
+
+      // バーを描画
+      weekEvents.forEach(function (ev) {
+        var bar = buildMonthAlldayBar(ev);
+        adLayer.appendChild(bar);
+      });
+
+      // adLayer 高さは CSS に委ねる（height: auto / bottom: 0 は CSS側で削除済み）
+      // JS から height を設定すると週全体 laneCount 基準になりセル個別の spacer と不一致になるため廃止
+
+      return result;
     }
 
     /**
-     * セルに時間予定 chip を配置する（Phase 1B-2 で実装）
-     * TODO(builder): Phase 1B-2 で placeMonthTimedEvents を実装する
+     * セルに時間予定 chip を配置する
      * @param {HTMLElement} cellEl - .kc-month-cell 要素
-     * @param {Array} timedEvents - 当日の時間予定配列
-     * @param {number} usedSlots - 使用済みスロット数（終日バーのレーン数）
+     * @param {Array} timedEvents - 当日の時間予定（時刻昇順）
+     * @param {number} usedSlots - 終日バーで使用済みのスロット数
+     * @returns {number} 追加した chip 数
      */
     function placeMonthTimedEvents(cellEl, timedEvents, usedSlots) {
-      // TODO(builder): Phase 1B-2 で実装する
-      // buildMonthChip を使用して chip を生成・配置する
+      if (!timedEvents || timedEvents.length === 0) return 0;
+
+      // 終日バーが占有する高さ分のスペーサーを挿入（chip がバーに隠れないよう）
+      // .kc-month-datehead の直後に配置して、chip を終日バーの下に押し下げる
+      if (usedSlots > 0) {
+        var spacer = cellEl.querySelector('.kc-month-chip-spacer');
+        if (!spacer) {
+          spacer = document.createElement('div');
+          spacer.className = 'kc-month-chip-spacer';
+          // セル個別の usedSlots 基準で正確な高さを計算する
+          // 末尾の BAR_GAP を含めないことで adLayer との高さ不一致（3px誤差）を解消
+          var spacerH = BAR_TOP + usedSlots * BAR_H + (usedSlots - 1) * BAR_GAP;
+          spacer.style.height = spacerH + 'px';
+          spacer.style.flex = '0 0 auto';
+          spacer.style.pointerEvents = 'none';
+          var datehead = cellEl.querySelector('.kc-month-datehead');
+          var insertBefore = datehead ? datehead.nextSibling : null;
+          cellEl.insertBefore(spacer, insertBefore);
+        }
+      }
+
+      var remaining = MAX_CELL_ITEMS - usedSlots;
+      var added = 0;
+
+      for (var i = 0; i < timedEvents.length; i++) {
+        if (remaining <= 0) break;
+        var chip = buildMonthChip(timedEvents[i]);
+        cellEl.appendChild(chip);
+        added++;
+        remaining--;
+      }
+
+      return added;
     }
 
     /**
-     * +N more 要素を追加する（Phase 1B-2 で実装）
-     * TODO(builder): Phase 1B-2 で applyOverflow を実装する
+     * +N more 要素を追加する
      * @param {HTMLElement} cellEl - .kc-month-cell 要素
      * @param {number} remaining - 非表示件数
      */
     function applyOverflow(cellEl, remaining) {
-      // TODO(builder): Phase 1B-2 で実装する
-      // ".kc-month-more" 要素を生成して cellEl に追加する
+      if (remaining <= 0) return;
+      var more = document.createElement('div');
+      more.className = 'kc-month-more';
+      more.textContent = '+' + remaining + ' more';
+      // Phase 1: クリック挙動なし（Phase 2 でポップオーバー接続）
+      cellEl.appendChild(more);
+    }
+
+    /**
+     * 月グリッドの各週・各セルにイベントを配置するオーケストレーター
+     * 週行ごとに終日バーを配置 → セルごとに時間予定 chip を配置
+     */
+    function placeMonthEvents() {
+      if (!_monthRoot) return;
+      var gridEl = _monthRoot.querySelector('.kc-month-grid');
+      if (!gridEl) return;
+
+      var range = monthRange(S.current);
+      var currentMonth = S.current.getMonth();
+
+      var weekEls = Array.from(gridEl.querySelectorAll('.kc-month-week'));
+      weekEls.forEach(function (weekEl, weekIdx) {
+        // この週の 7 日分の YYYY-MM-DD を算出
+        var weekYMD = [];
+        for (var d = 0; d < 7; d++) {
+          weekYMD.push(U.fmtYMD(U.addDays(range.start, weekIdx * 7 + d)));
+        }
+
+        // 当週にかかる終日イベントを抽出（週内に 1 日でも重なるもの）
+        var weekAllday = (S.events || []).filter(function (evt) {
+          if (!evt.allday) return false;
+          return KC.Lanes.eventToBarPosition(evt, weekYMD) !== null;
+        });
+
+        // 終日バーを配置してセルごとのレーン使用数を取得
+        var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday, currentMonth);
+
+        // セルごとに時間予定 chip を配置
+        var cellEls = Array.from(weekEl.querySelectorAll('.kc-month-cell'));
+        cellEls.forEach(function (cellEl, colIdx) {
+          var ymd = weekYMD[colIdx];
+
+          // 当月外セルはスキップ（chip も表示しない）
+          // 'YYYY-MM-DD' はUTC午前0時解釈されるためローカル時刻として解釈させる（行1097と同パターン）
+          var cellDate = new Date(ymd + 'T00:00:00');
+          if (cellDate.getMonth() !== currentMonth) return;
+
+          // このセルの使用済みスロット数（終日バーのレーン占有数）
+          var usedSlots = alldayResult.colLaneCounts[colIdx] || 0;
+
+          // このセルの時間予定を抽出（時刻昇順）
+          var dayTimedEvents = (S.events || []).filter(function (evt) {
+            if (evt.allday) return false;
+            return U.fmtYMD(new Date(evt.start)) === ymd;
+          });
+          dayTimedEvents.sort(function (a, b) {
+            return (a.start < b.start) ? -1 : (a.start > b.start) ? 1 : 0;
+          });
+
+          // chip を配置
+          var chipsAdded = placeMonthTimedEvents(cellEl, dayTimedEvents, usedSlots);
+
+          // 非表示件数を計算して +N more を表示
+          var totalItems = usedSlots + dayTimedEvents.length;
+          var displayed  = usedSlots + chipsAdded;
+          var hiddenCount = totalItems - displayed;
+          if (hiddenCount > 0) {
+            applyOverflow(cellEl, hiddenCount);
+          }
+        });
+      });
     }
 
     /**
@@ -2444,9 +2738,9 @@
 
       try {
         S.events = await KC.Api.loadEvents(isoStart, isoEnd);
-        // Phase 1B-1: イベント配置は未実装（空グリッドのまま）
-        // TODO(builder): Phase 1B-2 で renderGrid() → placeMonthEvents() を呼ぶ
+        // グリッドを再描画してからイベントを配置する（Phase 1B-2）
         renderGrid();
+        placeMonthEvents();
       } catch (err) {
         console.error('[KC.RenderMonth] loadEvents error:', err);
       }
@@ -2456,10 +2750,11 @@
       refresh:   refresh,
       renderGrid: renderGrid,
       gridRange:  gridRange,
-      // Phase 1B-2 引き継ぎ用（空実装）
+      // Phase 1B-2 実装済み
       placeMonthAlldayEvents: placeMonthAlldayEvents,
       placeMonthTimedEvents:  placeMonthTimedEvents,
       applyOverflow:          applyOverflow,
+      placeMonthEvents:       placeMonthEvents,
       // 内部関数を公開（週ビュー復帰用）
       _showWeekDOM: _showWeekDOM,
       _showMonthDOM: _showMonthDOM
