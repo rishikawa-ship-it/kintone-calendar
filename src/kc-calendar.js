@@ -561,6 +561,8 @@
     openCreate: function (options) {
       // options: { date, hour, minute, allday }
       sessionStorage.setItem('KC_CREATE_CONTEXT', JSON.stringify(options));
+      // 親ウィンドウで検出済みの FIELD 設定を保存（ポップアップ側の detectFields 未完了を補完）
+      sessionStorage.setItem('KC_FIELD_CONFIG', JSON.stringify(KC.Config.FIELD));
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/edit';
       var popup = this._openWindow(url);
@@ -2392,8 +2394,27 @@
     var BAR_GAP = 3;   /* --kc-ad-bar-gap */
     var BAR_TOP = 4;   /* --kc-ad-bar-top */
 
-    /** セル内の表示件数上限 */
+    /** セル内の表示件数上限（フォールバック用） */
     var MAX_CELL_ITEMS = 5;
+
+    /**
+     * セル実高から表示可能な最大イベント件数を動的計算する
+     * DOM が未構築の場合は MAX_CELL_ITEMS をフォールバックとして返す
+     * @returns {number} 最低 1、最大 10
+     */
+    function _calcMaxItems() {
+      var firstCell = document.querySelector('.kc-month-cell');
+      if (!firstCell) return MAX_CELL_ITEMS;
+      var cellH = firstCell.getBoundingClientRect().height;
+      if (!cellH || cellH <= 0) return MAX_CELL_ITEMS;
+      var dateHeadH = 24;        // 日付ヘッダー高（padding 込み実測値）
+      var padding   = 4;         // セル padding 上下合計
+      var moreH     = 16;        // +N more 行高
+      var itemH     = BAR_H + BAR_GAP; // 1 件あたりの高さ（25px）
+      var available = cellH - dateHeadH - padding - moreH;
+      var max = Math.floor(available / itemH);
+      return Math.max(1, Math.min(max, 10));
+    }
 
     /**
      * 任意の CSS color 文字列を 15% 透過 rgba に変換する
@@ -2600,9 +2621,10 @@
      * @param {HTMLElement} cellEl - .kc-month-cell 要素
      * @param {Array} timedEvents - 当日の時間予定（時刻昇順）
      * @param {number} usedSlots - 終日バーで使用済みのスロット数
+     * @param {number} maxItems - セルに表示できる最大件数（_calcMaxItems の結果を受け取る）
      * @returns {number} 追加した chip 数
      */
-    function placeMonthTimedEvents(cellEl, timedEvents, usedSlots) {
+    function placeMonthTimedEvents(cellEl, timedEvents, usedSlots, maxItems) {
       if (!timedEvents || timedEvents.length === 0) return 0;
 
       // 終日バーが占有する高さ分のスペーサーを挿入（chip がバーに隠れないよう）
@@ -2624,7 +2646,7 @@
         }
       }
 
-      var remaining = MAX_CELL_ITEMS - usedSlots;
+      var remaining = maxItems - usedSlots;
       var added = 0;
 
       for (var i = 0; i < timedEvents.length; i++) {
@@ -2660,6 +2682,9 @@
       if (!_monthRoot) return;
       var gridEl = _monthRoot.querySelector('.kc-month-grid');
       if (!gridEl) return;
+
+      // セル実高から表示可能件数を動的計算（画面サイズ・全画面モードに追従）
+      var maxItems = _calcMaxItems();
 
       var range = monthRange(S.current);
       var currentMonth = S.current.getMonth();
@@ -2703,8 +2728,8 @@
             return (a.start < b.start) ? -1 : (a.start > b.start) ? 1 : 0;
           });
 
-          // chip を配置
-          var chipsAdded = placeMonthTimedEvents(cellEl, dayTimedEvents, usedSlots);
+          // chip を配置（maxItems は placeMonthEvents 冒頭で _calcMaxItems により算出）
+          var chipsAdded = placeMonthTimedEvents(cellEl, dayTimedEvents, usedSlots, maxItems);
 
           // 非表示件数を計算して +N more を表示
           var totalItems = usedSlots + dayTimedEvents.length;
@@ -3352,7 +3377,19 @@
       // スクロールバー幅 → CSS変数
       this._setScrollbarVar();
       var self = this;
-      window.addEventListener('resize', function () { self._setScrollbarVar(); });
+      // リサイズ時: スクロールバー幅更新 + 月ビューのセル件数上限を再計算して再描画
+      var _resizeTimer = null;
+      window.addEventListener('resize', function () {
+        self._setScrollbarVar();
+        clearTimeout(_resizeTimer);
+        _resizeTimer = setTimeout(function () {
+          if (KC.State.view === 'month' && KC.RenderMonth) {
+            // データ再取得なし・レイアウト再計算のみ
+            KC.RenderMonth.renderGrid();
+            KC.RenderMonth.placeMonthEvents();
+          }
+        }, 200);
+      });
       var bodyEl = document.getElementById('kc-body');
       if (bodyEl && 'ResizeObserver' in window) {
         var obs = new ResizeObserver(function () { self._setScrollbarVar(); });
@@ -3438,7 +3475,20 @@
     sessionStorage.removeItem('KC_CREATE_CONTEXT');
 
     var data = JSON.parse(ctx);
-    var F = KC.Config.FIELD;
+    // 親ウィンドウで保存した FIELD 設定を優先して使用する
+    // （ポップアップ側では detectFields が完了していない場合があるため）
+    var savedFieldConfig = sessionStorage.getItem('KC_FIELD_CONFIG');
+    var F;
+    if (savedFieldConfig) {
+      try {
+        F = JSON.parse(savedFieldConfig);
+      } catch (err) {
+        console.warn('[KC] KC_FIELD_CONFIG のパース失敗。フォールバック使用:', err);
+        F = KC.Config.FIELD;
+      }
+    } else {
+      F = KC.Config.FIELD;
+    }
     var record = event.record;
 
     if (data.allday) {
@@ -3506,6 +3556,28 @@
       try { window.opener.KC_REFRESH && window.opener.KC_REFRESH(); } catch (e) {}
       // 削除の場合はリダイレクトを防ぎ、ウィンドウを閉じる
       setTimeout(function () { window.close(); }, 500);
+    }
+    return event;
+  });
+
+  /* ====================================================================
+   * 新規作成画面でキャンセル → 一覧画面へ遷移後、ポップアップを閉じる
+   * window.opener がある場合のみ動作（親ウィンドウでは何もしない）
+   * ==================================================================== */
+  kintone.events.on('app.record.index.show', function (event) {
+    if (window.opener) {
+      window.close();
+    }
+    return event;
+  });
+
+  /* ====================================================================
+   * 編集画面でキャンセル → 詳細画面へ遷移後、ポップアップを閉じる
+   * window.opener がある場合のみ動作（親ウィンドウでは何もしない）
+   * ==================================================================== */
+  kintone.events.on('app.record.detail.show', function (event) {
+    if (window.opener) {
+      window.close();
     }
     return event;
   });
