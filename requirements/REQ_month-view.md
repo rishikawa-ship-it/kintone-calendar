@@ -2,9 +2,17 @@
 
 **文書番号**: REQ_month-view
 **作成日**: 2026-05-08
+**最終更新日**: 2026-05-08（第 2 版: ユーザー回答 6 件反映・未確定事項 0 件）
 **作成者**: designer (サブエージェント)
 **対象ファイル**: `src/kc-calendar.js`, `src/kc-calendar.css`（および `docs/` ミラー）
-**ステータス**: 確定版（仕様確定 10 件済み / 未確定事項 6 件 — §10 参照）
+**ステータス**: 確定版（仕様確定 16 件済み / 未確定事項 0 件）
+
+### 更新履歴
+
+| 日付 | 版 | 内容 |
+|---|---|---|
+| 2026-05-08 | 第 1 版 | 初版作成（仕様確定 10 件 / 未確定事項 6 件） |
+| 2026-05-08 | 第 2 版 | ユーザー回答 6 件反映。セル高 90px 確定・chip 背景色確定・「他◯件」→ `+N more` 確定・全画面セル高計算式確定・cursor ループ間隔 50ms 確定・月またぎ終日イベント表示方針確定。未確定事項 0 件 |
 
 ---
 
@@ -60,7 +68,7 @@ Google カレンダーの月ビューは以下の点で実績ある UX 標準と
 | 6×7 グリッド表示 | CSS Grid `grid-template-rows: repeat(6, 1fr)` で月全体を固定 6 行に配置 |
 | 終日イベントの週ごとバー | 各週行に `.kc-month-ad-events` レイヤを生成し、`KC.Lanes` 経由でレーン割り当て + 連続バー描画 |
 | 時間予定のセル内 chip | ドット + 時刻 + 件名のインライン chip（`.kc-month-chip`）を縦並びで配置 |
-| セル内表示件数上限 | 最大 5 件。超過分は「他◯件」ラベルで省略 |
+| セル内表示件数上限 | 最大 5 件。超過分は `+N more` ラベルで省略 |
 | セルクリック → 新規作成 | `KC.Popup.openCreate({ date, allday: true })` を呼ぶ |
 | 終日バークリック → 編集 | `KC.Popup.openEdit(ev.id)` を呼ぶ |
 | 時間予定 chip クリック → 編集 | `KC.Popup.openEdit(ev.id)` を呼ぶ |
@@ -209,9 +217,31 @@ KC.Lanes = {
 
 当月外の `.kc-month-cell` には `.kc-month-cell--other-month` クラスを付与し、文字色のみ薄表示（gray-400 相当: `#9ca3af`）とする。背景色・クリック挙動は当月と同一。
 
-### 3.4 終日イベント描画
+### 3.4 終日イベント描画・月またぎ取り扱い
 
 各週行ごとに `.kc-month-ad-events` 絶対配置レイヤを生成し、`KC.Lanes` 経由で終日イベントを描画する。
+
+#### 月またぎ終日イベントの描画範囲（確定: Google カレンダー準拠）
+
+**当月分のみ**バーを描画する。月ビューの表示範囲（6 週 × 7 日 = 42 マス）のうち、**当月の日付セルに重なる部分のみ**描画対象とする。当月外セル（先月末・翌月頭）には終日バーを描画しない。
+
+| ケース | 描画方針 |
+|---|---|
+| 前月から継続し当月初日を含む週に入る場合 | **当月初日（1 日）〜当週末（土曜）**の分のみバーを描画。前月分セルには描画しない |
+| 当月から翌月へ継続する場合 | **当週日曜〜当月末日**の分のみバーを描画。翌月頭セルには描画しない |
+| 表示範囲内（42 マス）に完全に収まる場合 | そのまま全スパン描画 |
+
+この判定は `placeMonthAlldayEvents` 内で行う。`KC.Lanes.eventToBarPosition` が返す `colStart / span` は週単位でクランプ済みのため、**さらに当月判定フィルタを重ねる**:
+
+```
+各週ループで weekYMD（7 要素）のうち当月に属するインデックスを特定し、
+colStart と span を当月セル範囲内にクランプする。
+当月セルが 1 マスも含まれない場合は描画をスキップする。
+```
+
+**設計例（5 月表示、前月からの継続イベント）**:
+- イベント期間: 4/29（火）〜 5/2（金）
+- 第 1 週（4/26 日〜5/2 土）: weekYMD 内で当月（5 月）は index 0〜6 のうち index 3（5/1 木）〜index 6（5/2 金 → 実際は 5/2）のみ → colStart=3, span=2 でバー描画（4/26〜4/30 は当月外なので描画しない）
 
 #### 処理フロー
 
@@ -258,11 +288,24 @@ height = BAR_H                                [px]
 - 時刻（`kc-month-chip-time`）は開始時刻 `HH:MM` 形式
 - 件名（`kc-month-chip-title`）は `text-overflow: ellipsis` で省略
 
+#### chip 背景色（確定）
+
+chip の背景色は `evt.color` を **10〜20% 透過（推奨: 15%）** でフィルする。文字色はドットと同じ `evt.color` を輝度で判定して切り替える（`KC.Lanes.isLightColor` 流用）。
+
+| 判定 | 背景色 | 文字色 |
+|---|---|---|
+| `isLightColor(evt.color) === true`（明るい色） | `evt.color` at 15% opacity | `#1f2937`（ダークグレー） |
+| `isLightColor(evt.color) === false`（暗い色） | `evt.color` at 15% opacity | `#1f2937`（ダークグレー） |
+
+> **Note**: 15% 透過背景はどの color 値でも文字が読みやすい。文字色は背景の透過色（薄い色）ではなく chip の `evt.color` 自体の輝度で判定する。
+
+**CSS 実装方針**: chip の背景色は JS 側で `element.style.background` を `rgba()` 変換または `color-mix()` で設定する。`color-mix(in srgb, evt.color 15%, transparent)` が利用可能なブラウザ（kintone 対応環境）では使用してよい。フォールバックとして JS で `rgba` 変換を実装すること。
+
 #### クリック
 
 chip クリック → `KC.Popup.openEdit(ev.id)`。`stopPropagation()` でセルへの伝播を止める。
 
-### 3.6 セル内表示件数の管理と「他◯件」表示
+### 3.6 セル内表示件数の管理と `+N more` 表示
 
 #### 表示順序
 
@@ -276,19 +319,19 @@ chip クリック → `KC.Popup.openEdit(ev.id)`。`stopPropagation()` でセル
 表示済みカウント = 終日バー本数（当セルにかかるレーン数）+ chip 数
 
 表示済みカウント < 5 の間はイベントを追加
-5 件を超えたら「他 N 件」を最下行に追加（N = 残り件数）
+5 件を超えたら "+N more" を最下行に追加（N = 残り件数）
 ```
 
 **注意**: 「当セルにかかるレーン数」は同一週行の `KC.Lanes.assignLanes` 結果から、当セルの列（colIdx）に重なるバーの数を求める。
 
-#### 「他◯件」表示
+#### 「+N more」表示（確定）
 
 ```html
-<div class="kc-month-more">他 2 件</div>
+<div class="kc-month-more">+2 more</div>
 ```
 
 - セル内最下行に配置
-- テキスト: `他 N 件`（全角スペースなし、数字は半角）
+- テキスト: `+N more`（半角プラス記号 + 半角数字 + 半角スペース + `more`）。例: `+2 more`、`+5 more`
 - Phase 1 のクリック挙動: 何もしない（Phase 2 でポップオーバー対応予定）
 - CSS: `color: var(--kc-subtext)`、`font-size: 11px`、`cursor: default`
 
@@ -299,7 +342,7 @@ chip クリック → `KC.Popup.openEdit(ev.id)`。`stopPropagation()` でセル
 | 空セルクリック（`.kc-month-cell`） | `KC.Popup.openCreate({ date, allday: true })` |
 | 終日バー（`.kc-ad-event`）クリック | `KC.Popup.openEdit(ev.id)` |
 | 時間予定 chip（`.kc-month-chip`）クリック | `KC.Popup.openEdit(ev.id)` |
-| 「他◯件」（`.kc-month-more`）クリック | 何もしない（Phase 1） |
+| 「+N more」（`.kc-month-more`）クリック | 何もしない（Phase 1） |
 
 chip / バーはクリック時に `stopPropagation()` でセルへの伝播を止める。これにより chip をクリックしても新規作成ダイアログは開かない。
 
@@ -321,7 +364,7 @@ if (S.view === 'month') {
 
 today ボタンは view によらず `S.current = new Date()` で統一。
 
-**aria-label の更新**: `aria-label` も「前の月」「次の月」に切り替えると望ましいが、Phase 1 では省略可（未確定事項 §10 参照）。
+**aria-label の更新**: `aria-label` も「前の月」「次の月」に切り替えると望ましいが、Phase 1 では省略可。
 
 ### 3.9 ViewDropdown への「月」オプション追加
 
@@ -372,6 +415,15 @@ menuUl.appendChild(optMonth);
 
 **cursor 取得ループの注意点**: `next === true` の間は GET を繰り返す。1 回の GET で返るレコード数は `size` パラメータ（最大 500）で制御される。
 
+#### cursor GET ループの待機（確定: 50ms）
+
+cursor 取得 GET ループの**各イテレーション間に 50ms 待機**する。これにより kintone のレート制限（同時接続 10: `kintone-rules.md §3`）への抵触を緩衝する。
+
+```javascript
+// ループ間の待機（50ms）
+await new Promise(function (r) { setTimeout(r, 50); });
+```
+
 #### cursor API のエラーハンドリング
 
 ```javascript
@@ -385,6 +437,10 @@ try {
     var getResp = await kintone.api(cursorUrl, 'GET', { id: cursorId });
     allRecords = allRecords.concat(getResp.records || []);
     hasNext = getResp.next;
+    // レート制限緩衝: 次の GET まで 50ms 待機
+    if (hasNext) {
+      await new Promise(function (r) { setTimeout(r, 50); });
+    }
   }
   return allRecords.map(function (r) { return self._recordToEvent(r); });
 } catch (err) {
@@ -491,16 +547,17 @@ KC.Render.renderGrid = function () {
 - **When**: 月ビューで 4 月を表示する
 - **Then**: 4 月 15 日のセルに「● 14:00 件名」形式の chip が表示される（● はイベントの color ドット）
 
-### AC4.7 セル内 5 件上限と「他◯件」
+### AC4.7 セル内 5 件上限と `+N more`
 
 - **Given**: 同一日に終日 3 件・時間予定 4 件（合計 7 件）が登録されている
 - **When**: 月ビューでその日を表示する
-- **Then**: 5 件までが表示され、6 件目以降は「他 2 件」のラベルで省略される
+- **Then**: 5 件までが表示され、6 件目以降は `+2 more` のラベルで省略される
+- **And**: テキストの形式は「`+`（半角プラス）+ 数字 + ` more`（半角スペース + more）」に厳格に準拠する（例: `+2 more`）
 
-### AC4.8 「他◯件」の Phase 1 クリック挙動
+### AC4.8 `+N more` の Phase 1 クリック挙動
 
-- **Given**: 「他 2 件」ラベルが表示されている
-- **When**: 「他 2 件」をクリックする
+- **Given**: `+2 more` ラベルが表示されている
+- **When**: `+2 more` をクリックする
 - **Then**: 何も起きない（ポップオーバー等は表示されない）
 
 ### AC4.9 空セルクリック → 新規作成
@@ -583,6 +640,41 @@ KC.Render.renderGrid = function () {
 - **Given**: `src/kc-calendar.js` および `src/kc-calendar.css` を変更した
 - **When**: 変更をコミットする前
 - **Then**: `docs/kc-calendar.js` および `docs/kc-calendar.css` が同一内容に同期されている（CLAUDE.md ルール準拠）
+
+### AC4.21 セル最小高 90px
+
+- **Given**: 月ビューが通常モード（非全画面）で表示されている
+- **When**: DevTools の Computed スタイルで `.kc-month-cell` の高さを確認する
+- **Then**: `min-height` が `90px` 以上であることが確認できる（`--kc-month-cell-min-h: 90px` が CSS 変数として定義されている）
+
+### AC4.22 chip の背景色（evt.color 15% 透過）
+
+- **Given**: `color` フィールドが設定された時間予定が月ビューに表示されている
+- **When**: DevTools で `.kc-month-chip` の `background` スタイルを確認する
+- **Then**: chip の背景色が `evt.color` を 10〜20% 透過した色（推奨 15%）で塗られている
+- **And**: chip のテキスト（時刻・件名）が背景に対して十分なコントラストで表示されている
+
+### AC4.23 月またぎ終日イベントが当月セルのみに描画される
+
+- **Given**: 前月末（4/28）〜当月中（5/3）にまたがる終日イベントが存在する（5 月表示）
+- **When**: 月ビューで 5 月を表示する
+- **Then**: 5 月のセル（5/1〜5/3）にのみバーが描画される
+- **And**: 4/28〜4/30 の当月外セルにはバーが描画されない
+
+### AC4.24 cursor GET ループ間の 50ms 待機
+
+- **Given**: 表示期間内に 1,001 件のレコードが存在する（3 ループ必要）
+- **When**: 月ビューにナビゲートする
+- **Then**: 1 回目の GET 終了〜2 回目の GET 開始の間に約 50ms の待機が挟まれる（DevTools の Network タブでリクエスト間隔を確認）
+- **And**: 全 1,001 件が正しく取得されカレンダーに反映される
+
+### AC4.25 全画面モード時のセル高計算
+
+- **Given**: 月ビューが表示されている
+- **When**: 全画面ボタンをクリックして `.kc-root.kc-expanded` 状態にする
+- **Then**: `.kc-month-grid` の高さが `100vh`（ビューポート全体）に対応した値になる
+- **And**: 6 行が均等分割（`grid-template-rows: repeat(6, 1fr)`）されてグリッド全体がビューポートに収まる
+- **And**: 月グリッドが画面外にはみ出さない・スクロールなしで全 6 行が視認できる
 
 ---
 
@@ -693,11 +785,24 @@ KC.Lanes = (function () {
 | `monthRange(date)` | 6 行 42 日分の { start, end } を算出（内部関数） |
 | `buildMonthDOM()` | `.kc-month-root` および曜日ヘッダーを生成（内部関数） |
 | `renderMonthGrid()` | 42 セルを生成してグリッドに配置（内部関数） |
-| `placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents)` | 週行ごとに終日バーを配置（内部関数） |
+| `placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents, currentMonth)` | 週行ごとに終日バーを配置。`currentMonth`（0〜11）を受け取り、当月外セルにかかる部分をクランプしてバーを描画する（内部関数） |
 | `placeMonthTimedEvents(cellEl, timedEvents, usedSlots)` | セルに時間予定 chip を配置（内部関数） |
-| `applyOverflow(cellEl, remaining)` | 「他◯件」要素を追加（内部関数） |
+| `applyOverflow(cellEl, remaining)` | `+N more` 要素を追加（内部関数） |
 | `buildMonthAlldayBar(ev)` | 月ビュー用の `.kc-ad-event` 要素を生成（内部関数） |
-| `buildMonthChip(evt)` | `.kc-month-chip` 要素を生成（内部関数） |
+| `buildMonthChip(evt)` | `.kc-month-chip` 要素を生成（chip 背景色: `evt.color` 15% 透過で JS 設定）（内部関数） |
+
+**`placeMonthAlldayEvents` の当月クランプ仕様**:
+
+```
+引数: weekEl, weekYMD（7要素 YYYY-MM-DD 配列）, alldayEvents, currentMonth（数値 0-11）
+
+weekYMD 内の各インデックスに対して date.getMonth() === currentMonth を判定し、
+当月に属するインデックスの範囲（minIdx〜maxIdx）を求める。
+KC.Lanes.eventToBarPosition の結果（colStart, span）をこの範囲に交差するか確認。
+交差しない場合はスキップ。交差する場合は colStart と span を当月範囲内にクランプして描画する。
+```
+
+**`KC.Api.loadEvents` cursor ループ仕様（50ms 待機）**: `§3.10` の擬似コードに示す通り、`hasNext === true` の次イテレーション前に `await new Promise(r => setTimeout(r, 50))` を挿入する。
 
 ### 6.4 追加する CSS（新規クラス）
 
@@ -717,24 +822,50 @@ KC.Lanes = (function () {
 | `.kc-month-chip-dot` | chip のカラードット | `width: 6px; height: 6px; border-radius: 999px; flex: 0 0 auto` |
 | `.kc-month-chip-time` | chip の時刻 | `font-size: 11px; flex: 0 0 auto; color: var(--kc-subtext)` |
 | `.kc-month-chip-title` | chip の件名 | `flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap` |
-| `.kc-month-more` | 「他◯件」 | `font-size: 11px; color: var(--kc-subtext); padding: 1px 4px; cursor: default` |
+| `.kc-month-more` | `+N more` ラベル | `font-size: 11px; color: var(--kc-subtext); padding: 1px 4px; cursor: default` |
 
 ---
 
 ## 7. CSS 変数 / レイアウト
 
-### 7.1 新規 CSS 変数（推奨）
+### 7.1 新規 CSS 変数（確定値）
 
-| 変数名 | 推奨値 | 説明 |
+| 変数名 | **確定値** | 説明 |
 |---|---|---|
-| `--kc-month-cell-min-h` | `90px` | セルの最小高。`grid-template-rows: repeat(6, 1fr)` で動的だが下限を保証する |
+| `--kc-month-cell-min-h` | **`90px`** | セルの最小高（確定）。`grid-template-rows: repeat(6, 1fr)` で動的だが下限を保証する |
+| `--kc-fullscreen-header-h` | **`0px`** | 全画面時の kintone ヘッダー高。`.kc-root.kc-expanded` は `position: fixed; top: 0; height: 100vh` で kintone ヘッダーが隠れるため 0px |
 
-> **未確定**: 推奨値は 90px か 100px かを builder が判断する（§10 参照）。
+### 7.2 月ビューのレイアウト計算（確定）
 
-### 7.2 月ビューのレイアウト計算
+#### 通常モード
 
-- `.kc-month-grid` の高さ: `flex: 1` で `.kc-month-root` の残余領域全体を使う
-- `grid-template-rows: repeat(6, 1fr)`: 6 行を均等分割（行高は動的）
+```css
+.kc-month-cell {
+  min-height: var(--kc-month-cell-min-h, 90px);
+}
+.kc-month-grid {
+  display: grid;
+  grid-template-rows: repeat(6, 1fr);
+  flex: 1;
+  /* flex: 1 により .kc-month-root の残余領域全体を使う */
+}
+```
+
+#### 全画面モード（`.kc-expanded` 適用時）
+
+```css
+/* 既存の .kc-root.kc-expanded は position: fixed; top: 0; height: 100vh であり、
+   kintone ヘッダーが完全に隠れる（ヘッダー高 = 0px）。
+   月グリッドは .kc-month-root の flex: 1 領域全体に展開されるため、
+   追加の height 指定で明示的にビューポートフィルを保証する。 */
+.kc-root.kc-expanded .kc-month-grid {
+  height: calc(100vh - var(--kc-fullscreen-header-h, 0px));
+  grid-template-rows: repeat(6, 1fr);
+}
+```
+
+**実装確認**: `kc-calendar.css:709–719` の `.kc-root.kc-expanded` は `position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; padding: 12px` で実装済み。全画面時の月グリッド高は `kc-month-root` の内部領域（`100vh - padding × 2 - header 部品の高さ`）を flex で受け取る。月グリッドへの追加 CSS は `kc-expanded` クラス付与時のブラウザ実機確認後、必要なら builder が調整する。
+
 - `.kc-month-week` の高さが確定した後、`.kc-month-ad-events` は `top` / `left` / `right` を 0 に固定し、`bottom` はセル内のコンテンツ（chip / more）が始まる高さに合わせる
 
 ### 7.3 `.kc-month-ad-events` の高さ計算
@@ -756,14 +887,16 @@ KC.Lanes = (function () {
 | 週またぎ終日イベント（行分割）| 各週行に分割してバーを描画する | §3.4・AC4.5 参照 |
 | 前月から継続する終日イベント | 1 行目の先頭セルから始まるバーとして表示される | `clampedStartYMD` が当週の日曜以降になる |
 | 翌月へ継続する終日イベント | 最終行の末尾セルで終わるバーとして表示される | `clampedEndYMD` が当週の土曜以前になる |
-| 同セルに終日 3 件 + 時間予定 4 件（計 7 件） | 5 件表示 + 「他 2 件」 | AC4.7 |
-| cursor API で 600 件取得 | 第 1 GET で 500 件、第 2 GET で 100 件。合計 600 件が正しく取得される | AC4.15 |
+| 同セルに終日 3 件 + 時間予定 4 件（計 7 件） | 5 件表示 + `+2 more` | AC4.7 |
+| cursor API で 600 件取得 | 第 1 GET で 500 件・50ms 待機・第 2 GET で 100 件。合計 600 件が正しく取得される | AC4.15、AC4.24 |
 | cursor API 通信失敗 | cursor DELETE を試行しエラーを再スロー。`refresh()` のエラーハンドラで catch される | AC4.16 |
 | view 切替の往復（week ↔ month） | 週ビューに戻った際に終日バー・時刻スロットが正常に再描画される | リグレッション確認 |
-| 全画面モードでの月ビュー | `.kc-expanded` クラスが付与された状態で月グリッドが正しく高さ計算される | 未確定事項 §10 参照 |
+| 全画面モードでの月ビュー | `.kc-expanded` クラスが付与された状態で月グリッドが 6 行すべてビューポートに収まる | AC4.25、§7.2 参照 |
+| 前月末〜当月にまたがる終日イベント | 当月セル分のみバー描画。当月外セルにはバーなし | AC4.23、§3.4 参照 |
+| 当月〜翌月にまたがる終日イベント | 当月最終週まで描画。翌月頭セルにはバーなし | AC4.23、§3.4 参照 |
 | 月ビュー表示中の今日クリック | `S.current = new Date()` により本日の月が表示される | AC4.13 |
 | イベントが 0 件の月 | グリッドが正常に描画され、全セルが空白で表示される | エラーなし |
-| `color` フィールドが空のイベント | デフォルト色（`#3b82f6`）でドットが表示される | フォールバック確認 |
+| `color` フィールドが空のイベント | デフォルト色（`#3b82f6`）でドットが表示される。chip 背景は `#3b82f6` の 15% 透過 | フォールバック確認 |
 
 ---
 
@@ -788,63 +921,56 @@ KC.Lanes = (function () {
 - **cursor API リグレッション**: `KC.Api.loadEvents` 改修後、週ビューで 500 件未満のレコードが従来通り取得・表示されることを確認する
 - **XSS 対策**: `textContent` を使用し `innerHTML` にユーザー入力を直接代入しない（`DESIGN.md §9.3`）
 - **1 関数 1 責務**: `KC.RenderMonth` 内の各処理は責務ごとに関数を分割する（`coding-rules.md` 準拠）
-- **「他◯件」の Phase 1 実装**: クリックハンドラを配線しない（`cursor: default` のみ設定。将来 `cursor: pointer` に変更してポップオーバーを接続する）
+- **`+N more` の Phase 1 実装**: クリックハンドラを配線しない（`cursor: default` のみ設定。将来 `cursor: pointer` に変更してポップオーバーを接続する）
+- **chip 背景色実装**: `buildMonthChip` 内で `evt.color`（フォールバック: `#3b82f6`）を 15% 透過で chip の `style.background` に設定する。`KC.Lanes.isLightColor` で輝度判定し文字色を `#1f2937` に設定する
+- **月またぎ終日イベント**: `placeMonthAlldayEvents` に `currentMonth` 引数を追加し、当月外セルへの描画を完全に除外する（§6.3 仕様参照）
+- **cursor 50ms 待機**: `KC.Api.loadEvents` の cursor GET ループで `hasNext === true` のイテレーション直後に 50ms 待機を挿入する（§3.10 擬似コード参照）
 
 ### 9.2 reviewer への指示
 
-§4「受け入れ条件」の各項目（AC4.1〜AC4.20）を 1 つずつ順に確認すること。
+§4「受け入れ条件」の各項目（AC4.1〜AC4.25）を 1 つずつ順に確認すること。
 
 特に以下に重点を置く:
 
 1. **AC4.4（連続バー）**: 列境界線がバーに重なっていないことを目視確認する
 2. **AC4.5（週またぎ分割）**: バーが週行ごとに正しく分割されることを確認する
-3. **AC4.7（件数上限）**: 5 件ちょうどと 6 件以上の両方でテストする
+3. **AC4.7（件数上限）**: 5 件ちょうどと 6 件以上の両方でテストし、省略テキストが `+N more` 形式になっていることを確認する
 4. **AC4.17（KC.Lanes リグレッション）**: 週ビューで `REQ_allday-bar-redesign.md` の AC4.1〜4.21 が全て合格することを確認する
 5. **AC4.15（cursor API 500 件超）**: テスト環境でレコードを 501 件以上作成して全件取得されることを確認する（または curl で cursor POST → GET ループを模擬する）
 6. **AC4.20（sync）**: `diff src/kc-calendar.js docs/kc-calendar.js` が空出力であることを確認する
 7. **AC4.18（時刻スロット非表示）**: 月ビュー表示中に `.kc-time-slot` が DOM に存在しないことを DevTools で確認する
 8. **リグレッション（cursor API 通常ケース）**: 週ビューで 500 件未満の通常ケースで挙動が変わっていないことを確認する
+9. **AC4.21（セル最小高 90px）**: DevTools で `--kc-month-cell-min-h` が `90px` になっていることを確認する
+10. **AC4.22（chip 背景色）**: DevTools で `.kc-month-chip` の `background` が `evt.color` の透過色であることを確認する
+11. **AC4.23（月またぎ終日イベント）**: 当月外セル（`--other-month` クラス）にバーが描画されていないことを DevTools で確認する
+12. **AC4.24（50ms 待機）**: Network タブで cursor GET リクエスト間に約 50ms の間隔があることを確認する
+13. **AC4.25（全画面月グリッド）**: 全画面時に 6 行すべてがスクロールなしで視認できることを目視確認する
 
 ---
 
 ## 10. 未確定事項 / リスク・前提
 
-### 10.1 セル高の最小値
+> **本版（第 2 版）時点での未確定事項: 0 件**
+>
+> 2026-05-08 ユーザー回答により旧 §10.1〜§10.6 の 6 件すべてが解決済みとなった。以下に解決済み記録を残す。
 
-- **内容**: `--kc-month-cell-min-h` の推奨値として 90px と 100px の 2 案がある
-- **影響箇所**: `kc-calendar.css`（`--kc-month-cell-min-h` の定義値）
-- **方針**: builder が UI 確認後に決定してよい。推奨は 90px（6 行 × 90px = 540px + ヘッダー分で一般的な画面に収まる）
+### 解決済み事項（2026-05-08 確定）
 
-### 10.2 chip の色設計
+| 旧番号 | 項目 | 確定内容 | 反映箇所 |
+|---|---|---|---|
+| §10.1 | セル高最小値 | **`90px`**（選択肢 B） | §7.1 `--kc-month-cell-min-h: 90px`、AC4.21 |
+| §10.2 | chip 背景色 | **`evt.color` を 15% 透過**（選択肢 B: 軽い背景色） | §3.5 chip 背景色の項、§6.3 `buildMonthChip` 仕様、AC4.22 |
+| §10.3 | 「他◯件」テキスト形式 | **`+N more`**（選択肢 C: 英語・Google カレンダー準拠） | §3.6「+N more」表示、§6.3 `applyOverflow` 仕様、AC4.7、AC4.8 |
+| §10.4 | 全画面時のセル高計算 | **`(100vh - 0px) / 6`**（選択肢 A: `.kc-expanded` は `position: fixed; height: 100vh` で kintone ヘッダーなし） | §7.1 `--kc-fullscreen-header-h: 0px`、§7.2 全画面モード CSS、AC4.25 |
+| §10.5 | cursor API ループ間隔 | **50ms**（選択肢 B: `setTimeout(r, 50)`） | §3.10 cursor GET ループ待機、§6.3 `KC.Api.loadEvents` 仕様、AC4.24 |
+| §10.6 | 月またぎ終日イベント表示 | **当月分のみバー表示**（選択肢 A: Google カレンダー準拠・当月外セルには描画しない） | §3.4 月またぎ取り扱い、§6.3 `placeMonthAlldayEvents` 仕様、AC4.23 |
 
-- **内容**: 時間予定 chip の背景色を「背景なし（透明）」にするか「ごく薄い背景（`#f0f9ff` 等）」にするかが未確定
-- **影響箇所**: `.kc-month-chip` CSS
-- **方針**: builder が Google カレンダーを参考に実装してよい。デフォルトは背景なしを推奨
+### 残存リスク・前提条件
 
-### 10.3 「他◯件」のテキスト形式
-
-- **内容**: `他 2 件` / `他2件` / `+2 more` のいずれにするかが未確定（確定済み仕様 #4 では「他◯件」と記載）
-- **影響箇所**: `applyOverflow` 関数のテキスト生成
-- **方針**: `他 N 件`（「他」+ 半角スペース + 半角数字 + 半角スペース + 「件」）で実装する（日本語 UI との整合のため）
-
-### 10.4 月ビューでの全画面モード時の高さ計算
-
-- **内容**: `kc-expanded` クラス適用時（`position: fixed; inset: 0`）に月グリッドが正しい高さで表示されるか検証が必要
-- **影響箇所**: `.kc-month-root` / `.kc-month-grid` の CSS（`height: 100%` と `flex: 1` が適切に機能するか）
-- **方針**: builder がブラウザ実機確認後に必要なら `calc(100vh - kintone ヘッダー高)` 等を追加する
-
-### 10.5 cursor API の連続呼び出し安定性
-
-- **内容**: cursor GET ループを連続で呼ぶ際にレート制限（同時接続 10 まで: `kintone-rules.md §3`）に抵触するケースがあるか未検証
-- **影響箇所**: `KC.Api.loadEvents` の cursor ループ
-- **方針**: 通常の月ビューで 500 件超のレコードが発生することは稀。問題が発生した場合はループ間に `await new Promise(r => setTimeout(r, 100))` の遅延を入れることを検討する
-
-### 10.6 月またぎ終日イベントの月ビュー表示
-
-- **内容**: 前月末から開始する終日イベントが当月の第 1 行にバーとして流入する仕様を確認済み（`eventToBarPosition` の clamp 処理で対応）。ただし Google カレンダーの月ビューでは「当月外セルにも終日バーが表示される」動作の詳細確認が必要
-- **影響箇所**: `placeMonthAlldayEvents` の週行ループ
-- **方針**: 当月外の日付（`.kc-month-cell--other-month`）のセルにかかる終日バーも同様に描画する（`KC.Lanes.eventToBarPosition` がクランプした範囲のみ表示）
+- **全画面時の実機確認必須**: §7.2 に CSS 方針を明記したが、`flex: 1` の実際の高さは kintone 環境・ブラウザ依存のため、builder が実機確認後に必要なら `height: calc(100vh - Xpx)` を追加調整すること
+- **chip 背景色の `color-mix()` 対応**: kintone の対応ブラウザが `color-mix(in srgb, ...)` をサポートする場合は使用可。サポート外ならば JS で `rgba` 変換でフォールバックすること
+- **cursor API のレート制限**: 50ms 待機で通常ケースをカバーする想定だが、極端なデータ量（5,000 件超）では追加の待機調整が必要になる場合がある
 
 ---
 
-*本要件定義書は確定済み仕様 10 件・受け入れ条件 20 件・未確定事項 6 件の構成で作成した。未確定事項（§10）のうち §10.3 は本文書内で方針を示した。残り 5 件（§10.1 / 10.2 / 10.4 / 10.5 / 10.6）は builder が実装判断または実機確認後に確定させること。*
+*本要件定義書は確定済み仕様 16 件・受け入れ条件 25 件・未確定事項 0 件の構成で確定した（2026-05-08 第 2 版）。*
