@@ -164,10 +164,11 @@
     },
 
     /**
-     * 日本の祝日判定
-     * getHolidayName(date) → 祝日名 or null
+     * 日本の祝日判定（ハードコード版・フォールバック用）
+     * _getHolidayNameHardcoded(date) → 祝日名 or null
+     * 外部 API が利用できない場合のフォールバックとして KC.Holidays から呼ばれる。
      */
-    getHolidayName: function (date) {
+    _getHolidayNameHardcoded: function (date) {
       var y = date.getFullYear();
       var m = date.getMonth() + 1; // 1-12
       var d = date.getDate();
@@ -269,8 +270,76 @@
       if (isBaseHoliday(prevDate) && isBaseHoliday(nextDate)) return '国民の休日';
 
       return null;
+    },
+
+    /**
+     * 日本の祝日名を返す（KC.Holidays 経由）
+     * KC.Holidays が未初期化の場合はハードコードにフォールバック。
+     * @param {Date} date
+     * @returns {string|null} 祝日名 or null
+     */
+    getHolidayName: function (date) {
+      return KC.Holidays.getName(date);
     }
   };
+
+  /* ====================================================================
+   * KC.Holidays — 祝日データ管理（外部 API + ハードコードフォールバック）
+   * ==================================================================== */
+  KC.Holidays = (function () {
+    var API_URL = 'https://holidays-jp.github.io/api/v1/date.json';
+    /** @type {Object|null} null: 未取得 / {}: 取得失敗 / {YYYY-MM-DD: name, ...}: 取得済み */
+    var _data = null;
+    var _fetchPromise = null;
+
+    /**
+     * 祝日データを外部 API から取得してキャッシュする。
+     * CSP によりブロックされた場合は console.warn のみ出力し、アプリは継続動作する。
+     * @returns {Promise<void>}
+     */
+    function fetchHolidays() {
+      if (_fetchPromise) return _fetchPromise;
+      _fetchPromise = fetch(API_URL, { cache: 'force-cache' })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error('Holiday API status ' + resp.status);
+          return resp.json();
+        })
+        .then(function (data) {
+          _data = data;
+          console.log('[KC.Holidays] loaded', Object.keys(data).length, 'entries');
+        })
+        .catch(function (err) {
+          console.warn('[KC.Holidays] API 取得失敗（CSP ブロックの可能性）、ハードコードにフォールバック:', err);
+          _data = {};  // 空 = ハードコード使用
+        });
+      return _fetchPromise;
+    }
+
+    /**
+     * 指定日の祝日名を返す（API データ優先、なければハードコード）。
+     * fetchHolidays() 未完了の場合はハードコードで即時応答する。
+     * @param {Date} date
+     * @returns {string|null} 祝日名 or null
+     */
+    function getName(date) {
+      // フェッチ未完了: ハードコードで即時応答
+      if (_data === null) return KC.Utils._getHolidayNameHardcoded(date);
+
+      var key = KC.Utils.fmtYMD(date);
+      // API データに存在すればそちらを優先（振替休日等も含む）
+      if (_data[key]) return _data[key];
+
+      // API データにない場合もハードコード側で振替・国民の休日判定をチェック
+      return KC.Utils._getHolidayNameHardcoded(date) || null;
+    }
+
+    return {
+      fetchHolidays: fetchHolidays,
+      getName: getName,
+      /** @returns {boolean} API データ取得済みかどうか */
+      isReady: function () { return _data !== null; }
+    };
+  })();
 
   /* ====================================================================
    * KC.State — アプリケーション状態管理
@@ -3379,6 +3448,14 @@
 
       // フィールド自動検出（KC_プレフィックスのフィールドを探す）
       await KC.Config.detectFields();
+
+      // 祝日データを非同期取得（await しない: 初回はハードコードで即時描画し、取得完了後に再描画）
+      // CSP で外部 API がブロックされた場合は console.warn のみ出力して継続する
+      KC.Holidays.fetchHolidays().then(function () {
+        if (KC.State.view === 'month' || KC.State.view === 'week') {
+          KC.Render.refresh();
+        }
+      });
 
       // DOM構築
       this._buildDOM();
