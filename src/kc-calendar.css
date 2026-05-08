@@ -125,7 +125,7 @@
 .kc-range {
   white-space: nowrap;
   font-weight: 600;
-  font-size: 16px;
+  font-size: 17px;
 }
 
 /* ==========================================================================
@@ -137,7 +137,7 @@
   border-radius: 10px;
   height: 38px;
   padding: 0 18px;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   transition: background .2s, border-color .2s;
 }
@@ -179,7 +179,7 @@
   border-radius: 10px;
   height: 38px;
   padding: 0 20px;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -193,7 +193,7 @@
 }
 
 .kc-caret {
-  font-size: 12px;
+  font-size: 13px;
   opacity: .8;
 }
 
@@ -217,7 +217,7 @@
 .kc-option {
   padding: 10px 12px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
 }
 .kc-option:hover  { background: #e9ecef; }
@@ -230,7 +230,7 @@
   border-radius: 10px;
   height: 38px;
   padding: 0 18px;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   white-space: nowrap;
   transition: border-color .2s;
@@ -282,7 +282,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
 }
 .kc-days .kc-day .kc-day-head .w {
@@ -304,8 +304,8 @@
   color: #fff;
 }
 
-.kc-day .kc-day-label { font-weight: 600; font-size: 13px; }
-.kc-day .kc-day-sub   { color: var(--kc-subtext); font-size: 12px; }
+.kc-day .kc-day-label { font-weight: 600; font-size: 14px; }
+.kc-day .kc-day-sub   { color: var(--kc-subtext); font-size: 13px; }
 
 /* ==========================================================================
  * 6. All-Day Slot
@@ -418,7 +418,7 @@
 
 /* 件名（Google カレンダー方式: 単一行・件名のみ表示） */
 .kc-ad-evt-title {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -444,7 +444,7 @@
 }
 
 .kc-time {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--kc-subtext);
   padding: 2px 4px;
   border-bottom: 1px solid var(--kc-border);
@@ -504,7 +504,7 @@
   border: 1px solid var(--kc-border);
   background: #eef2ff;
   padding: 4px 8px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.25;
   overflow: hidden;
   white-space: normal;
@@ -515,12 +515,12 @@
 }
 .kc-event .kc-evt-title {
   font-weight: 700;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.25;
 }
 .kc-event .kc-evt-meta {
   color: var(--kc-subtext);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.25;
   margin-top: 1px;
 }
@@ -566,7 +566,7 @@
 
 /* ゴーストバー内の時刻ラベル（終日予定: "M/D ~ M/D"、時間予定: "HH:MM〜HH:MM"） */
 .kc-evt-ghost-time {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   margin-top: 2px;
   opacity: 0.9;
@@ -672,7 +672,7 @@ body.kc-dnd-active * {
   border: 1px solid #1a73e8;
   background: #1a73e8;
   color: #fff;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
@@ -698,7 +698,7 @@ body.kc-dnd-active * {
   border-radius: 10px;
   background: #fff;
   color: #e53e3e;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: background .2s, border-color .2s;
@@ -742,7 +742,7 @@ body.kc-dnd-active * {
 .kc-adcell--holiday { background: rgba(229, 62, 62, 0.03); }
 
 /* 祝日名表示 */
-.kc-holiday-name { font-size: 10px; color: #e53e3e; font-weight: 400; }
+.kc-holiday-name { font-size: 11px; color: #e53e3e; font-weight: 400; }
 
 /* ---------- 14. kintone 標準UIの非表示（カレンダービュー不要要素） ---------- */
 .gaia-argoui-app-index-pager {
@@ -776,7 +776,7 @@ body.kc-dnd-active * {
 /* 曜日ラベルセル */
 .kc-month-dayhead {
   text-align: center;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--kc-subtext);
   font-weight: 600;
   padding: 6px 0;
@@ -852,7 +852,7 @@ body.kc-dnd-active * {
 
 /* セル内日付数字（左上）*/
 .kc-month-datehead {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   text-align: center;
   padding: 2px;
@@ -881,7 +881,7 @@ body.kc-dnd-active * {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 12px;
   padding: 1px 4px;
   cursor: pointer;
   border-radius: 3px;
@@ -905,7 +905,7 @@ body.kc-dnd-active * {
 
 /* chip の時刻 */
 .kc-month-chip-time {
-  font-size: 11px;
+  font-size: 12px;
   flex: 0 0 auto;
   color: var(--kc-subtext);
 }
@@ -921,7 +921,7 @@ body.kc-dnd-active * {
 
 /* +N more ラベル */
 .kc-month-more {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--kc-subtext);
   padding: 1px 4px;
   cursor: default;
@@ -966,7 +966,7 @@ body.kc-dnd-active * {
  * flex: 1 で残幅を占有し、ellipsis で末尾を詰める。
  */
 .kc-month-holiday-name {
-  font-size: 10px;
+  font-size: 11px;
   color: #e53e3e;
   overflow: hidden;
   text-overflow: ellipsis;
