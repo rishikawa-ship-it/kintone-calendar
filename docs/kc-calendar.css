@@ -839,6 +839,7 @@ body.kc-dnd-active * {
 /* 日付行ラッパー（datehead + 祝日名を横並びに）
  * セル上端に配置し、祝日名は ellipsis で詰める。
  * .kc-month-cell--today の青丸は datehead 自体に当たるため、ラッパー化しても影響なし。
+ * padding-bottom: 4px で日付ヘッダーと予定エリアの間に 4px の余白を確保する。
  */
 .kc-month-dateline {
   display: flex;
@@ -848,6 +849,7 @@ body.kc-dnd-active * {
   overflow: hidden;
   flex: 0 0 auto;
   min-height: var(--kc-month-dateline-h, 28px);
+  padding-bottom: 4px; /* 日付ヘッダーと終日バー/chip エリアの間の余白 */
 }
 
 /* セル内日付数字（左上）*/
@@ -865,13 +867,13 @@ body.kc-dnd-active * {
 /* 終日バー専用絶対配置レイヤ（週行全幅に張る）*/
 /* position: absolute により grid フローから外れるが height は内部バー依存（height: auto）*/
 /* bottom: 0 を設定するとセル全体を覆いクリック競合が生じるため除去（NG#5対応）*/
-/* top を --kc-month-dateline-h に設定することで日付行と終日バーが被らなくなる。
- * adLayer を dateline の下から開始させ、BAR_TOP (JS) は 0 に変更して整合させる。 */
+/* top を --kc-month-dateline-h + 4px に設定することで日付行と終日バーが被らなくなる。
+ * adLayer を dateline の下（+ 4px の余白）から開始させ、BAR_TOP (JS) は 0 に変更して整合させる。 */
 .kc-month-ad-events {
   position: absolute;
   left: 0;
   right: 0;
-  top: var(--kc-month-dateline-h, 28px);
+  top: calc(var(--kc-month-dateline-h, 28px) + 4px); /* dateline min-height + padding-bottom 分 */
   pointer-events: none;
   z-index: 1;
 }
