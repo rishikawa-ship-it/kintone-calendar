@@ -886,11 +886,17 @@
           _drag.origBar.classList.add('kc-ad-event--dragging');
         }
 
-        // ゴーストを allday レイヤに追加
-        var alldayWrap = document.getElementById('kc-allday');
-        var eventsLayer = alldayWrap ? alldayWrap.querySelector('.kc-ad-events') : null;
-        if (eventsLayer && _drag.ghost) {
-          eventsLayer.appendChild(_drag.ghost);
+        // ゴーストを配置（月ビューは body 直下 fixed、週ビューは allday レイヤ内）
+        if (_drag.ghost) {
+          if (_drag.view === 'month') {
+            document.body.appendChild(_drag.ghost);
+          } else {
+            var alldayWrap = document.getElementById('kc-allday');
+            var eventsLayer = alldayWrap ? alldayWrap.querySelector('.kc-ad-events') : null;
+            if (eventsLayer) {
+              eventsLayer.appendChild(_drag.ghost);
+            }
+          }
         }
 
         // ESC / blur キャンセル登録
@@ -907,6 +913,12 @@
 
     /** 終日移動の mousemove 処理 */
     function _onMoveAlldayMove(e) {
+      // 月ビューは専用処理に分岐
+      if (_drag.view === 'month') {
+        _onMoveAlldayMoveMonth(e);
+        return;
+      }
+
       var info = _adcellFromX(e.clientX);
       if (!info) return;
 
@@ -936,6 +948,35 @@
       // ゴースト位置更新
       var clampedSpan = Math.min(spanDays, 7 - info.colIdx);
       _positionAlldayGhost(_drag.ghost, info.colIdx, clampedSpan, _drag.lane);
+      _updateAlldayGhostLabel(_drag.ghost, newStart, newEnd);
+    }
+
+    /**
+     * 月ビュー終日移動の mousemove 処理
+     * @param {MouseEvent} e
+     */
+    function _onMoveAlldayMoveMonth(e) {
+      var info = _monthCellFromX(e.clientX);
+      if (!info) return;
+
+      var origEv = _drag.ev;
+      var U = KC.Utils;
+
+      // 元の期間を日数で計算（終日予定は end が翌日0時）
+      var origStartD    = new Date(origEv.start);
+      var origEndD      = new Date(origEv.end);
+      var origStartDate = new Date(origStartD.getFullYear(), origStartD.getMonth(), origStartD.getDate());
+      var origEndDate   = new Date(origEndD.getFullYear(), origEndD.getMonth(), origEndD.getDate());
+      var spanDays = Math.round((origEndDate.getTime() - origStartDate.getTime()) / 86400000);
+      if (spanDays < 1) spanDays = 1;
+
+      var newStart = new Date(info.dateYMD + 'T00:00:00');
+      var newEnd   = U.addDays(newStart, spanDays);
+
+      _drag.newStart = U.fmtYMD(newStart) + 'T00:00:00+09:00';
+      _drag.newEnd   = U.fmtYMD(newEnd)   + 'T00:00:00+09:00';
+
+      _positionMonthGhost(_drag.ghost, info.dateYMD, spanDays);
       _updateAlldayGhostLabel(_drag.ghost, newStart, newEnd);
     }
 
@@ -994,6 +1035,7 @@
       _positionAlldayGhost(ghost, ev.colStart || 0, ev.span || 1, ev.lane || 0);
 
       _drag = {
+        view:     'week',
         type:     'move-allday',
         ev:       ev,
         ghost:    ghost,
@@ -1016,6 +1058,12 @@
 
     /** 終日リサイズの mousemove 処理 */
     function _onResizeAlldayMove(e) {
+      // 月ビューは専用処理に分岐
+      if (_drag.view === 'month') {
+        _onResizeAlldayMoveMonth(e);
+        return;
+      }
+
       var info = _adcellFromX(e.clientX);
       if (!info) return;
 
@@ -1074,6 +1122,48 @@
     }
 
     /**
+     * 月ビュー終日リサイズの mousemove 処理
+     * @param {MouseEvent} e
+     */
+    function _onResizeAlldayMoveMonth(e) {
+      var info = _monthCellFromX(e.clientX);
+      if (!info) return;
+
+      var origEv = _drag.ev;
+      var U = KC.Utils;
+
+      var origStartD    = new Date(origEv.start);
+      var origEndD      = new Date(origEv.end);
+      var origStartDate = new Date(origStartD.getFullYear(), origStartD.getMonth(), origStartD.getDate());
+      var origEndDate   = new Date(origEndD.getFullYear(), origEndD.getMonth(), origEndD.getDate());
+      var targetDate    = new Date(info.dateYMD + 'T00:00:00');
+      var newStartDate, newEndDate;
+
+      if (_drag.type === 'resize-left') {
+        newStartDate = targetDate;
+        newEndDate   = origEndDate;
+        if (newStartDate.getTime() >= newEndDate.getTime()) {
+          newStartDate = U.addDays(newEndDate, -1);
+        }
+      } else {
+        // 右端: targetYMD = 表示終了日 → kintone end は翌日
+        newStartDate = origStartDate;
+        newEndDate   = U.addDays(targetDate, 1);
+        if (newEndDate.getTime() <= newStartDate.getTime()) {
+          newEndDate = U.addDays(newStartDate, 1);
+        }
+      }
+
+      _drag.newStart = U.fmtYMD(newStartDate) + 'T00:00:00+09:00';
+      _drag.newEnd   = U.fmtYMD(newEndDate)   + 'T00:00:00+09:00';
+
+      var spanDays = Math.round((newEndDate.getTime() - newStartDate.getTime()) / 86400000);
+      if (spanDays < 1) spanDays = 1;
+      _positionMonthGhost(_drag.ghost, U.fmtYMD(newStartDate), spanDays);
+      _updateAlldayGhostLabel(_drag.ghost, newStartDate, newEndDate);
+    }
+
+    /**
      * 終日予定のリサイズ DnD を開始する（左端・右端）
      * @param {Object} ev - KcEvent
      * @param {'left'|'right'} side
@@ -1087,6 +1177,7 @@
       _positionAlldayGhost(ghost, ev.colStart || 0, ev.span || 1, ev.lane || 0);
 
       _drag = {
+        view:     'week',
         type:     side === 'left' ? 'resize-left' : 'resize-right',
         ev:       ev,
         ghost:    ghost,
@@ -1530,6 +1621,114 @@
       return res;
     }
 
+    // =========================================================================
+    // 月ビュー DnD ヘルパー
+    // =========================================================================
+
+    /**
+     * clientX から月ビューの .kc-month-cell[data-date] を走査し
+     * 対応するセル情報を返す
+     * @param {number} clientX
+     * @returns {{ colIdx: number, dateYMD: string, cellEl: HTMLElement } | null}
+     */
+    function _monthCellFromX(clientX) {
+      var cells = document.querySelectorAll('.kc-month-cell[data-date]');
+      for (var i = 0; i < cells.length; i++) {
+        var r = cells[i].getBoundingClientRect();
+        if (clientX >= r.left && clientX <= r.right) {
+          return {
+            colIdx:  i % 7,
+            dateYMD: cells[i].dataset.date,
+            cellEl:  cells[i]
+          };
+        }
+      }
+      return null;
+    }
+
+    /**
+     * 月ビュー終日ゴーストを body 直下 fixed で追従させる
+     * @param {HTMLElement} ghost
+     * @param {string} dateYMD - ゴーストが乗るセルの YYYY-MM-DD
+     * @param {number} spanDays - 表示上の日数
+     */
+    function _positionMonthGhost(ghost, dateYMD, spanDays) {
+      var cell = document.querySelector('.kc-month-cell[data-date="' + dateYMD + '"]');
+      if (!cell) return;
+      var r    = cell.getBoundingClientRect();
+      var cellW = r.width;
+      ghost.style.position = 'fixed';
+      ghost.style.left     = r.left + 'px';
+      ghost.style.top      = (r.top + 4) + 'px';
+      ghost.style.width    = (cellW * Math.min(spanDays, 7)) + 'px';
+      ghost.style.height   = '22px';
+    }
+
+    /**
+     * 月ビュー終日バー移動 DnD を開始する（スコープ A）
+     * @param {Object} ev - KcEvent
+     * @param {MouseEvent} mousedown
+     * @param {HTMLElement} barEl - .kc-ad-event 要素
+     */
+    function startMoveAlldayMonth(ev, mousedown, barEl) {
+      mousedown.preventDefault();
+
+      var ghost = _buildAlldayGhost(ev, '');
+      ghost.style.position = 'fixed';
+      ghost.style.zIndex   = '9999';
+      ghost.style.pointerEvents = 'none';
+
+      _drag = {
+        view:     'month',
+        type:     'move-allday',
+        ev:       ev,
+        ghost:    ghost,
+        origBar:  barEl,
+        startX:   mousedown.clientX,
+        startY:   mousedown.clientY,
+        started:  false,
+        lane:     ev.lane || 0,
+        newStart: null,
+        newEnd:   null
+      };
+
+      document.addEventListener('mousemove', _onMouseMoveAllday);
+      document.addEventListener('mouseup', _onMouseUpAllday);
+    }
+
+    /**
+     * 月ビュー終日バーリサイズ DnD を開始する（スコープ B）
+     * @param {Object} ev - KcEvent
+     * @param {'left'|'right'} side
+     * @param {MouseEvent} mousedown
+     * @param {HTMLElement} barEl - .kc-ad-event 要素
+     */
+    function startResizeAlldayMonth(ev, side, mousedown, barEl) {
+      mousedown.preventDefault();
+
+      var ghost = _buildAlldayGhost(ev, '');
+      ghost.style.position = 'fixed';
+      ghost.style.zIndex   = '9999';
+      ghost.style.pointerEvents = 'none';
+
+      _drag = {
+        view:     'month',
+        type:     side === 'left' ? 'resize-left' : 'resize-right',
+        ev:       ev,
+        ghost:    ghost,
+        origBar:  barEl,
+        startX:   mousedown.clientX,
+        startY:   mousedown.clientY,
+        started:  false,
+        lane:     ev.lane || 0,
+        newStart: null,
+        newEnd:   null
+      };
+
+      document.addEventListener('mousemove', _onMouseMoveAllday);
+      document.addEventListener('mouseup', _onMouseUpAllday);
+    }
+
     /**
      * KC.DnD.beginSelection — DESIGN.md §206 に記載があるが未実装（スタブ）
      * Phase 2 以降で範囲選択による新規作成が必要な場合に実装する
@@ -1543,12 +1742,14 @@
     // =========================================================================
     return {
       get _drag() { return _drag; },
-      startMoveAllday:   startMoveAllday,
-      startResizeAllday: startResizeAllday,
-      startMove:         startMove,
-      startResize:       startResize,
-      beginSelection:    beginSelection,
-      _cancel:           _cancel
+      startMoveAllday:        startMoveAllday,
+      startResizeAllday:      startResizeAllday,
+      startMoveAlldayMonth:   startMoveAlldayMonth,
+      startResizeAlldayMonth: startResizeAlldayMonth,
+      startMove:              startMove,
+      startResize:            startResize,
+      beginSelection:         beginSelection,
+      _cancel:                _cancel
     };
   }());
 
@@ -2556,7 +2757,7 @@
     }
 
     /**
-     * .kc-ad-event 要素を月ビュー用に生成する（週ビューの DnD ハンドルなし版）
+     * .kc-ad-event 要素を月ビュー用に生成する（DnD 対応版）
      * @param {Object} ev - 位置情報付き KcEvent（colStart, span, lane, adDateRange を含む）
      * @returns {HTMLElement}
      */
@@ -2592,9 +2793,37 @@
       el.appendChild(dot);
       el.appendChild(titleSpan);
 
+      // 左端リサイズハンドル（§3.4）
+      var leftHandle = document.createElement('div');
+      leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
+      leftHandle.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        mdEvt.stopPropagation();
+        KC.DnD.startResizeAlldayMonth(ev, 'left', mdEvt, el);
+      });
+
+      // 右端リサイズハンドル（§3.4）
+      var rightHandle = document.createElement('div');
+      rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
+      rightHandle.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        mdEvt.stopPropagation();
+        KC.DnD.startResizeAlldayMonth(ev, 'right', mdEvt, el);
+      });
+
+      el.appendChild(leftHandle);
+      el.appendChild(rightHandle);
+
       el.addEventListener('click', function (clickEvt) {
         clickEvt.stopPropagation();
         KC.Popup.openEdit(ev.id);
+      });
+
+      // mousedown → 月ビュー終日移動 DnD 開始（§3.3）
+      // リサイズハンドルからの mousedown は stopPropagation されるためここには届かない
+      el.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        KC.DnD.startMoveAlldayMonth(ev, mdEvt, el);
       });
 
       return el;
@@ -2962,6 +3191,12 @@
       var m = this._pickModule();
       if (m && typeof m.renderGrid === 'function') {
         m.renderGrid();
+      }
+      // 月ビュー時は DOM 再生成後に 1 フレーム待ってイベント配置まで連鎖させる（§3.8・§10.1）
+      if (KC.State.view === 'month' && KC.RenderMonth) {
+        requestAnimationFrame(function () {
+          KC.RenderMonth.placeMonthEvents();
+        });
       }
       this.refreshTitle();
     },
@@ -3469,6 +3704,8 @@
 
       if (S.els.prevBtn) {
         S.els.prevBtn.addEventListener('click', function () {
+          // ドラッグ中の場合はキャンセルしてから月切替（§10.2）
+          KC.DnD._cancel();
           S.alldayExpanded = false;   // 切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
           // view 別分岐: 月ビューは月単位移動（REQ_month-view §3.8）
           if (S.view === 'month') {
@@ -3482,6 +3719,8 @@
 
       if (S.els.todayBtn) {
         S.els.todayBtn.addEventListener('click', function () {
+          // ドラッグ中の場合はキャンセルしてから今日へ（§10.2）
+          KC.DnD._cancel();
           S.alldayExpanded = false;   // 切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
           S.current = new Date();     // view によらず今日へ（REQ_month-view §3.8）
           R.refresh();
@@ -3490,6 +3729,8 @@
 
       if (S.els.nextBtn) {
         S.els.nextBtn.addEventListener('click', function () {
+          // ドラッグ中の場合はキャンセルしてから月切替（§10.2）
+          KC.DnD._cancel();
           S.alldayExpanded = false;   // 切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
           // view 別分岐: 月ビューは月単位移動（REQ_month-view §3.8）
           if (S.view === 'month') {
