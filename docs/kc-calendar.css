@@ -24,9 +24,9 @@
   --kc-col-count: 7;
   --kc-hours: 24;
   --kc-hour-height: 60px;
-  --kc-allday-h: 104px;         /* 折りたたみ時の最大高（3レーン分）: 4+25*3-3+4+24=104 */
-  --kc-allday-lane-h: 25px;     /* 1レーン分の高さ（bar-h + bar-gap = 22 + 3） */
-  --kc-ad-bar-h: 22px;          /* 終日イベントバー 1本の高さ */
+  --kc-allday-h: 110px;         /* 折りたたみ時の最大高（3レーン分）: 4+27*3-3+4+24=110 */
+  --kc-allday-lane-h: 27px;     /* 1レーン分の高さ（bar-h + bar-gap = 24 + 3） */
+  --kc-ad-bar-h: 24px;          /* 終日イベントバー 1本の高さ（font-size 16px 対応で 22→24px） */
   --kc-ad-bar-gap: 3px;         /* バー間の縦隙間 */
   --kc-ad-bar-top: 4px;         /* .kc-ad-events 上端からの最初のバーまでのオフセット */
   --kc-month-cell-min-h: 90px;  /* 月ビュー: セルの最小高（REQ_month-view §7.1 確定値） */
@@ -125,7 +125,7 @@
 .kc-range {
   white-space: nowrap;
   font-weight: 600;
-  font-size: 17px;
+  font-size: 20px;
 }
 
 /* ==========================================================================
@@ -137,7 +137,7 @@
   border-radius: 10px;
   height: 38px;
   padding: 0 18px;
-  font-size: 14px;
+  font-size: 16px;
   cursor: pointer;
   transition: background .2s, border-color .2s;
 }
@@ -157,7 +157,7 @@
   text-align: center;
   border: none;
   border-radius: 50%;
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 400;
 }
 .kc-btn--icon:hover {
@@ -179,7 +179,7 @@
   border-radius: 10px;
   height: 38px;
   padding: 0 20px;
-  font-size: 14px;
+  font-size: 16px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -193,7 +193,7 @@
 }
 
 .kc-caret {
-  font-size: 13px;
+  font-size: 16px;
   opacity: .8;
 }
 
@@ -217,7 +217,7 @@
 .kc-option {
   padding: 10px 12px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 16px;
   cursor: pointer;
 }
 .kc-option:hover  { background: #e9ecef; }
@@ -230,7 +230,7 @@
   border-radius: 10px;
   height: 38px;
   padding: 0 18px;
-  font-size: 14px;
+  font-size: 16px;
   cursor: pointer;
   white-space: nowrap;
   transition: border-color .2s;
@@ -282,7 +282,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
 }
 .kc-days .kc-day .kc-day-head .w {
@@ -304,8 +304,8 @@
   color: #fff;
 }
 
-.kc-day .kc-day-label { font-weight: 600; font-size: 14px; }
-.kc-day .kc-day-sub   { color: var(--kc-subtext); font-size: 13px; }
+.kc-day .kc-day-label { font-weight: 600; font-size: 16px; }
+.kc-day .kc-day-sub   { color: var(--kc-subtext); font-size: 16px; }
 
 /* ==========================================================================
  * 6. All-Day Slot
@@ -364,12 +364,12 @@
 /* 新方式の終日イベントバー（1イベント = 1要素、位置は JS が絶対座標で設定） */
 .kc-ad-event {
   position: absolute;
-  height: var(--kc-ad-bar-h, 22px);
+  height: var(--kc-ad-bar-h, 24px);
   background: #eef2ff;
   border: 1px solid var(--kc-border);
   border-radius: 10px;
   padding: 0 8px;
-  font-size: 13px;
+  font-size: 16px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -418,7 +418,7 @@
 
 /* 件名（Google カレンダー方式: 単一行・件名のみ表示） */
 .kc-ad-evt-title {
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -504,7 +504,7 @@
   border: 1px solid var(--kc-border);
   background: #eef2ff;
   padding: 4px 8px;
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.25;
   overflow: hidden;
   white-space: normal;
@@ -515,7 +515,7 @@
 }
 .kc-event .kc-evt-title {
   font-weight: 700;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.25;
 }
 .kc-event .kc-evt-meta {
@@ -672,7 +672,7 @@ body.kc-dnd-active * {
   border: 1px solid #1a73e8;
   background: #1a73e8;
   color: #fff;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
@@ -698,7 +698,7 @@ body.kc-dnd-active * {
   border-radius: 10px;
   background: #fff;
   color: #e53e3e;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   cursor: pointer;
   transition: background .2s, border-color .2s;
@@ -742,7 +742,7 @@ body.kc-dnd-active * {
 .kc-adcell--holiday { background: rgba(229, 62, 62, 0.03); }
 
 /* 祝日名表示 */
-.kc-holiday-name { font-size: 11px; color: #e53e3e; font-weight: 400; }
+.kc-holiday-name { font-size: 12px; color: #e53e3e; font-weight: 400; }
 
 /* ---------- 14. kintone 標準UIの非表示（カレンダービュー不要要素） ---------- */
 .gaia-argoui-app-index-pager {
@@ -776,7 +776,7 @@ body.kc-dnd-active * {
 /* 曜日ラベルセル */
 .kc-month-dayhead {
   text-align: center;
-  font-size: 13px;
+  font-size: 16px;
   color: var(--kc-subtext);
   font-weight: 600;
   padding: 6px 0;
@@ -828,8 +828,8 @@ body.kc-dnd-active * {
   background: #3b82f6;
   color: #fff;
   border-radius: 999px;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -852,14 +852,14 @@ body.kc-dnd-active * {
 
 /* セル内日付数字（左上）*/
 .kc-month-datehead {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 500;
   text-align: center;
   padding: 2px;
   line-height: 1;
   flex: 0 0 auto;
   align-self: center;
-  width: 24px;
+  width: 28px;
 }
 
 /* 終日バー専用絶対配置レイヤ（週行全幅に張る）*/
@@ -966,7 +966,7 @@ body.kc-dnd-active * {
  * flex: 1 で残幅を占有し、ellipsis で末尾を詰める。
  */
 .kc-month-holiday-name {
-  font-size: 11px;
+  font-size: 12px;
   color: #e53e3e;
   overflow: hidden;
   text-overflow: ellipsis;
