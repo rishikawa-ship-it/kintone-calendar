@@ -883,7 +883,7 @@ body.kc-dnd-active * {
   gap: 4px;
   font-size: 11px;
   padding: 1px 4px;
-  cursor: pointer;
+  cursor: grab;
   border-radius: 3px;
   overflow: hidden;
   white-space: nowrap;
@@ -974,4 +974,18 @@ body.kc-dnd-active * {
   line-height: 1.2;
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* ==========================================================================
+ * 17. 月ビュー DnD（REQ_month-dnd Phase A）
+ * ========================================================================== */
+
+/* 月ビュー終日バー: 1 列幅でも左右ハンドルが重ならないよう最小幅を保証（§10.3）*/
+.kc-month-ad-events .kc-ad-event {
+  min-width: 24px;
+}
+
+/* 月ビュー chip ドラッグ中の薄表示（§6.5）*/
+.kc-month-chip.kc-event--dragging {
+  opacity: 0.4;
 }
