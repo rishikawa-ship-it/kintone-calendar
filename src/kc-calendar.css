@@ -29,6 +29,8 @@
   --kc-ad-bar-h: 22px;          /* 終日イベントバー 1本の高さ */
   --kc-ad-bar-gap: 3px;         /* バー間の縦隙間 */
   --kc-ad-bar-top: 4px;         /* .kc-ad-events 上端からの最初のバーまでのオフセット */
+  --kc-month-cell-min-h: 90px;  /* 月ビュー: セルの最小高（REQ_month-view §7.1 確定値） */
+  --kc-fullscreen-header-h: 0px; /* 全画面時 kintone ヘッダー高（kc-expanded は fixed で隠れるため 0px） */
   --kc-allday-toggle-h: 24px;   /* 行下部横断トグルバーの高さ */
   --kc-header-h: 48px;
   --kc-time-col-w: 50px;
@@ -744,4 +746,172 @@ body.kc-dnd-active * {
 /* ---------- 14. kintone 標準UIの非表示（カレンダービュー不要要素） ---------- */
 .gaia-argoui-app-index-pager {
   display: none !important;
+}
+
+/* ==========================================================================
+ * 15. Month View（月ビュー骨格）— REQ_month-view §6.4 / §7
+ * ========================================================================== */
+
+/* 月ビュールート: 初期非表示。view='month' 切替時に JS が display: flex に変更 */
+.kc-month-root {
+  display: none;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius);
+  background: var(--kc-surface);
+  overflow: hidden;
+}
+
+/* 曜日ヘッダー行（日〜土 7列） */
+.kc-month-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-bottom: 1px solid var(--kc-border);
+  flex: 0 0 auto;
+}
+
+/* 曜日ラベルセル */
+.kc-month-dayhead {
+  text-align: center;
+  font-size: 12px;
+  color: var(--kc-subtext);
+  font-weight: 600;
+  padding: 6px 0;
+  border-left: 1px solid var(--kc-border);
+}
+.kc-month-dayhead:first-child { border-left: none; }
+
+/* 月グリッド本体（6行）*/
+.kc-month-grid {
+  display: grid;
+  grid-template-rows: repeat(6, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+/* 週行ラッパー（7列グリッド + 終日バー絶対配置の基準）*/
+.kc-month-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  position: relative;
+}
+
+/* 日付セル */
+.kc-month-cell {
+  border-top: 1px solid var(--kc-border);
+  border-left: 1px solid var(--kc-border);
+  min-height: var(--kc-month-cell-min-h, 90px);
+  overflow: hidden;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  box-sizing: border-box;
+}
+.kc-month-cell:hover { background: var(--kc-muted); }
+
+/* 各週行の先頭セルは左 border を非表示 */
+.kc-month-week .kc-month-cell:first-child { border-left: none; }
+
+/* 第1週行のセルは上 border を非表示（.kc-month-days の下線と重なる）*/
+.kc-month-grid .kc-month-week:first-child .kc-month-cell { border-top: none; }
+
+/* 当月外セル: 文字色を薄く（gray-400） */
+.kc-month-cell--other-month { color: #9ca3af; }
+
+/* 当日セル: .kc-month-datehead に青丸を適用 */
+.kc-month-cell--today .kc-month-datehead {
+  background: #3b82f6;
+  color: #fff;
+  border-radius: 999px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+}
+
+/* セル内日付数字（左上）*/
+.kc-month-datehead {
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  padding: 2px;
+  line-height: 1;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  width: 24px;
+}
+
+/* 終日バー専用絶対配置レイヤ（週行全幅に張る）*/
+/* position: absolute により grid フローから外れ、.kc-month-week 全体を覆う */
+.kc-month-ad-events {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 時間予定 chip */
+.kc-month-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 1px 4px;
+  cursor: pointer;
+  border-radius: 3px;
+  overflow: hidden;
+  white-space: nowrap;
+  margin-top: 1px;
+  pointer-events: auto;
+  flex: 0 0 auto;
+}
+.kc-month-chip:hover { filter: brightness(0.95); }
+
+/* chip のカラードット */
+.kc-month-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+/* chip の時刻 */
+.kc-month-chip-time {
+  font-size: 11px;
+  flex: 0 0 auto;
+  color: var(--kc-subtext);
+}
+
+/* chip の件名 */
+.kc-month-chip-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* +N more ラベル */
+.kc-month-more {
+  font-size: 11px;
+  color: var(--kc-subtext);
+  padding: 1px 4px;
+  cursor: default;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+/* 全画面モード時の月グリッド高（REQ_month-view §7.2）*/
+.kc-root.kc-expanded .kc-month-grid {
+  height: calc(100vh - var(--kc-fullscreen-header-h, 0px));
+  grid-template-rows: repeat(6, 1fr);
 }

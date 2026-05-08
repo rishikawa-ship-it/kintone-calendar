@@ -2194,24 +2194,277 @@
   })();
 
   /* ====================================================================
-   * KC.RenderMonth — 月ビュー（スタブ）
+   * KC.RenderMonth — 月ビュー実装（Phase 1B-1: 骨格のみ）
+   * REQ_month-view §6.3 準拠
    * ==================================================================== */
-  KC.RenderMonth = {
-    refresh: function () { /* 将来実装 */ },
-    renderGrid: function () { /* 将来実装 */ },
-    gridRange: function () {
-      var S = KC.State;
-      var y = S.current.getFullYear();
-      var m = S.current.getMonth();
-      var first = new Date(y, m, 1);
-      var start = new Date(first);
-      start.setDate(first.getDate() - first.getDay());
-      var last = new Date(y, m + 1, 0);
-      var end = new Date(last);
-      end.setDate(last.getDate() + (6 - last.getDay()));
-      return { start: start, end: end };
+  KC.RenderMonth = (function () {
+    var U = KC.Utils;
+    var S = KC.State;
+
+    // 月ビュー DOM ルート要素（_ensureMonthDOM で生成・キャッシュ）
+    var _monthRoot = null;
+
+    /**
+     * 月ビューの表示範囲（42日分 = 6行 × 7列）を算出する
+     * 月初日が含まれる週の日曜から始め、常に 42 マスを確保する
+     * @param {Date} date - 表示基準月の任意の日
+     * @returns {{ start: Date, end: Date }}
+     */
+    function monthRange(date) {
+      var y = date.getFullYear();
+      var m = date.getMonth();
+      var monthFirst = new Date(y, m, 1);
+      // 月初の曜日分遡って当週の日曜へ
+      var rangeStart = new Date(monthFirst);
+      rangeStart.setDate(monthFirst.getDate() - monthFirst.getDay());
+      rangeStart.setHours(0, 0, 0, 0);
+      // 6週 × 7日 - 1 = 41日後が末端
+      var rangeEnd = U.addDays(rangeStart, 41);
+      return { start: rangeStart, end: rangeEnd };
     }
-  };
+
+    /**
+     * 月ビュー DOM (.kc-month-root) を生成する（初回のみ）
+     * .kc-grid-wrap と並行して .kc-root 直下に配置する
+     */
+    function _ensureMonthDOM() {
+      if (_monthRoot && _monthRoot.parentNode) return;
+
+      var root = document.getElementById('kc-root');
+      if (!root) return;
+
+      // .kc-month-root 生成
+      var monthRootEl = document.createElement('div');
+      monthRootEl.className = 'kc-month-root';
+      monthRootEl.id = 'kc-month-root';
+
+      // 曜日ヘッダー (.kc-month-days)
+      var daysEl = document.createElement('div');
+      daysEl.className = 'kc-month-days';
+      monthRootEl.appendChild(daysEl);
+
+      // グリッド本体 (.kc-month-grid)
+      var gridEl = document.createElement('div');
+      gridEl.className = 'kc-month-grid';
+      monthRootEl.appendChild(gridEl);
+
+      // .kc-grid-wrap の後に挿入
+      var gridWrap = root.querySelector('.kc-grid-wrap');
+      if (gridWrap && gridWrap.nextSibling) {
+        root.insertBefore(monthRootEl, gridWrap.nextSibling);
+      } else {
+        root.appendChild(monthRootEl);
+      }
+
+      _monthRoot = monthRootEl;
+    }
+
+    /**
+     * 曜日ヘッダー 7列（日〜土）を描画する
+     */
+    function renderMonthDayHeaders() {
+      if (!_monthRoot) return;
+      var daysEl = _monthRoot.querySelector('.kc-month-days');
+      if (!daysEl) return;
+
+      daysEl.innerHTML = '';
+      var labels = ['日', '月', '火', '水', '木', '金', '土'];
+      labels.forEach(function (label) {
+        var cell = document.createElement('div');
+        cell.className = 'kc-month-dayhead';
+        cell.textContent = label;
+        daysEl.appendChild(cell);
+      });
+    }
+
+    /**
+     * 6週 × 7セルのグリッドを描画する
+     * 各セルに data-date, 当月外フラグ, 当日フラグを付与
+     */
+    function renderMonthGrid() {
+      if (!_monthRoot) return;
+      var gridEl = _monthRoot.querySelector('.kc-month-grid');
+      if (!gridEl) return;
+
+      gridEl.innerHTML = '';
+
+      var range = monthRange(S.current);
+      var currentMonth = S.current.getMonth();
+      var todayYMD = U.fmtYMD(new Date());
+
+      // 6週分のループ
+      for (var week = 0; week < 6; week++) {
+        _buildWeekRow(gridEl, range, week, currentMonth, todayYMD);
+      }
+    }
+
+    /**
+     * 週行（7セル + .kc-month-ad-events）を構築してグリッドに追加する
+     * @param {HTMLElement} gridEl - .kc-month-grid 要素
+     * @param {{ start: Date, end: Date }} range - 月表示範囲
+     * @param {number} week - 週インデックス（0〜5）
+     * @param {number} currentMonth - 表示月（0〜11）
+     * @param {string} todayYMD - 今日の YYYY-MM-DD
+     */
+    function _buildWeekRow(gridEl, range, week, currentMonth, todayYMD) {
+      // 週行ラッパー（display: grid で 7列 + position: relative で絶対配置の基準）
+      var weekEl = document.createElement('div');
+      weekEl.className = 'kc-month-week';
+      weekEl.dataset.week = String(week);
+
+      // 7日分のセル
+      for (var day = 0; day < 7; day++) {
+        var cellDate = U.addDays(range.start, week * 7 + day);
+        var ymd = U.fmtYMD(cellDate);
+        var isOtherMonth = cellDate.getMonth() !== currentMonth;
+        var isToday = (ymd === todayYMD);
+
+        var cell = document.createElement('div');
+        cell.className = 'kc-month-cell';
+        cell.dataset.date = ymd;
+        if (isOtherMonth) cell.classList.add('kc-month-cell--other-month');
+        if (isToday) cell.classList.add('kc-month-cell--today');
+
+        // 日付数字（左上）
+        var datehead = document.createElement('div');
+        datehead.className = 'kc-month-datehead';
+        datehead.textContent = String(cellDate.getDate());
+        cell.appendChild(datehead);
+
+        // セルクリック → 新規作成（Phase 1B-1: クリックハンドラ配線）
+        cell.addEventListener('click', (function (capturedYMD) {
+          return function (e) {
+            KC.Popup.openCreate({ date: capturedYMD, allday: true });
+          };
+        }(ymd)));
+
+        weekEl.appendChild(cell);
+      }
+
+      // 終日バー専用絶対配置レイヤ（Phase 1B-2 で使用）
+      var adEvents = document.createElement('div');
+      adEvents.className = 'kc-month-ad-events';
+      weekEl.appendChild(adEvents);
+
+      gridEl.appendChild(weekEl);
+    }
+
+    /**
+     * グリッド全体を再描画する（曜日ヘッダー → セルグリッド）
+     */
+    function renderGrid() {
+      renderMonthDayHeaders();
+      renderMonthGrid();
+    }
+
+    /**
+     * 月ビュー用に週ビュー DOM を非表示にし、月ビュー DOM を表示する
+     */
+    function _showMonthDOM() {
+      // 週ビュー DOM を非表示
+      var gridWrap = document.querySelector('.kc-grid-wrap');
+      if (gridWrap) gridWrap.style.display = 'none';
+
+      // 月ビュー DOM を表示
+      if (_monthRoot) _monthRoot.style.display = 'flex';
+    }
+
+    /**
+     * 週ビュー DOM を再表示し、月ビュー DOM を非表示にする
+     */
+    function _showWeekDOM() {
+      var gridWrap = document.querySelector('.kc-grid-wrap');
+      if (gridWrap) gridWrap.style.display = '';
+
+      if (_monthRoot) _monthRoot.style.display = 'none';
+    }
+
+    /**
+     * 月ビューの表示期間を返す
+     * @returns {{ start: Date, end: Date }}
+     */
+    function gridRange() {
+      return monthRange(S.current);
+    }
+
+    /**
+     * 月ビューの終日イベントを配置する（Phase 1B-2 で実装）
+     * TODO(builder): Phase 1B-2 で placeMonthAlldayEvents を実装する
+     * @param {HTMLElement} weekEl - .kc-month-week 要素
+     * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
+     * @param {Array} alldayEvents - 当週の終日イベント配列
+     * @param {number} currentMonth - 表示月（0〜11）
+     */
+    function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents, currentMonth) {
+      // TODO(builder): Phase 1B-2 で実装する
+      // KC.Lanes.eventToBarPosition / assignLanes を使用して終日バーを描画
+    }
+
+    /**
+     * セルに時間予定 chip を配置する（Phase 1B-2 で実装）
+     * TODO(builder): Phase 1B-2 で placeMonthTimedEvents を実装する
+     * @param {HTMLElement} cellEl - .kc-month-cell 要素
+     * @param {Array} timedEvents - 当日の時間予定配列
+     * @param {number} usedSlots - 使用済みスロット数（終日バーのレーン数）
+     */
+    function placeMonthTimedEvents(cellEl, timedEvents, usedSlots) {
+      // TODO(builder): Phase 1B-2 で実装する
+      // buildMonthChip を使用して chip を生成・配置する
+    }
+
+    /**
+     * +N more 要素を追加する（Phase 1B-2 で実装）
+     * TODO(builder): Phase 1B-2 で applyOverflow を実装する
+     * @param {HTMLElement} cellEl - .kc-month-cell 要素
+     * @param {number} remaining - 非表示件数
+     */
+    function applyOverflow(cellEl, remaining) {
+      // TODO(builder): Phase 1B-2 で実装する
+      // ".kc-month-more" 要素を生成して cellEl に追加する
+    }
+
+    /**
+     * 完全リフレッシュ（DOM 確保 → DOM 切替 → データ取得 → グリッド描画）
+     */
+    async function refresh() {
+      _ensureMonthDOM();
+      _showMonthDOM();
+
+      // 仮描画（データ取得前に空グリッドを表示）
+      renderGrid();
+
+      // データ取得
+      var range = gridRange();
+      var toISO = function (d) {
+        var d0 = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0);
+        return new Date(d0.getTime() - d0.getTimezoneOffset() * 60000).toISOString();
+      };
+      var isoStart = toISO(range.start);
+      var isoEnd   = toISO(U.addDays(range.end, 1));
+
+      try {
+        S.events = await KC.Api.loadEvents(isoStart, isoEnd);
+        // Phase 1B-1: イベント配置は未実装（空グリッドのまま）
+        // TODO(builder): Phase 1B-2 で renderGrid() → placeMonthEvents() を呼ぶ
+        renderGrid();
+      } catch (err) {
+        console.error('[KC.RenderMonth] loadEvents error:', err);
+      }
+    }
+
+    return {
+      refresh:   refresh,
+      renderGrid: renderGrid,
+      gridRange:  gridRange,
+      // Phase 1B-2 引き継ぎ用（空実装）
+      placeMonthAlldayEvents: placeMonthAlldayEvents,
+      placeMonthTimedEvents:  placeMonthTimedEvents,
+      applyOverflow:          applyOverflow,
+      // 内部関数を公開（週ビュー復帰用）
+      _showWeekDOM: _showWeekDOM,
+      _showMonthDOM: _showMonthDOM
+    };
+  }());
 
   /* ====================================================================
    * KC.RenderDay — 日ビュー（スタブ）
@@ -2242,12 +2495,18 @@
     },
 
     /** 共通 refresh 入口 */
-    refresh: function () {
+    refresh: async function () {
       var root = document.getElementById('kc-root');
       if (!root) return;
+
+      // 週ビューに戻った場合は月ビュー DOM を非表示にして週ビューを復帰させる
+      if (KC.State.view !== 'month' && KC.RenderMonth && KC.RenderMonth._showWeekDOM) {
+        KC.RenderMonth._showWeekDOM();
+      }
+
       var m = this._pickModule();
       if (m && typeof m.refresh === 'function') {
-        m.refresh();
+        await m.refresh();
       } else if (m && typeof m.renderGrid === 'function') {
         m.renderGrid();
       }
@@ -2295,14 +2554,26 @@
       return { start: start, end: end };
     },
 
-    /** ヘッダーラベル生成 */
+    /**
+     * ヘッダーラベル生成（view 別分岐）
+     * @param {Date} date - 表示基準日
+     * @returns {string} ラベル文字列
+     */
     _formatWeekMonthRange: function (date) {
+      var S = KC.State;
+      var p2 = KC.Utils.pad2;
+
+      // 月ビュー: "2026年04月"（ゼロ埋め月）— REQ_month-view §3.11
+      if (S.view === 'month') {
+        return date.getFullYear() + '年' + p2(date.getMonth() + 1) + '月';
+      }
+
+      // 週ビュー: 既存ロジック維持
       var range = this._weekRange(date);
       var sy = range.start.getFullYear();
       var sm = range.start.getMonth() + 1;
       var ey = range.end.getFullYear();
       var em = range.end.getMonth() + 1;
-      var p2 = KC.Utils.pad2;
 
       if (sy === ey && sm === em) {
         return sy + '年' + p2(sm) + '月';
@@ -2447,6 +2718,8 @@
 
       KC.Render.renderGrid = function () {
         var result = original.apply(KC.Render, arguments);
+        // 月ビュー時は週ビュー専用処理をスキップ（REQ_month-view §3.12）
+        if (KC.State.view === 'month') return result;
         try {
           self.buildTimeSlots();
           self.bindAllDayBoxes();
@@ -2614,6 +2887,16 @@
       optWeek.textContent = '週';
 
       menuUl.appendChild(optWeek);
+
+      // 月ビューオプション（REQ_month-view §3.9）
+      var optMonth = document.createElement('li');
+      optMonth.className = 'kc-option';
+      optMonth.setAttribute('role', 'option');
+      optMonth.dataset.value = 'month';
+      optMonth.setAttribute('aria-selected', 'false');
+      optMonth.textContent = '月';
+      menuUl.appendChild(optMonth);
+
       dropdown.appendChild(viewBtn);
       dropdown.appendChild(menuUl);
       headRight.appendChild(dropdown);
@@ -2736,24 +3019,34 @@
 
       if (S.els.prevBtn) {
         S.els.prevBtn.addEventListener('click', function () {
-          S.alldayExpanded = false;   // 週切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
-          S.current.setDate(S.current.getDate() - 7);
+          S.alldayExpanded = false;   // 切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
+          // view 別分岐: 月ビューは月単位移動（REQ_month-view §3.8）
+          if (S.view === 'month') {
+            S.current.setMonth(S.current.getMonth() - 1);
+          } else {
+            S.current.setDate(S.current.getDate() - 7);
+          }
           R.refresh();
         });
       }
 
       if (S.els.todayBtn) {
         S.els.todayBtn.addEventListener('click', function () {
-          S.alldayExpanded = false;   // 週切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
-          S.current = new Date();
+          S.alldayExpanded = false;   // 切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
+          S.current = new Date();     // view によらず今日へ（REQ_month-view §3.8）
           R.refresh();
         });
       }
 
       if (S.els.nextBtn) {
         S.els.nextBtn.addEventListener('click', function () {
-          S.alldayExpanded = false;   // 週切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
-          S.current.setDate(S.current.getDate() + 7);
+          S.alldayExpanded = false;   // 切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
+          // view 別分岐: 月ビューは月単位移動（REQ_month-view §3.8）
+          if (S.view === 'month') {
+            S.current.setMonth(S.current.getMonth() + 1);
+          } else {
+            S.current.setDate(S.current.getDate() + 7);
+          }
           R.refresh();
         });
       }
