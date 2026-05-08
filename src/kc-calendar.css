@@ -293,8 +293,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 999px;
   font-size: 16px;
   font-weight: 700;
@@ -828,8 +828,8 @@ body.kc-dnd-active * {
   background: #3b82f6;
   color: #fff;
   border-radius: 999px;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -859,7 +859,7 @@ body.kc-dnd-active * {
   line-height: 1;
   flex: 0 0 auto;
   align-self: center;
-  width: 28px;
+  width: 24px;
 }
 
 /* 終日バー専用絶対配置レイヤ（週行全幅に張る）*/
