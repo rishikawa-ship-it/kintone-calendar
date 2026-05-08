@@ -809,11 +809,13 @@
         drag.origBars.forEach(function (b) { b.classList.remove('kc-event--dragging'); });
       }
 
-      // リスナ除去（終日 + 時間予定 両方）
+      // リスナ除去（終日 + 時間予定 + 月ビュー chip 全て）
       document.removeEventListener('mousemove', _onMouseMoveAllday);
       document.removeEventListener('mouseup', _onMouseUpAllday);
       document.removeEventListener('mousemove', _onMouseMoveTime);
       document.removeEventListener('mouseup', _onMouseUpTime);
+      document.removeEventListener('mousemove', _onMouseMoveMonthChip);
+      document.removeEventListener('mouseup', _onMouseUpMonthChip);
       document.removeEventListener('keydown', _onKeyDown);
       window.removeEventListener('blur', _cancel);
 
@@ -956,7 +958,7 @@
      * @param {MouseEvent} e
      */
     function _onMoveAlldayMoveMonth(e) {
-      var info = _monthCellFromX(e.clientX);
+      var info = _monthCellFromXY(e.clientX, e.clientY);
       if (!info) return;
 
       var origEv = _drag.ev;
@@ -976,7 +978,7 @@
       _drag.newStart = U.fmtYMD(newStart) + 'T00:00:00+09:00';
       _drag.newEnd   = U.fmtYMD(newEnd)   + 'T00:00:00+09:00';
 
-      _positionMonthGhost(_drag.ghost, info.dateYMD, spanDays);
+      _positionMonthGhost(_drag.ghost, info.dateYMD, spanDays, info.colIdx);
       _updateAlldayGhostLabel(_drag.ghost, newStart, newEnd);
     }
 
@@ -1126,7 +1128,7 @@
      * @param {MouseEvent} e
      */
     function _onResizeAlldayMoveMonth(e) {
-      var info = _monthCellFromX(e.clientX);
+      var info = _monthCellFromXY(e.clientX, e.clientY);
       if (!info) return;
 
       var origEv = _drag.ev;
@@ -1159,7 +1161,8 @@
 
       var spanDays = Math.round((newEndDate.getTime() - newStartDate.getTime()) / 86400000);
       if (spanDays < 1) spanDays = 1;
-      _positionMonthGhost(_drag.ghost, U.fmtYMD(newStartDate), spanDays);
+      // newStartDate.getDay() は 0=日曜〜6=土曜 で colIdx と一致する
+      _positionMonthGhost(_drag.ghost, U.fmtYMD(newStartDate), spanDays, newStartDate.getDay());
       _updateAlldayGhostLabel(_drag.ghost, newStartDate, newEndDate);
     }
 
@@ -1626,16 +1629,18 @@
     // =========================================================================
 
     /**
-     * clientX から月ビューの .kc-month-cell[data-date] を走査し
-     * 対応するセル情報を返す
+     * clientX / clientY から月ビューの .kc-month-cell[data-date] を走査し
+     * 対応するセル情報を返す。X・Y 両座標で判定するため別週またぎ DnD が正常に動作する。
      * @param {number} clientX
+     * @param {number} clientY
      * @returns {{ colIdx: number, dateYMD: string, cellEl: HTMLElement } | null}
      */
-    function _monthCellFromX(clientX) {
+    function _monthCellFromXY(clientX, clientY) {
       var cells = document.querySelectorAll('.kc-month-cell[data-date]');
       for (var i = 0; i < cells.length; i++) {
         var r = cells[i].getBoundingClientRect();
-        if (clientX >= r.left && clientX <= r.right) {
+        if (clientX >= r.left && clientX <= r.right &&
+            clientY >= r.top  && clientY <= r.bottom) {
           return {
             colIdx:  i % 7,
             dateYMD: cells[i].dataset.date,
@@ -1648,19 +1653,36 @@
 
     /**
      * 月ビュー終日ゴーストを body 直下 fixed で追従させる
+     * ゴースト幅は週末（土曜=colIdx 6）までの残り列数でクランプして週をまたぐ表示を防ぐ。
      * @param {HTMLElement} ghost
      * @param {string} dateYMD - ゴーストが乗るセルの YYYY-MM-DD
      * @param {number} spanDays - 表示上の日数
+     * @param {number} [colIdx] - 開始セルの列インデックス（0=日曜...6=土曜）。省略時はセルの位置から算出
      */
-    function _positionMonthGhost(ghost, dateYMD, spanDays) {
+    function _positionMonthGhost(ghost, dateYMD, spanDays, colIdx) {
       var cell = document.querySelector('.kc-month-cell[data-date="' + dateYMD + '"]');
       if (!cell) return;
       var r    = cell.getBoundingClientRect();
       var cellW = r.width;
+
+      // colIdx が渡されない場合はセルの DOM 順から算出
+      if (colIdx === undefined) {
+        var allCells = document.querySelectorAll('.kc-month-cell[data-date]');
+        var cellIdx = 0;
+        for (var i = 0; i < allCells.length; i++) {
+          if (allCells[i] === cell) { cellIdx = i; break; }
+        }
+        colIdx = cellIdx % 7;
+      }
+
+      // 週末（土曜=6）までの残り列数でクランプ（翌週にはみ出さないようにする）
+      var remainingCols = 7 - colIdx;
+      var clampedSpan = Math.min(spanDays, remainingCols);
+
       ghost.style.position = 'fixed';
       ghost.style.left     = r.left + 'px';
       ghost.style.top      = (r.top + 4) + 'px';
-      ghost.style.width    = (cellW * Math.min(spanDays, 7)) + 'px';
+      ghost.style.width    = (cellW * clampedSpan) + 'px';
       ghost.style.height   = '22px';
     }
 
@@ -1729,6 +1751,180 @@
       document.addEventListener('mouseup', _onMouseUpAllday);
     }
 
+    // =========================================================================
+    // 月ビュー chip DnD — スコープ C（Phase B）
+    // =========================================================================
+
+    /**
+     * 月ビュー chip ゴースト要素を生成する（position: fixed / body 直下方式）
+     * @param {Object} ev - KcEvent
+     * @returns {HTMLElement}
+     */
+    function _buildMonthChipGhost(ev) {
+      var color = ev.color || '#3b82f6';
+      var ghost = document.createElement('div');
+      ghost.className = 'kc-month-chip kc-event--ghost';
+      ghost.style.position = 'fixed';
+      ghost.style.zIndex = '9999';
+      ghost.style.pointerEvents = 'none';
+      ghost.style.opacity = '0.85';
+
+      var dot = document.createElement('span');
+      dot.className = 'kc-month-chip-dot';
+      dot.style.background = color;
+
+      var evStart = new Date(ev.start);
+      var timeSpan = document.createElement('span');
+      timeSpan.className = 'kc-month-chip-time';
+      timeSpan.textContent = KC.Utils.pad2(evStart.getHours()) + ':' + KC.Utils.pad2(evStart.getMinutes());
+
+      var titleSpan = document.createElement('span');
+      titleSpan.className = 'kc-month-chip-title';
+      titleSpan.textContent = ev.title || '(無題)';
+
+      ghost.appendChild(dot);
+      ghost.appendChild(timeSpan);
+      ghost.appendChild(titleSpan);
+      return ghost;
+    }
+
+    /**
+     * chip 移動の mousemove ハンドラ（閾値判定 → セル検出 → newStart/newEnd 更新）
+     * @param {MouseEvent} e
+     */
+    function _onMouseMoveMonthChip(e) {
+      if (!_drag) return;
+
+      // 5px 閾値判定
+      if (!_drag.started) {
+        var dist = Math.hypot(e.clientX - _drag.startX, e.clientY - _drag.startY);
+        if (dist < DND_THRESHOLD) return;
+
+        _drag.started = true;
+        document.body.classList.add('kc-dnd-active');
+        document.body.style.userSelect = 'none';
+        _drag.origBar.classList.add('kc-event--dragging');
+        document.body.appendChild(_drag.ghost);
+        document.addEventListener('keydown', _onKeyDown);
+        window.addEventListener('blur', _cancel);
+      }
+
+      var info = _monthCellFromXY(e.clientX, e.clientY);
+      if (!info) return;
+
+      _drag.newStart = _buildChipISO(_drag.ev.start, info.dateYMD);
+      _drag.newEnd   = _buildChipISO(_drag.ev.end,   _calcChipEndYMD(_drag.ev, info.dateYMD));
+
+      // ゴーストをカーソル位置に追従（body 直下 fixed）
+      _drag.ghost.style.left = (e.clientX - 20) + 'px';
+      _drag.ghost.style.top  = (e.clientY - 8)  + 'px';
+    }
+
+    /**
+     * chip 移動: 元の開始→終了の日数差を維持して終了日 YMD を算出する
+     * @param {Object} ev - KcEvent
+     * @param {string} newStartYMD - 新しい開始日 YYYY-MM-DD
+     * @returns {string} 新しい終了日 YYYY-MM-DD
+     */
+    function _calcChipEndYMD(ev, newStartYMD) {
+      var origStartDate = new Date(ev.start.substring(0, 10) + 'T00:00:00');
+      var origEndDate   = new Date(ev.end.substring(0, 10)   + 'T00:00:00');
+      var diffMs   = origEndDate.getTime() - origStartDate.getTime();
+      var newStart = new Date(newStartYMD + 'T00:00:00');
+      var newEnd   = new Date(newStart.getTime() + diffMs);
+      return KC.Utils.fmtYMD(newEnd);
+    }
+
+    /**
+     * ISO 文字列の日付部分のみを newDateYMD に置き換える（時刻部分は維持）
+     * DATE 型フィールドでは ev.start が UTC Z 形式（例: "2026-05-08T00:00:00.000Z"）になるため
+     * Z 形式を検出して JST 固定の ISO に変換する。
+     * @param {string} origISO - 元の ISO 文字列
+     * @param {string} newDateYMD - 新しい日付 "YYYY-MM-DD"
+     * @returns {string} 新しい ISO 文字列
+     */
+    function _buildChipISO(origISO, newDateYMD) {
+      if (!origISO) return null;
+      // DATE 型 (UTC Z 形式: "...T00:00:00.000Z" or "...Z") → JST 固定
+      if (/Z$/.test(origISO)) {
+        return newDateYMD + 'T00:00:00+09:00';
+      }
+      // DATETIME 型 → 時刻部分（"THH:MM:SS+09:00"）を維持
+      return newDateYMD + origISO.substring(10);
+    }
+
+    /**
+     * chip 移動の mouseup ハンドラ（commit or キャンセル）
+     * @param {MouseEvent} e
+     */
+    function _onMouseUpMonthChip(e) {
+      document.removeEventListener('mousemove', _onMouseMoveMonthChip);
+      document.removeEventListener('mouseup', _onMouseUpMonthChip);
+      document.removeEventListener('keydown', _onKeyDown);
+      window.removeEventListener('blur', _cancel);
+
+      if (!_drag) return;
+
+      var drag = _drag;
+      _drag = null;
+
+      // ゴースト除去
+      if (drag.ghost && drag.ghost.parentNode) {
+        drag.ghost.parentNode.removeChild(drag.ghost);
+      }
+
+      // 元 chip の薄表示解除
+      if (drag.origBar) {
+        drag.origBar.classList.remove('kc-event--dragging');
+      }
+
+      document.body.classList.remove('kc-dnd-active');
+      document.body.style.userSelect = '';
+
+      // 5px 未満の場合はクリックとして通過
+      if (!drag.started) return;
+
+      // DnD 発動後はクリックを一度だけキャプチャフェーズでブロック（誤ポップアップ防止）
+      function suppressClick(ev) {
+        ev.stopPropagation();
+        document.removeEventListener('click', suppressClick, true);
+      }
+      document.addEventListener('click', suppressClick, true);
+
+      if (!drag.newStart || !drag.newEnd) return;
+      if (drag.newStart === drag.ev.start && drag.newEnd === drag.ev.end) return;
+
+      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd);
+    }
+
+    /**
+     * 月ビュー chip 移動 DnD を開始する（スコープ C）
+     * @param {Object} ev - KcEvent（時間予定）
+     * @param {MouseEvent} mousedown
+     * @param {HTMLElement} chipEl - クリックされた .kc-month-chip 要素
+     */
+    function startMoveMonthChip(ev, mousedown, chipEl) {
+      mousedown.preventDefault();
+
+      var ghost = _buildMonthChipGhost(ev);
+
+      _drag = {
+        view:     'month',
+        type:     'move-month-chip',
+        ev:       ev,
+        ghost:    ghost,
+        origBar:  chipEl,
+        startX:   mousedown.clientX,
+        startY:   mousedown.clientY,
+        started:  false,
+        newStart: null,
+        newEnd:   null
+      };
+
+      document.addEventListener('mousemove', _onMouseMoveMonthChip);
+      document.addEventListener('mouseup', _onMouseUpMonthChip);
+    }
+
     /**
      * KC.DnD.beginSelection — DESIGN.md §206 に記載があるが未実装（スタブ）
      * Phase 2 以降で範囲選択による新規作成が必要な場合に実装する
@@ -1746,6 +1942,7 @@
       startResizeAllday:      startResizeAllday,
       startMoveAlldayMonth:   startMoveAlldayMonth,
       startResizeAlldayMonth: startResizeAlldayMonth,
+      startMoveMonthChip:     startMoveMonthChip,
       startMove:              startMove,
       startResize:            startResize,
       beginSelection:         beginSelection,
@@ -2820,9 +3017,10 @@
       });
 
       // mousedown → 月ビュー終日移動 DnD 開始（§3.3）
-      // リサイズハンドルからの mousedown は stopPropagation されるためここには届かない
+      // stopPropagation でセル側の click ハンドラ（新規作成ポップアップ）への伝播を防ぐ
       el.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
+        mdEvt.stopPropagation();
         KC.DnD.startMoveAlldayMonth(ev, mdEvt, el);
       });
 
@@ -2863,6 +3061,16 @@
         e.stopPropagation();
         KC.Popup.openEdit(evt.id);
       });
+
+      // mousedown → 月ビュー chip 移動 DnD 開始（スコープ C）
+      // クロージャで evt を捕捉し、chip 要素の参照も渡す
+      chip.addEventListener('mousedown', (function (capturedEvt, capturedChip) {
+        return function (mdEvt) {
+          if (mdEvt.button !== 0) return;
+          mdEvt.stopPropagation();
+          KC.DnD.startMoveMonthChip(capturedEvt, mdEvt, capturedChip);
+        };
+      }(evt, chip)));
 
       return chip;
     }
