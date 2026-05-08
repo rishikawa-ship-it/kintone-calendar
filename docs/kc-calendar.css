@@ -919,3 +919,40 @@ body.kc-dnd-active * {
   height: calc(100vh - var(--kc-fullscreen-header-h, 0px));
   grid-template-rows: repeat(6, 1fr);
 }
+
+/* ==========================================================================
+ * 16. 月ビュー: 土日祝の色付け（週ビュー .kc-cell--sat 等と同色系）
+ * ========================================================================== */
+
+/* 曜日ヘッダーの文字色 */
+.kc-month-dayhead--sat { color: #1a73e8; }
+.kc-month-dayhead--sun { color: #e53e3e; }
+.kc-month-dayhead--holiday { color: #e53e3e; }
+
+/* セル背景色（週ビューの rgba 値と統一） */
+.kc-month-cell--sat { background: rgba(26, 115, 232, 0.03); }
+.kc-month-cell--sun { background: rgba(229, 62, 62, 0.03); }
+.kc-month-cell--holiday { background: rgba(229, 62, 62, 0.03); }
+
+/* hover 時は --muted を優先（既存 .kc-month-cell:hover との整合）*/
+.kc-month-cell--sat:hover,
+.kc-month-cell--sun:hover,
+.kc-month-cell--holiday:hover { background: var(--kc-muted); }
+
+/* 当日（青丸）は背景色を上書きしない。.kc-month-datehead の青丸スタイルはそのまま維持 */
+.kc-month-cell--today.kc-month-cell--sat,
+.kc-month-cell--today.kc-month-cell--sun,
+.kc-month-cell--today.kc-month-cell--holiday { background: rgba(229, 62, 62, 0.03); }
+.kc-month-cell--today.kc-month-cell--sat { background: rgba(26, 115, 232, 0.03); }
+
+/* 祝日名表示（セル内日付の下） */
+.kc-month-holiday-name {
+  font-size: 10px;
+  color: #e53e3e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+  padding: 0 2px;
+  flex: 0 0 auto;
+}

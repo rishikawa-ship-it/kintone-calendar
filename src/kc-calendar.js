@@ -2273,9 +2273,11 @@
 
       daysEl.innerHTML = '';
       var labels = ['日', '月', '火', '水', '木', '金', '土'];
-      labels.forEach(function (label) {
+      labels.forEach(function (label, idx) {
         var cell = document.createElement('div');
         cell.className = 'kc-month-dayhead';
+        if (idx === 0) cell.classList.add('kc-month-dayhead--sun');
+        if (idx === 6) cell.classList.add('kc-month-dayhead--sat');
         cell.textContent = label;
         daysEl.appendChild(cell);
       });
@@ -2329,11 +2331,26 @@
         if (isOtherMonth) cell.classList.add('kc-month-cell--other-month');
         if (isToday) cell.classList.add('kc-month-cell--today');
 
+        // 土日祝クラス付与
+        var dow = cellDate.getDay();
+        if (dow === 0) cell.classList.add('kc-month-cell--sun');
+        if (dow === 6) cell.classList.add('kc-month-cell--sat');
+        var holidayName = U.getHolidayName(cellDate);
+        if (holidayName) cell.classList.add('kc-month-cell--holiday');
+
         // 日付数字（左上）
         var datehead = document.createElement('div');
         datehead.className = 'kc-month-datehead';
         datehead.textContent = String(cellDate.getDate());
         cell.appendChild(datehead);
+
+        // 祝日名表示（祝日のみ。textContent で XSS 安全）
+        if (holidayName) {
+          var holidayLabel = document.createElement('div');
+          holidayLabel.className = 'kc-month-holiday-name';
+          holidayLabel.textContent = holidayName;
+          cell.appendChild(holidayLabel);
+        }
 
         // セルクリック → 新規作成（Phase 1B-1: クリックハンドラ配線）
         cell.addEventListener('click', (function (capturedYMD) {
