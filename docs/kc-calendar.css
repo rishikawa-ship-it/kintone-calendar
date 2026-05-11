@@ -1011,3 +1011,12 @@ body.kc-dnd-active * {
   border-color:     #c2410c !important; /* やや濃いオレンジ枠（変更時はここを修正） */
   color:            #ffffff !important; /* 文字白（変更時はここを修正） */
 }
+
+/* 自分の予定の dot は白（オレンジ背景上で視認性確保）
+ * !important が必要な理由: JS が dot.style.background = evt.color でインラインスタイルを
+ * 設定するため、CSS クラスルールだけでは上書きできない。
+ * 他人の予定の dot（.kc-ad-event .dot, .kc-month-chip-dot）は JS のインラインスタイルのままとなる。 */
+.kc-ad-event--mine .dot,
+.kc-month-chip--mine .kc-month-chip-dot {
+  background: #ffffff !important;
+}
