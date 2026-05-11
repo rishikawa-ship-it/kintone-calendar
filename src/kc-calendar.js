@@ -348,6 +348,7 @@
     events: [],
     editing: null,
     alldayExpanded: false,   /* レーン展開トグル状態。初期値 false（折りたたみ）*/
+    eventFilter: 'all',      /* イベントフィルタ: 'all' | 'mine' | 'others'（localStorage 永続化）*/
     els: {},
 
     /** DOM参照の再取得 */
@@ -1946,6 +1947,44 @@
   }());
 
   /* ====================================================================
+   * KC.LoginContext — ログインユーザー情報と isMine 判定ユーティリティ
+   * KC.Boot.init で init() を呼ぶこと。
+   * ==================================================================== */
+  KC.LoginContext = (function () {
+    var _user = null;
+
+    /**
+     * ログインユーザー情報を取得してキャッシュする
+     * KC.Boot.init の冒頭で呼ぶ
+     */
+    function init() {
+      _user = kintone.getLoginUser();
+    }
+
+    /**
+     * ログインユーザーのコードを返す
+     * @returns {string|null}
+     */
+    function getUserCode() {
+      return _user ? _user.code : null;
+    }
+
+    /**
+     * KcEvent が自分の予定かどうかを判定する
+     * account が空の場合は false（他人扱い）
+     * @param {Object} evt - KcEvent
+     * @returns {boolean}
+     */
+    function isMine(evt) {
+      if (!_user || !evt) return false;
+      if (!evt.account) return false;
+      return evt.account === _user.code;
+    }
+
+    return { init: init, getUserCode: getUserCode, isMine: isMine };
+  }());
+
+  /* ====================================================================
    * KC.Lanes — レーン計算ユーティリティ（週ビュー・月ビュー共通）
    * KC.RenderWeek から切り出し。KC.RenderWeek より前に定義すること。
    * ==================================================================== */
@@ -2018,14 +2057,17 @@
 
     /**
      * 週イベント配列にレーン番号を付与する（破壊的変更）
-     * ソート規則: 期間（end - start）降順 → created 昇順 → id 昇順
-     * 期間の長い予定を上位レーンに配置するため、期間降順を第一キーとする。
+     * ソート規則: isMine 降順（自分の予定が先）→ 期間（end - start）降順 → created 昇順 → id 昇順
+     * 自分の予定を最上位レーンに配置し、期間の長い予定を優先する。
      * @param {Array} weekEvents - { colStart, span, start, end, created, id } を含む配列
      * @returns {Array} lane プロパティが付与された配列
      */
     function assignLanes(weekEvents) {
-      // 期間降順 → 作成日時昇順 → ID 昇順でソート（長い予定が上に来る）
+      // isMine 降順 → 期間降順 → 作成日時昇順 → ID 昇順でソート
       weekEvents.sort(function (a, b) {
+        var aIsMine = KC.LoginContext.isMine(a) ? 0 : 1;
+        var bIsMine = KC.LoginContext.isMine(b) ? 0 : 1;
+        if (aIsMine !== bIsMine) return aIsMine - bIsMine;
         var aDur = new Date(a.end).getTime() - new Date(a.start).getTime();
         var bDur = new Date(b.end).getTime() - new Date(b.start).getTime();
         if (bDur !== aDur) return bDur - aDur;
@@ -2215,8 +2257,12 @@
       var BAR_GAP = 3;    /* --kc-ad-bar-gap */
       var BAR_TOP = 4;    /* --kc-ad-bar-top */
 
+      var mine = KC.LoginContext.isMine(ev);
       var el = document.createElement('div');
-      el.className = 'kc-ad-event';
+      // 自分の予定は強調クラスを付与
+      el.className = mine ? 'kc-ad-event kc-ad-event--mine' : 'kc-ad-event';
+      // 他人の予定はドラッグカーソルをポインターに変更
+      if (!mine) el.style.cursor = 'pointer';
 
       // 絶対配置の位置計算（§3.3 の計算式）
       el.style.left   = ((ev.colStart / 7) * 100) + '%';
@@ -2249,20 +2295,22 @@
       el.appendChild(dot);
       el.appendChild(titleSpan);
 
-      // 左端リサイズハンドル
+      // 左端リサイズハンドル（他人の予定は DnD 不可）
       var leftHandle = document.createElement('div');
       leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
       leftHandle.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
+        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定はリサイズ不可
         mdEvt.stopPropagation();
         KC.DnD.startResizeAllday(ev, 'left', mdEvt, el);
       });
 
-      // 右端リサイズハンドル
+      // 右端リサイズハンドル（他人の予定は DnD 不可）
       var rightHandle = document.createElement('div');
       rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
       rightHandle.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
+        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定はリサイズ不可
         mdEvt.stopPropagation();
         KC.DnD.startResizeAllday(ev, 'right', mdEvt, el);
       });
@@ -2280,6 +2328,7 @@
       // mousedown → 終日 DnD 開始（バグ B 修正）
       el.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
+        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定は移動 DnD 不可
         // リサイズハンドルからの mousedown は stopPropagation されるためここには届かない
         KC.DnD.startMoveAllday(ev, mdEvt, el);
       });
@@ -2386,9 +2435,12 @@
         weekYMD.push(U.fmtYMD(U.addDays(range.start, wi)));
       }
 
+      // フィルタ適用（all: 全件, mine: 自分のみ, others: 他人のみ）
+      var filteredEvents = KC.EventFilter.apply(S.events || []);
+
       // ===== 終日イベント: Google カレンダー方式（単一絶対配置バー）=====
       var weekEvents = [];
-      (S.events || []).forEach(function (evt) {
+      filteredEvents.forEach(function (evt) {
         if (!evt.allday) return;
         var pos = KC.Lanes.eventToBarPosition(evt, weekYMD);
         if (!pos) return;
@@ -2456,7 +2508,7 @@
 
       // ===== 通常イベント配置（日跨ぎ対応: per-event 分割描画）=====
       // 各イベントに対して、表示週内の各日とのオーバーラップを計算しセグメントを生成する
-      (S.events || []).forEach(function (evt) {
+      filteredEvents.forEach(function (evt) {
         if (evt.allday) return;  // 終日は上記で処理済み
 
         var evStart = new Date(evt.start);
@@ -2487,6 +2539,7 @@
         if (hitDayIndices.length === 0) return;
 
         var isMultiDay = hitDayIndices.length > 1;
+        var evtMine = KC.LoginContext.isMine(evt);  // ループ外で一度だけ評価
         // 全セグメントの DOM を収集（DnD の origBars 渡し用）
         var segmentEls = [];
 
@@ -2524,7 +2577,9 @@
           }
 
           var div = document.createElement('div');
-          div.className = 'kc-event';
+          // 自分の予定は強調クラスを付与、他人の予定はドラッグカーソルを変更
+          div.className = evtMine ? 'kc-event kc-event--mine' : 'kc-event';
+          if (!evtMine) div.style.cursor = 'pointer';
           div.style.top    = 'calc(' + topPct + '% + 0px)';
           div.style.height = 'calc(' + heightPct + '% - 2px)';
           div.style.pointerEvents = 'auto';
@@ -2596,6 +2651,7 @@
           (function (capturedEvt, startEl, allSegs) {
             startEl.addEventListener('mousedown', function (mdEvt) {
               if (mdEvt.button !== 0) return;
+              if (!KC.LoginContext.isMine(capturedEvt)) return;  // 他人の予定は移動 DnD 不可
               KC.DnD.startMove(capturedEvt, mdEvt, startEl, allSegs);
             });
 
@@ -2605,6 +2661,7 @@
             if (tHandle) {
               tHandle.addEventListener('mousedown', function (mdEvt) {
                 if (mdEvt.button !== 0) return;
+                if (!KC.LoginContext.isMine(capturedEvt)) return;  // 他人の予定はリサイズ不可
                 mdEvt.stopPropagation();
                 KC.DnD.startResize(capturedEvt, 'top', mdEvt, startEl);
               });
@@ -2612,6 +2669,7 @@
             if (bHandle) {
               bHandle.addEventListener('mousedown', function (mdEvt) {
                 if (mdEvt.button !== 0) return;
+                if (!KC.LoginContext.isMine(capturedEvt)) return;  // 他人の予定はリサイズ不可
                 mdEvt.stopPropagation();
                 KC.DnD.startResize(capturedEvt, 'bottom', mdEvt, startEl);
               });
@@ -2957,8 +3015,12 @@
      * @returns {HTMLElement}
      */
     function buildMonthAlldayBar(ev) {
+      var mine = KC.LoginContext.isMine(ev);
       var el = document.createElement('div');
-      el.className = 'kc-ad-event';
+      // 自分の予定は強調クラスを付与
+      el.className = mine ? 'kc-ad-event kc-ad-event--mine' : 'kc-ad-event';
+      // 他人の予定はドラッグカーソルをポインターに変更
+      if (!mine) el.style.cursor = 'pointer';
 
       // 絶対配置の位置計算
       el.style.left   = ((ev.colStart / 7) * 100) + '%';
@@ -2988,20 +3050,22 @@
       el.appendChild(dot);
       el.appendChild(titleSpan);
 
-      // 左端リサイズハンドル（§3.4）
+      // 左端リサイズハンドル（§3.4、他人の予定は DnD 不可）
       var leftHandle = document.createElement('div');
       leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
       leftHandle.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
+        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定はリサイズ不可
         mdEvt.stopPropagation();
         KC.DnD.startResizeAlldayMonth(ev, 'left', mdEvt, el);
       });
 
-      // 右端リサイズハンドル（§3.4）
+      // 右端リサイズハンドル（§3.4、他人の予定は DnD 不可）
       var rightHandle = document.createElement('div');
       rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
       rightHandle.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
+        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定はリサイズ不可
         mdEvt.stopPropagation();
         KC.DnD.startResizeAlldayMonth(ev, 'right', mdEvt, el);
       });
@@ -3014,10 +3078,11 @@
         KC.Popup.openEdit(ev.id);
       });
 
-      // mousedown → 月ビュー終日移動 DnD 開始（§3.3）
+      // mousedown → 月ビュー終日移動 DnD 開始（§3.3、他人の予定は DnD 不可）
       // stopPropagation でセル側の click ハンドラ（新規作成ポップアップ）への伝播を防ぐ
       el.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
+        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定は移動 DnD 不可
         mdEvt.stopPropagation();
         KC.DnD.startMoveAlldayMonth(ev, mdEvt, el);
       });
@@ -3031,9 +3096,13 @@
      * @returns {HTMLElement}
      */
     function buildMonthChip(evt) {
+      var chipMine = KC.LoginContext.isMine(evt);
       var color = evt.color || '#3b82f6';
       var chip = document.createElement('div');
-      chip.className = 'kc-month-chip';
+      // 自分の予定は強調クラスを付与
+      chip.className = chipMine ? 'kc-month-chip kc-month-chip--mine' : 'kc-month-chip';
+      // 他人の予定はドラッグカーソルをポインターに変更
+      if (!chipMine) chip.style.cursor = 'pointer';
       chip.dataset.evId = evt.id;
       chip.style.background = _chipBg(color);
       chip.style.color = '#1f2937';  // 15% 透過背景は薄いため常にダークで可読
@@ -3060,11 +3129,12 @@
         KC.Popup.openEdit(evt.id);
       });
 
-      // mousedown → 月ビュー chip 移動 DnD 開始（スコープ C）
+      // mousedown → 月ビュー chip 移動 DnD 開始（スコープ C、他人の予定は DnD 不可）
       // クロージャで evt を捕捉し、chip 要素の参照も渡す
       chip.addEventListener('mousedown', (function (capturedEvt, capturedChip) {
         return function (mdEvt) {
           if (mdEvt.button !== 0) return;
+          if (!KC.LoginContext.isMine(capturedEvt)) return;  // 他人の予定は移動 DnD 不可
           mdEvt.stopPropagation();
           KC.DnD.startMoveMonthChip(capturedEvt, mdEvt, capturedChip);
         };
@@ -3213,6 +3283,9 @@
 
       var range = monthRange(S.current);
 
+      // フィルタ適用（all: 全件, mine: 自分のみ, others: 他人のみ）
+      var filteredMonthEvents = KC.EventFilter.apply(S.events || []);
+
       var weekEls = Array.from(gridEl.querySelectorAll('.kc-month-week'));
       weekEls.forEach(function (weekEl, weekIdx) {
         // この週の 7 日分の YYYY-MM-DD を算出
@@ -3222,7 +3295,7 @@
         }
 
         // 当週にかかる終日イベントを抽出（週内に 1 日でも重なるもの）
-        var weekAllday = (S.events || []).filter(function (evt) {
+        var weekAllday = filteredMonthEvents.filter(function (evt) {
           if (!evt.allday) return false;
           return KC.Lanes.eventToBarPosition(evt, weekYMD) !== null;
         });
@@ -3239,7 +3312,7 @@
           var usedSlots = alldayResult.colLaneCounts[colIdx] || 0;
 
           // このセルの時間予定を抽出（時刻昇順）
-          var dayTimedEvents = (S.events || []).filter(function (evt) {
+          var dayTimedEvents = filteredMonthEvents.filter(function (evt) {
             if (evt.allday) return false;
             return U.fmtYMD(new Date(evt.start)) === ymd;
           });
@@ -3585,6 +3658,188 @@
   };
 
   /* ====================================================================
+   * KC.EventFilter — イベントフィルタリングユーティリティ
+   * KC.State.eventFilter の値に基づいてイベント配列を絞り込む
+   * ==================================================================== */
+  KC.EventFilter = {
+    /**
+     * KC.State.eventFilter に基づいてイベント配列を絞り込む
+     * - 'all': 全件返す
+     * - 'mine': 自分のイベントのみ（account が空の場合は非表示）
+     * - 'others': 他人のイベントのみ（account が空の場合は表示）
+     * @param {Array} events - KcEvent 配列
+     * @returns {Array} フィルタ済み配列
+     */
+    apply: function (events) {
+      var filter = KC.State.eventFilter || 'all';
+      if (filter === 'mine') {
+        return events.filter(function (e) { return KC.LoginContext.isMine(e); });
+      }
+      if (filter === 'others') {
+        // account が空のレコードは「他人扱い」として表示
+        return events.filter(function (e) { return !KC.LoginContext.isMine(e); });
+      }
+      return events;  // 'all': フィルタなし
+    }
+  };
+
+  /* ====================================================================
+   * KC.FilterDropdown — イベントフィルタドロップダウン
+   * ヘッダー右側に「すべて / 自分のみ / 他人のみ」を切り替える UI を提供する
+   * ==================================================================== */
+  KC.FilterDropdown = {
+    /** localStorage のキー */
+    STORAGE_KEY: 'kc-event-filter',
+
+    /**
+     * localStorage からフィルタ値を読み込み KC.State.eventFilter を初期化する
+     * DOM 構築前に呼ぶこと
+     */
+    loadFilter: function () {
+      try {
+        var saved = localStorage.getItem(this.STORAGE_KEY);
+        if (saved === 'mine' || saved === 'others' || saved === 'all') {
+          KC.State.eventFilter = saved;
+        }
+      } catch (e) {
+        // localStorage が使えない環境ではデフォルト値を維持
+        console.warn('[KC.FilterDropdown] localStorage 読み込み失敗:', e);
+      }
+    },
+
+    /**
+     * フィルタ値を保存して再描画する
+     * @param {string} value - 'all' | 'mine' | 'others'
+     */
+    _saveAndRefresh: function (value) {
+      KC.State.eventFilter = value;
+      try {
+        localStorage.setItem(this.STORAGE_KEY, value);
+      } catch (e) {
+        console.warn('[KC.FilterDropdown] localStorage 保存失敗:', e);
+      }
+      KC.Render.refresh();
+    },
+
+    /**
+     * フィルタ値に対応する表示ラベルを返す
+     * @param {string} value
+     * @returns {string}
+     */
+    _labelFor: function (value) {
+      if (value === 'mine')   return '自分のみ';
+      if (value === 'others') return '他人のみ';
+      return 'すべて';
+    },
+
+    /**
+     * フィルタドロップダウン DOM を生成して headRight に追加する
+     * @param {HTMLElement} headRight - .kc-head-right 要素
+     */
+    buildDOM: function (headRight) {
+      var self = this;
+      var wrap = document.createElement('div');
+      wrap.className = 'kc-dropdown';
+      wrap.id = 'kc-filter';
+
+      var btn = document.createElement('button');
+      btn.className = 'kc-dropdown-btn';
+      btn.id = 'kc-filter-select';
+      btn.setAttribute('aria-haspopup', 'listbox');
+      btn.setAttribute('aria-expanded', 'false');
+      btn.textContent = self._labelFor(KC.State.eventFilter) + ' ';
+      var caret = document.createElement('span');
+      caret.className = 'kc-caret';
+      caret.textContent = '▾'; // ▾
+      btn.appendChild(caret);
+
+      var menuUl = document.createElement('ul');
+      menuUl.className = 'kc-dropdown-menu';
+      menuUl.setAttribute('role', 'listbox');
+      menuUl.setAttribute('aria-label', 'フィルタ切替');
+
+      var options = [
+        { value: 'all',    label: 'すべて' },
+        { value: 'mine',   label: '自分のみ' },
+        { value: 'others', label: '他人のみ' }
+      ];
+
+      options.forEach(function (opt) {
+        var li = document.createElement('li');
+        li.className = 'kc-option';
+        li.setAttribute('role', 'option');
+        li.dataset.value = opt.value;
+        li.setAttribute('aria-selected', String(opt.value === KC.State.eventFilter));
+        li.textContent = opt.label;
+        menuUl.appendChild(li);
+      });
+
+      wrap.appendChild(btn);
+      wrap.appendChild(menuUl);
+
+      // ドロップダウン開閉ロジック（KC.ViewDropdown と同パターン）
+      function open() {
+        wrap.classList.add('open');
+        btn.setAttribute('aria-expanded', 'true');
+      }
+      function close() {
+        wrap.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+      function toggle(e) {
+        if (e) e.preventDefault();
+        wrap.classList.contains('open') ? close() : open();
+      }
+
+      function choose(value, label) {
+        // ボタンのテキストノードを更新（caret は保持）
+        if (btn.childNodes.length > 0) {
+          btn.childNodes[0].nodeValue = label + ' ';
+        } else {
+          btn.textContent = label + ' ';
+        }
+        // aria-selected 更新
+        Array.from(menuUl.querySelectorAll('.kc-option')).forEach(function (li) {
+          li.setAttribute('aria-selected', String(li.dataset.value === value));
+        });
+        close();
+        self._saveAndRefresh(value);
+      }
+
+      btn.addEventListener('click', toggle);
+      btn.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') toggle(e);
+        if (e.key === 'Escape') close();
+      });
+
+      Array.from(menuUl.querySelectorAll('.kc-option')).forEach(function (li) {
+        li.addEventListener('click', function () {
+          choose(li.dataset.value, li.textContent.trim());
+        });
+        li.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' || e.key === ' ') {
+            choose(li.dataset.value, li.textContent.trim());
+          }
+        });
+      });
+
+      document.addEventListener('click', function (e) {
+        if (!wrap.contains(e.target)) close();
+      });
+
+      // ビュードロップダウンの前に挿入（headRight の先頭）
+      headRight.insertBefore(wrap, headRight.firstChild);
+    },
+
+    /** DOM 構築後にドロップダウンを初期化する（KC.Boot.init から呼ぶ） */
+    init: function () {
+      var headRight = document.querySelector('.kc-head-right');
+      if (!headRight) return;
+      this.buildDOM(headRight);
+    }
+  };
+
+  /* ====================================================================
    * KC.ViewDropdown — ビュー切り替え
    * ==================================================================== */
   KC.ViewDropdown = {
@@ -3854,8 +4109,15 @@
       var root = document.getElementById('kc-root');
       if (!root) return;
 
+      // フィルタ設定を localStorage から復元（DOM 構築前に行う）
+      KC.FilterDropdown.loadFilter();
+
       // フィールド自動検出（KC_プレフィックスのフィールドを探す）
       await KC.Config.detectFields();
+
+      // ログインユーザー情報をキャッシュ（isMine 判定に使用）
+      // detectFields 完了後に呼ぶことで、フィールド定義が確定した状態で初期化される
+      KC.LoginContext.init();
 
       // 祝日データを非同期取得（await しない: 初回はハードコードで即時描画し、取得完了後に再描画）
       // CSP で外部 API がブロックされた場合は console.warn のみ出力して継続する
@@ -3948,6 +4210,9 @@
 
       // ViewDropdown 初期化
       KC.ViewDropdown.init();
+
+      // FilterDropdown 初期化（フィルタドロップダウン UI を .kc-head-right に追加）
+      KC.FilterDropdown.init();
 
       // 全画面ボタンのイベント登録
       var fullscreenBtn = document.getElementById('kc-fullscreen-btn');

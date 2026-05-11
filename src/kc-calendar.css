@@ -991,3 +991,30 @@ body.kc-dnd-active * {
 .kc-month-chip.kc-event--dragging {
   opacity: 0.4;
 }
+
+/* ==========================================================================
+ * 18. 自分の予定の強調表示（ログインユーザーの account と一致する予定）
+ * ========================================================================== */
+
+/* 週ビュー: 時間予定バーの強調（背景色を少し明るく） */
+.kc-event--mine {
+  filter: brightness(1.15);
+}
+
+/* 週ビュー・月ビュー: 終日イベントバーの強調 */
+.kc-ad-event--mine {
+  filter: brightness(1.15);
+}
+
+/* 月ビュー: chip の強調 */
+.kc-month-chip--mine {
+  filter: brightness(1.1);
+}
+
+/* ドラッグ中の元バーは brightness を無効化 (opacity 0.4 のみ適用) */
+/* brightness + opacity が同時適用されると他人の予定と見分けがつかなくなるため */
+.kc-event--mine.kc-event--dragging,
+.kc-ad-event--mine.kc-ad-event--dragging,
+.kc-month-chip--mine.kc-event--dragging {
+  filter: none;
+}
