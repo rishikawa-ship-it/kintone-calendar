@@ -3077,55 +3077,28 @@
 
     /**
      * 月ビューの終日イベントを配置する
-     * 当月外セルへのバー描画を除外（§3.4 / §6.3 準拠）
+     * 他月セルを含む全 7 列を対象とする（当月クランプなし）
      * @param {HTMLElement} weekEl - .kc-month-week 要素
      * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
      * @param {Array} alldayEvents - 当週の終日イベント配列
-     * @param {number} currentMonth - 表示月（0〜11）
      * @returns {{ laneCount: number, colLaneCounts: number[] }}
      *   laneCount: 週全体の最大レーン数
      *   colLaneCounts: 各列（0〜6）のレーン占有数
      */
-    function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents, currentMonth) {
+    function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents) {
       var adLayer = weekEl.querySelector('.kc-month-ad-events');
       var result = { laneCount: 0, colLaneCounts: [0, 0, 0, 0, 0, 0, 0] };
       if (!adLayer || !alldayEvents || alldayEvents.length === 0) return result;
 
-      // 当月に属する weekYMD のインデックス範囲を求める
-      var minIdx = -1;
-      var maxIdx = -1;
-      for (var i = 0; i < 7; i++) {
-        // 'YYYY-MM-DD' はUTC午前0時解釈されるためローカル時刻として解釈させる（行1097と同パターン）
-        var d = new Date(weekYMD[i] + 'T00:00:00');
-        if (d.getMonth() === currentMonth) {
-          if (minIdx === -1) minIdx = i;
-          maxIdx = i;
-        }
-      }
-      // 当月セルがこの週に 1 つもない場合はスキップ
-      if (minIdx === -1) return result;
-
-      // 各イベントに対して barPosition を求め、当月範囲にクランプする
+      // 各イベントに対して barPosition を求める（他月セルも含む全列が対象）
       var weekEvents = [];
       alldayEvents.forEach(function (evt) {
         var pos = KC.Lanes.eventToBarPosition(evt, weekYMD);
         if (!pos) return;
 
-        var cs = pos.colStart;
-        var ce = cs + pos.span - 1;
-
-        // 当月範囲との交差判定
-        if (ce < minIdx || cs > maxIdx) return;
-
-        // 当月範囲にクランプ
-        var clampedStart = Math.max(cs, minIdx);
-        var clampedEnd   = Math.min(ce, maxIdx);
-        var clampedSpan  = clampedEnd - clampedStart + 1;
-        if (clampedSpan <= 0) return;
-
         weekEvents.push(Object.assign({}, evt, {
-          colStart:    clampedStart,
-          span:        clampedSpan,
+          colStart:    pos.colStart,
+          span:        pos.span,
           adDateRange: pos.adDateRange
         }));
       });
@@ -3241,7 +3214,6 @@
       var maxItems = _calcMaxItems();
 
       var range = monthRange(S.current);
-      var currentMonth = S.current.getMonth();
 
       var weekEls = Array.from(gridEl.querySelectorAll('.kc-month-week'));
       weekEls.forEach(function (weekEl, weekIdx) {
@@ -3257,18 +3229,13 @@
           return KC.Lanes.eventToBarPosition(evt, weekYMD) !== null;
         });
 
-        // 終日バーを配置してセルごとのレーン使用数を取得
-        var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday, currentMonth);
+        // 終日バーを配置してセルごとのレーン使用数を取得（他月セルも含む）
+        var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday);
 
-        // セルごとに時間予定 chip を配置
+        // セルごとに時間予定 chip を配置（他月セルも含む）
         var cellEls = Array.from(weekEl.querySelectorAll('.kc-month-cell'));
         cellEls.forEach(function (cellEl, colIdx) {
           var ymd = weekYMD[colIdx];
-
-          // 当月外セルはスキップ（chip も表示しない）
-          // 'YYYY-MM-DD' はUTC午前0時解釈されるためローカル時刻として解釈させる（行1097と同パターン）
-          var cellDate = new Date(ymd + 'T00:00:00');
-          if (cellDate.getMonth() !== currentMonth) return;
 
           // このセルの使用済みスロット数（終日バーのレーン占有数）
           var usedSlots = alldayResult.colLaneCounts[colIdx] || 0;
