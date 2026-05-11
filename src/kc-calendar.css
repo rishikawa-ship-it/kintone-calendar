@@ -996,25 +996,18 @@ body.kc-dnd-active * {
  * 18. 自分の予定の強調表示（ログインユーザーの account と一致する予定）
  * ========================================================================== */
 
-/* 週ビュー: 時間予定バーの強調（背景色を少し明るく） */
-.kc-event--mine {
-  filter: brightness(1.15);
-}
+/* 自分の予定は固定オレンジ色で強調表示する。
+ * !important が必要な理由: JS が el.style.background = evt.color でインラインスタイルを
+ * 設定するため、CSS クラスルールだけでは上書きできない。
+ * 色を変更したい場合はここの 3 変数（background-color / border-color / color）を修正する。 */
 
+/* 週ビュー: 時間予定バーの強調 */
+.kc-event--mine,
 /* 週ビュー・月ビュー: 終日イベントバーの強調 */
-.kc-ad-event--mine {
-  filter: brightness(1.15);
-}
-
+.kc-ad-event--mine,
 /* 月ビュー: chip の強調 */
 .kc-month-chip--mine {
-  filter: brightness(1.1);
-}
-
-/* ドラッグ中の元バーは brightness を無効化 (opacity 0.4 のみ適用) */
-/* brightness + opacity が同時適用されると他人の予定と見分けがつかなくなるため */
-.kc-event--mine.kc-event--dragging,
-.kc-ad-event--mine.kc-ad-event--dragging,
-.kc-month-chip--mine.kc-event--dragging {
-  filter: none;
+  background-color: #ea580c !important; /* 強調オレンジ（変更時はここを修正） */
+  border-color:     #c2410c !important; /* やや濃いオレンジ枠（変更時はここを修正） */
+  color:            #ffffff !important; /* 文字白（変更時はここを修正） */
 }
