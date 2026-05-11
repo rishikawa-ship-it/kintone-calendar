@@ -29,7 +29,6 @@
       allday:   { required: false, type: 'CHECK_BOX' },
       color:    { required: false, type: null },
       status:   { required: false, type: 'DROP_DOWN' },
-      device:   { required: false, type: null },
       place:    { required: false, type: null },
       userName: { required: false, type: null },
       userMail: { required: false, type: null },
@@ -45,7 +44,6 @@
       allday:   '終日',
       color:    '',
       status:   '貸出ステータス',
-      device:   '機器名',
       place:    '場所',
       userName: '利用者氏名',
       userMail: '利用者メールアドレス',
@@ -395,7 +393,6 @@
         rev:      rec.$revision.value,
         created:  rec.$created ? rec.$created.value : '',  /* 作成日時 (ISO 8601) — assignLanes のソートキー */
         title:    self._safeVal(rec, F.title),
-        device:   self._safeVal(rec, F.device),
         status:   self._safeVal(rec, F.status),
         color:    self._safeVal(rec, F.color),
         place:    self._safeVal(rec, F.place),
@@ -511,7 +508,6 @@
       var F = KC.Config.FIELD;
       var record = {};
       this._safeSet(record, F.title,    ev.title || '');
-      this._safeSet(record, F.device,   ev.device || '');
       this._safeSet(record, F.status,   ev.status || '');
 
       if (KC.Config.START_FIELD_TYPE === 'DATE') {
@@ -569,7 +565,6 @@
 
       if ('allday'   in ev && F.allday)   record[F.allday]   = { value: ev.allday ? [KC.Config.ALLDAY_LABEL] : [] };
       if ('color'    in ev && F.color)    record[F.color]    = { value: ev.color || '' };
-      if ('device'   in ev && F.device)   record[F.device]   = { value: ev.device || '' };
       if ('status'   in ev && F.status)   record[F.status]   = { value: ev.status || '' };
       if ('userMail' in ev && F.userMail) record[F.userMail] = { value: ev.userMail || '' };
       if ('userName' in ev && F.userName) record[F.userName]  = { value: ev.userName || '' };
@@ -2556,7 +2551,7 @@
 
           var metaDiv = document.createElement('div');
           metaDiv.className = 'kc-evt-meta';
-          metaDiv.textContent = fullTimeStr + (evt.device ? ' / ' + evt.device : '');
+          metaDiv.textContent = fullTimeStr;
           if (evt.color) {
             metaDiv.style.color = KC.Lanes.isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
           }

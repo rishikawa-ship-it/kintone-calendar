@@ -113,7 +113,6 @@ KC.Config = {
   getAppId: () => kintone.app.getId(),
   FIELD: {
     title:    '予定タイトル',
-    device:   '機器名',
     status:   '貸出ステータス',
     start:    '開始日時',
     end:      '終了日時',
@@ -277,7 +276,6 @@ const resp = await kintone.api(url, 'GET', params);
 const url = kintone.api.url('/k/v1/record.json', true);
 const record = {
   [F.title]:  { value: ev.title },
-  [F.device]: { value: ev.device },
   [F.status]: { value: ev.status },
   [F.start]:  { value: ev.start },
   [F.end]:    { value: ev.end },
@@ -321,7 +319,6 @@ function recordToEvent(rec) {
     id:       rec.$id.value,
     rev:      rec.$revision.value,
     title:    rec[F.title].value,
-    device:   rec[F.device].value,
     status:   rec[F.status].value,
     start:    rec[F.start].value,
     end:      rec[F.end].value,
@@ -346,7 +343,6 @@ function recordToEvent(rec) {
 | id | string | kintoneレコードID |
 | rev | string | リビジョン |
 | title | string | 予定タイトル（必須） |
-| device | string | 機器名 |
 | status | string | 貸出ステータス |
 | start | string | 開始日時 ISO 8601 |
 | end | string | 終了日時 ISO 8601 |
@@ -386,7 +382,6 @@ function recordToEvent(rec) {
 `<dialog>` 要素として JS で動的生成。フォーム項目:
 
 - 予定タイトル（必須, text）
-- 機器名（text）
 - 貸出ステータス（select: 予約済/貸出中/返却済）
 - 開始日時（datetime-local）
 - 終了日時（datetime-local）
