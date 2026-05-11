@@ -2023,16 +2023,19 @@
 
     /**
      * 週イベント配列にレーン番号を付与する（破壊的変更）
-     * ソート規則: created 昇順 → id 昇順
-     * @param {Array} weekEvents - { colStart, span, created, id } を含む配列
+     * ソート規則: 期間（end - start）降順 → created 昇順 → id 昇順
+     * 期間の長い予定を上位レーンに配置するため、期間降順を第一キーとする。
+     * @param {Array} weekEvents - { colStart, span, start, end, created, id } を含む配列
      * @returns {Array} lane プロパティが付与された配列
      */
     function assignLanes(weekEvents) {
-      // 作成日時昇順 → ID 昇順でソート
+      // 期間降順 → 作成日時昇順 → ID 昇順でソート（長い予定が上に来る）
       weekEvents.sort(function (a, b) {
-        if (a.created < b.created) return -1;
-        if (a.created > b.created) return 1;
-        return Number(a.id) - Number(b.id);
+        var aDur = new Date(a.end).getTime() - new Date(a.start).getTime();
+        var bDur = new Date(b.end).getTime() - new Date(b.start).getTime();
+        if (bDur !== aDur) return bDur - aDur;
+        if (a.created !== b.created) return a.created < b.created ? -1 : 1;
+        return a.id < b.id ? -1 : 1;
       });
 
       // レーン占有テーブル: laneOccupied[lane] = [{ endCol: number }, ...]
@@ -2398,7 +2401,7 @@
         weekEvents.push(Object.assign({}, evt, pos));
       });
 
-      // レーン割り当て（created 昇順 → id 昇順ソート後にレーン計算）
+      // レーン割り当て（期間降順 → created 昇順 → id 昇順ソート後にレーン計算）
       KC.Lanes.assignLanes(weekEvents);
 
       // 最大レーン番号を算出（イベントが 0 件のときは -1）
