@@ -465,7 +465,16 @@
       // クエリ構築（動的。cursor API では limit 句は不要）
       var conditions = [];
       conditions.push('(' + F.start + ' < "' + qEnd + '")');
-      conditions.push('(' + F.end + ' > "' + qStart + '")');
+      // ">=" を使う理由:
+      // 【DATE 型】kintone の end RAW 値 "YYYY-MM-DD" が qStart（同形式）と等しい
+      // 当日限りのイベント（例: 5/1 単日終日）を含めるため。
+      // クエリ構築時点では _recordToEvent による翌日変換は適用されておらず、
+      // kintone への問い合わせは RAW 値同士の文字列比較となるため "> qStart" では
+      // 当日終日イベントが除外されてしまう。
+      // 【DATETIME 型】現運用アプリは DATE 型のため実機未検証。
+      // eventToBarPosition の getDate()-1 処理によって誤表示は生じない想定だが、
+      // DATETIME 型運用が発生した際に挙動を実機確認し、本コメントに追記すること。
+      conditions.push('(' + F.end + ' >= "' + qStart + '")');
 
       if (F.status) {
         var excluded = KC.Config.EXCLUDED_STATUSES.map(function (s) { return '"' + s + '"'; }).join(',');
@@ -770,12 +779,13 @@
      * @param {number} span - 列数（1〜）
      * @param {number} lane - レーン番号（元バーの lane）
      */
-    function _positionAlldayGhost(ghost, colStart, span, lane) {
+    function _positionAlldayGhost(ghost, colStart, span, lane, colCount) {
       var BAR_H   = 22;
       var BAR_GAP = 3;
       var BAR_TOP = 4;
-      ghost.style.left   = ((colStart / 7) * 100) + '%';
-      ghost.style.width  = ((span / 7) * 100) + '%';
+      var cc = colCount || _getWeekYMDs().length || 7;
+      ghost.style.left   = ((colStart / cc) * 100) + '%';
+      ghost.style.width  = ((span / cc) * 100) + '%';
       ghost.style.top    = (BAR_TOP + lane * (BAR_H + BAR_GAP)) + 'px';
       ghost.style.height = BAR_H + 'px';
     }
@@ -967,8 +977,8 @@
       _drag.newEnd   = KC.Utils.fmtYMD(newEnd)   + 'T00:00:00+09:00';
 
       // ゴースト位置更新
-      var clampedSpan = Math.min(spanDays, 7 - info.colIdx);
-      _positionAlldayGhost(_drag.ghost, info.colIdx, clampedSpan, _drag.lane);
+      var clampedSpan = Math.min(spanDays, weekYMDs.length - info.colIdx);
+      _positionAlldayGhost(_drag.ghost, info.colIdx, clampedSpan, _drag.lane, weekYMDs.length);
       _updateAlldayGhostLabel(_drag.ghost, newStart, newEnd);
     }
 
@@ -1053,10 +1063,11 @@
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
-      _positionAlldayGhost(ghost, ev.colStart || 0, ev.span || 1, ev.lane || 0);
+      var weekYMDs = _getWeekYMDs();
+      _positionAlldayGhost(ghost, ev.colStart || 0, ev.span || 1, ev.lane || 0, weekYMDs.length);
 
       _drag = {
-        view:     'week',
+        view:     KC.State.view === 'day' ? 'day' : 'week',
         type:     'move-allday',
         ev:       ev,
         ghost:    ghost,
@@ -1134,11 +1145,11 @@
       var displayEndDate = U.addDays(newEndDate, -1);
       var colEnd   = weekYMDs.indexOf(U.fmtYMD(displayEndDate));
       if (colStart < 0) colStart = 0;
-      if (colEnd < 0) colEnd = 6;
+      if (colEnd < 0) colEnd = weekYMDs.length - 1;
       var span = colEnd - colStart + 1;
       if (span < 1) span = 1;
 
-      _positionAlldayGhost(_drag.ghost, colStart, span, _drag.lane);
+      _positionAlldayGhost(_drag.ghost, colStart, span, _drag.lane, weekYMDs.length);
       _updateAlldayGhostLabel(_drag.ghost, newStartDate, newEndDate);
     }
 
@@ -1196,10 +1207,11 @@
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
-      _positionAlldayGhost(ghost, ev.colStart || 0, ev.span || 1, ev.lane || 0);
+      var weekYMDs = _getWeekYMDs();
+      _positionAlldayGhost(ghost, ev.colStart || 0, ev.span || 1, ev.lane || 0, weekYMDs.length);
 
       _drag = {
-        view:     'week',
+        view:     KC.State.view === 'day' ? 'day' : 'week',
         type:     side === 'left' ? 'resize-left' : 'resize-right',
         ev:       ev,
         ghost:    ghost,
@@ -2161,7 +2173,7 @@
      * @returns {HTMLElement}
      */
     function buildAlldayBar(ev, locator) {
-      var colCount = (locator && locator.colCount) ? locator.colCount : 7;
+      var colCount = (locator && locator.colCount > 0) ? locator.colCount : 7;
       var BAR_H   = 22;
       var BAR_GAP = 3;
       var BAR_TOP = 4;
@@ -2961,12 +2973,16 @@
 
     /**
      * 週ビュー DOM を再表示し、月ビュー DOM を非表示にする
+     * _monthRoot が null の場合（月ビューが一度も描画されていない初期状態など）は
+     * DOM クエリでフォールバックして確実に非表示にする（§True-Cause-A 修正）
      */
     function _showWeekDOM() {
       var gridWrap = document.querySelector('.kc-grid-wrap');
       if (gridWrap) gridWrap.style.display = '';
 
-      if (_monthRoot) _monthRoot.style.display = 'none';
+      // _monthRoot が未設定の場合は DOM から直接取得して非表示にする
+      var monthRootEl = _monthRoot || document.getElementById('kc-month-root');
+      if (monthRootEl) monthRootEl.style.display = 'none';
     }
 
     /**
@@ -3610,7 +3626,7 @@
 
       dayEvents.forEach(function (ev) {
         if (!eventsLayer) return;
-        var bar = KC.RenderShared.buildAlldayBar(ev, { colCount: 1 });
+        var bar = KC.RenderShared.buildAlldayBar(ev, { colCount: dayYMDs.length });
         eventsLayer.appendChild(bar);
       });
 
@@ -3767,6 +3783,12 @@
      */
     function renderGrid() {
       document.documentElement.style.setProperty('--kc-col-count', '1');
+      // 月ビュー DOM が残留している場合は確実に非表示にする（§True-Cause-A 防御）
+      // KC.Render.refresh() の _showWeekDOM() 呼び出しが何らかの理由で
+      // 適用されなかった場合のフォールバックとして機能する
+      if (KC.RenderMonth && typeof KC.RenderMonth._showWeekDOM === 'function') {
+        KC.RenderMonth._showWeekDOM();
+      }
       renderDayHeaders();
       renderAlldayRow();
       renderRows();
