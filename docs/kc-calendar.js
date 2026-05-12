@@ -2037,11 +2037,11 @@
     }
 
     /**
-     * 週内でのイベントのバー位置を算出する
+     * 表示期間内でのイベントのバー位置を算出する
      * @param {Object} evt - KcEvent（start, end を含む）
-     * @param {string[]} weekYMD - 7 要素の YYYY-MM-DD 配列（index 0 = 日曜）
+     * @param {string[]} weekYMD - 表示列の YYYY-MM-DD 配列（週ビュー=7要素, 日ビュー=1要素）
      * @returns {{ colStart: number, span: number, adDateRange: string } | null}
-     *   当週に表示範囲がない場合は null
+     *   表示範囲に重なりがない場合は null
      */
     function eventToBarPosition(evt, weekYMD) {
       var s = new Date(evt.start);
@@ -2057,9 +2057,9 @@
       var adEndStr    = (endDate.getMonth() + 1) + '/' + endDate.getDate();
       var adDateRange = (adStartStr === adEndStr) ? adStartStr : (adStartStr + ' ~ ' + adEndStr);
 
-      // 当週の開始・終了を YYYY-MM-DD で取得
+      // 表示期間の開始・終了を YYYY-MM-DD で取得（日ビュー=1要素, 週ビュー=7要素に対応）
       var weekStartYMD = weekYMD[0];
-      var weekEndYMD   = weekYMD[6];
+      var weekEndYMD   = weekYMD[weekYMD.length - 1];
 
       // 表示する開始列: max(イベント開始日, 週開始日)
       var evStartYMD = U.fmtYMD(startDate);
