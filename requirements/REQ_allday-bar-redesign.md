@@ -1006,7 +1006,7 @@ function buildAlldayBar(ev) {
 - **バー内容**: バーには件名テキストのみを表示する。日付情報は `title` 属性（ツールチップ）に保持すること（§3.5 参照）
 - **廃止クラス**: `.kc-ad-evt-content` および `.kc-ad-evt-date` は実装に含めないこと
 - **関数分離**: `eventToBarPosition` / `assignLanes` / `calcCollapsedLanes` / `buildAlldayBar` / `updateAlldayToggle` はそれぞれ独立した内部関数として `placeEvents` の前に定義し、責務を分離すること（`coding-rules.md` の「1 関数 1 責務」ルール準拠）
-- **XSS 対策**: `textContent` を使用し、`innerHTML` にユーザー入力を直接代入しないこと（`DESIGN.md §9.3`）
+- **XSS 対策**: `textContent` を使用し、`innerHTML` にユーザー入力を直接代入しないこと（`DESIGN.md §10.3`）
 - **コメント**: 既存コードの JSDoc 相当のコメントスタイルに合わせること
 - **トグル配置**: `§3.6.2` の案 1（flex）または案 2（absolute）を選択して実装すること。配置案は確定済みのため、仮実装の必要はない
 

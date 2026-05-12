@@ -312,17 +312,27 @@ await kintone.api(url, 'DELETE', {
 
 ### 5.5 レコード → KcEvent 変換
 
+> **注意**: 下記は設計上の概略。実際の実装（`src/kc-calendar.js` の `KC.Api._recordToEvent`）では `KC.Config.START_FIELD_TYPE` に基づいて DATE 型 / DATETIME 型を分岐処理する。詳細は §9「終日判定ルール」を参照。
+
 ```javascript
 function recordToEvent(rec) {
   const F = KC.Config.FIELD;
+  // START_FIELD_TYPE === 'DATE' の場合:
+  //   - allday を true に強制セット（DATE 型 = 常に終日）
+  //   - start/end を "YYYY-MM-DD" → ISO 8601 に変換
+  //   - end を翌日 0:00 に変換（placeEvents の描画ロジック統一のため）
+  // START_FIELD_TYPE === 'DATETIME' の場合:
+  //   - allday は CHECK_BOX フィールドの値を参照
+  //   - start/end はそのまま ISO 8601
   return {
     id:       rec.$id.value,
     rev:      rec.$revision.value,
+    created:  rec.$created ? rec.$created.value : '',  // レーン割り当てのソートキー
     title:    rec[F.title].value,
     status:   rec[F.status].value,
-    start:    rec[F.start].value,
-    end:      rec[F.end].value,
-    allday:   (rec[F.allday].value || []).includes('終日'),
+    start:    rec[F.start].value,   // ISO 8601（DATE 型時は変換済み）
+    end:      rec[F.end].value,     // ISO 8601（DATE 型時は翌日 0:00 に変換済み）
+    allday:   /* DATE 型なら true 固定、DATETIME 型なら CHECK_BOX 参照 */ false,
     place:    rec[F.place].value,
     userName: rec[F.userName].value,
     userMail: rec[F.userMail].value,
@@ -342,11 +352,12 @@ function recordToEvent(rec) {
 |---|---|---|
 | id | string | kintoneレコードID |
 | rev | string | リビジョン |
+| created | string | 作成日時 ISO 8601（`$created` システムフィールド。レーン割り当てのソートキー）|
 | title | string | 予定タイトル（必須） |
 | status | string | 貸出ステータス |
-| start | string | 開始日時 ISO 8601 |
-| end | string | 終了日時 ISO 8601 |
-| allday | boolean | 終日フラグ |
+| start | string | 開始日時 ISO 8601（DATE 型フィールドの場合は "YYYY-MM-DDT00:00:00.000Z" に変換済み）|
+| end | string | 終了日時 ISO 8601（DATE 型フィールドの場合は翌日 0:00 に変換済み）|
+| allday | boolean | 終日フラグ（DATE 型フィールドの場合は常に `true`。詳細は §9 参照）|
 | place | string | 場所 |
 | userName | string | 利用者氏名 |
 | userMail | string | メールアドレス |
@@ -430,15 +441,88 @@ JSがこの中にヘッダー・グリッド・ダイアログを構築する。
 
 ---
 
-## 9. 実装上の注意事項
+## 9. 終日判定ルール
 
-### 9.1 kintone 固有の制約
+### 9.1 設計思想
+
+本カレンダーカスタマイズは `start` / `end` フィールドに **DATETIME 型と DATE 型の両方**を採用できる。DATE 型には時間情報が存在しないため、時間レーンへの描画は物理的に不可能であり、DATE 型のイベントは **常に終日扱い** となる。これにより、日にち単位でレコードを扱うアプリ（例: 機器貸出日管理）でも本カスタマイズをそのまま利用できる。
+
+### 9.2 終日判定の 3 パターン
+
+| `start` / `end` フィールド型 | `allday` チェックボックス | 描画レーン | 備考 |
+|---|---|---|---|
+| **DATE 型** | 無視（参照しない） | **常に終日** | DATE 型に時間情報が存在しないため |
+| **DATETIME 型** | ON（チェック済み） | 終日 | ユーザーが明示的に終日指定 |
+| **DATETIME 型** | OFF（未チェック） | 時間あり | 通常の時間予定 |
+
+### 9.3 フィールド型の自動検出
+
+`KC.Config.detectFields()` が起動時に kintone REST API でフィールド定義を取得し、`KC_start` フィールドの型を `KC.Config.START_FIELD_TYPE` に格納する（値は `'DATETIME'` または `'DATE'`）。以降のロジックはこの値を参照して分岐する。
+
+```javascript
+// KC.Config.START_FIELD_TYPE が設定されるタイミング（src/kc-calendar.js:109）
+this.START_FIELD_TYPE = props[this.FIELD.start]
+  ? props[this.FIELD.start].type
+  : 'DATETIME';  // 検出失敗時のフォールバック
+```
+
+### 9.4 内部処理の詳細
+
+#### `_recordToEvent` での処理（src/kc-calendar.js:429–447）
+
+```
+START_FIELD_TYPE === 'DATE' の場合:
+  1. ev.allday = true  （強制的に終日フラグをセット）
+  2. startVal ("YYYY-MM-DD") を "YYYY-MM-DDT00:00:00.000Z" に変換
+  3. endVal ("YYYY-MM-DD") の翌日 0:00 に変換（描画ロジック統一のため）
+     例: "2025-11-03" → endDate = new Date("2025-11-03T00:00:00") → setDate(+1) → toISOString()
+
+START_FIELD_TYPE === 'DATETIME' の場合:
+  1. ev.start / ev.end はそのまま（ISO 8601 形式）
+  2. allday フィールドが設定されていれば CHECK_BOX の値を参照してフラグをセット
+     ev.allday = (rec[F.allday].value || []).includes(KC.Config.ALLDAY_LABEL)
+```
+
+終日イベントの `end` を「翌日 0:00」に統一することで、`placeEvents` 内の終日バー描画ロジックが DATE 型・DATETIME 型を区別せず同一処理で扱える。
+
+#### `loadEvents` のクエリ条件（src/kc-calendar.js:460–468）
+
+DATE 型の場合、kintone クエリに渡す日付形式が `"YYYY-MM-DD"` になる（DATETIME 型の ISO 8601 形式と区別が必要）。
+
+```javascript
+if (KC.Config.START_FIELD_TYPE === 'DATE') {
+  qStart = isoStart.substring(0, 10);  // "YYYY-MM-DD" に変換
+  qEnd   = isoEnd.substring(0, 10);
+}
+// クエリ条件: end >= qStart（当日終日イベントの取得漏れ防止）
+conditions.push('(' + F.start + ' < "' + qEnd + '")');
+conditions.push('(' + F.end + '  > "' + qStart + '")');
+```
+
+`end > qStart`（`>=` ではなく `>`）の条件で、当日が `end` と一致する単日終日イベント（DATE 型で `start = end = "YYYY-MM-DD"`）が取得漏れしないよう、クエリ範囲の境界設計に注意が必要。
+
+#### データ保存時のフォーマット変換（src/kc-calendar.js:537–579）
+
+DATE 型のとき、API への送信値は `"YYYY-MM-DD"` 形式に変換する（ISO 8601 形式のまま送ると kintone が型エラーを返す）。
+
+```javascript
+if (KC.Config.START_FIELD_TYPE === 'DATE') {
+  record[F.start] = { value: ev.start.substring(0, 10) };  // "YYYY-MM-DD"
+  record[F.end]   = { value: ev.end.substring(0, 10) };    // "YYYY-MM-DD"
+}
+```
+
+---
+
+## 10. 実装上の注意事項
+
+### 10.1 kintone 固有の制約
 
 1. **二重初期化防止**: `app.record.index.show` はビュー切替のたびに発火。フラグで制御。
 2. **CSS スコープ**: `.kc-` プレフィックスで kintone 標準CSSとの衝突を防止。`html, body` へのスタイル適用禁止。
 3. **高さ計算**: `100vh` ではなく kintone ヘッダーを考慮した `calc()` を使用。
 
-### 9.2 GAS版からの変更点
+### 10.2 GAS版からの変更点
 
 1. `google.script.run` → `kintone.api()` (async/await)
 2. スプレッドシートキャッシュ → 廃止（kintone直接読取）
@@ -449,12 +533,12 @@ JSがこの中にヘッダー・グリッド・ダイアログを構築する。
 7. イベント要素クリック → Dialog.openEdit() を追加
 8. XSS対策 → innerHTML にユーザー入力を直接代入しない
 
-### 9.3 セキュリティ
+### 10.3 セキュリティ
 
 - `textContent` 使用 or `escapeHtml()` 経由で XSS 対策
 - `kintone.api()` は CSRF トークン自動付与
 
-### 9.4 実装順序
+### 10.4 実装順序
 
 | Phase | 内容 |
 |-------|------|

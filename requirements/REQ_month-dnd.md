@@ -897,7 +897,7 @@ KC.DnD._drag = {
   9. `KC.Render.renderGrid()` が月ビュー時に `placeMonthAlldayEvents` + chip 描画を含む完全再描画を行うか確認し、必要なら修正する（§3.8・§6.4 参照）
   10. 月 CSS（chip cursor、dragging クラス）を `kc-calendar.css` に追加する
 - **週ビュー DnD のリグレッション確認必須**: `KC.DnD` の共通コードに手を入れるため、週ビューで `REQ_event-drag-resize.md §4` の全 AC が引き続き合格することを確認する
-- **XSS 対策**: ゴーストバーのタイトルは `textContent` を使用し `innerHTML` にユーザー入力を直接代入しない（`DESIGN.md §9.3`）
+- **XSS 対策**: ゴーストバーのタイトルは `textContent` を使用し `innerHTML` にユーザー入力を直接代入しない（`DESIGN.md §10.3`）
 - **1 関数 1 責務**: 追加する各関数は 30 行以内を目安とし、責務を分割する（`coding-rules.md` 準拠）
 - **`view: 'week'` の後方追加**: 既存の `startMoveAllday`（L990）・`startResizeAllday`（L1083）の `_drag` 生成箇所に `view: 'week'` を追加する。既存動作への影響はないが分岐判定のため必須
 - **`_cancel` の動作確認**: `_cancel`（L792）は終日・時間予定両方のリスナを除去する。chip DnD 用の `_onMouseMoveMonthChip` / `_onMouseUpMonthChip` も `_cancel` で除去されるよう、L813–L818 に追加する

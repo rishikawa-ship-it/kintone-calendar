@@ -861,7 +861,7 @@ el.appendChild(rightHandle);
   - §3.7（ゴースト時刻ラベルのフォーマット確定: `HH:MM〜HH:MM` 全角チルダ）
   - §6.3（CSS 確定: `.kc-event--dragging { opacity: 0.4 }`、ハンドルホバー表示、スパンクラス角丸）
   - §6.5（`buildAlldayBar` への `mousedown` 配線、リサイズハンドル DOM 生成）
-- **XSS 対策**: ゴーストバーの時刻ラベル・タイトルは `textContent` を使用し、`innerHTML` にユーザー入力を直接代入しないこと（`DESIGN.md §9.3`）
+- **XSS 対策**: ゴーストバーの時刻ラベル・タイトルは `textContent` を使用し、`innerHTML` にユーザー入力を直接代入しないこと（`DESIGN.md §10.3`）
 - **関数分離**: `KC.DnD` 内に `_startDrag`・`_onMouseMove`・`_onMouseUp`・`_onKeyDown`・`_cancel` 等の責務を分離した内部関数を定義すること（`coding-rules.md` の「1 関数 1 責務」ルール準拠）
 - **`KC.DnD.beginSelection`**: `DESIGN.md:206` に記載があるが実装なし。本タスクでは実装せず、スタブまたはコメントとして残すこと
 - **スロットクリックのスナップ**: 既存の 30 分スナップは変更しないこと（DnD のみ 15 分スナップ）

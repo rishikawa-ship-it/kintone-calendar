@@ -641,14 +641,16 @@ KC.State = {
 {
   id:      string,    // Popup.openEdit に渡す
   title:   string,    // バー / chip に表示
-  start:   string,    // ISO 8601：時刻表示・配置計算
-  end:     string,    // ISO 8601：バー高さ計算
-  allday:  boolean,   // 終日バー / 時間予定の分岐
+  start:   string,    // ISO 8601：時刻表示・配置計算（DATE 型フィールド使用時は変換済み）
+  end:     string,    // ISO 8601：バー高さ計算（DATE 型フィールド使用時は翌日 0:00 に変換済み）
+  allday:  boolean,   // 終日バー / 時間予定の分岐（DATE 型フィールド使用時は常に true）
   color:   string,    // バー背景色
   rev:     string,    // 楽観ロック用 revision
   created: string,    // KC.Lanes.assignLanes のソートキー
 }
 ```
+
+> **DATE 型サポートについて**: `start` / `end` が DATE 型フィールドの場合、`KC.Api._recordToEvent` が `allday: true` を強制セットし、`end` を翌日 0:00 に変換する。日ビューの描画ロジックはこれを前提として動作するため、DATE 型フィールド使用アプリでもすべての予定が終日バーとして正しく表示される。詳細は `DESIGN.md §9` 参照。
 
 ### 5.3 CSS 変数の状態管理
 
@@ -815,7 +817,7 @@ day 時: "YYYY年MM月DD日(曜)" 形式（§3.7 参照）
 - **段階的実装**: `KC.RenderShared` 切り出しは `KC.RenderWeek` の動作に影響する。切り出し後に週ビューの AC（`REQ_allday-bar-redesign.md §4` の全 AC）が合格することを確認してから次ステップへ進む
 - **`buildAlldayBar` の `locator` パラメータ**: 週ビューからの呼び出し箇所すべてに `{ colCount: 7 }` を追加すること。漏れがあると終日バーの位置が崩れる
 - **`--kc-col-count` のセット**: `KC.RenderDay.renderGrid()` の先頭で `document.documentElement.style.setProperty('--kc-col-count', '1')` を呼ぶ。週ビューに戻る際は `KC.RenderWeek.renderGrid()` 先頭で `'7'` に戻す（またはビュー切替ファサードで管理する）
-- **XSS 対策**: `textContent` を使用し `innerHTML` にユーザー入力を直接代入しない（`DESIGN.md §9.3`）
+- **XSS 対策**: `textContent` を使用し `innerHTML` にユーザー入力を直接代入しない（`DESIGN.md §10.3`）
 - **1 関数 1 責務**: `KC.RenderDay` 内の各処理は責務ごとに関数を分割する（`coding-rules.md` 準拠）
 - **未確定事項 §10.1 のモジュール名**: `KC.RenderShared` で実装して問題ない。管理者が別名を指定した場合はそちらを優先する
 
