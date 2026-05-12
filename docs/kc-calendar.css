@@ -564,6 +564,24 @@
   z-index: 9999;
 }
 
+/* DnD ゴーストは一律灰色（元イベントの色は引き継がない）
+ * 色変更時はここの3値を変更する:
+ *   背景: #9ca3af（gray-400）/ 枠線: #6b7280（gray-500）/ 文字: #ffffff
+ * JS 側が ev.color をインラインスタイルで設定するため !important で上書きする */
+.kc-event--ghost,
+.kc-event--ghost.kc-ad-event,
+.kc-event--ghost.kc-month-chip {
+  background: #9ca3af !important;
+  border-color: #6b7280 !important;
+  color: #ffffff !important;
+}
+
+/* ゴースト内の dot も白に統一（元イベントの色ドットを引き継がない） */
+.kc-event--ghost .dot,
+.kc-event--ghost .kc-month-chip-dot {
+  background: #ffffff !important;
+}
+
 /* ゴーストバー内の時刻ラベル（終日予定: "M/D ~ M/D"、時間予定: "HH:MM〜HH:MM"） */
 .kc-evt-ghost-time {
   font-size: 12px;
