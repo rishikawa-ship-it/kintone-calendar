@@ -366,7 +366,7 @@
    * KC.State — アプリケーション状態管理
    * ==================================================================== */
   KC.State = {
-    view: 'week',
+    view: 'month',
     current: new Date(),
     events: [],
     editing: null,
@@ -1627,12 +1627,18 @@
     // =========================================================================
 
     /**
-     * 現在表示週の 7 日分の YYYY-MM-DD 文字列配列を返す
+     * 現在表示週の 7 日分（日ビュー時は当日 1 日分）の YYYY-MM-DD 文字列配列を返す
      * @returns {string[]}
      */
     function _getWeekYMDs() {
       var S = KC.State;
       var U = KC.Utils;
+
+      // 日ビュー: 当日 1 要素のみ返す（§3.9）
+      if (S.view === 'day') {
+        return [U.fmtYMD(S.current)];
+      }
+
       var d = new Date(S.current);
       d.setDate(d.getDate() - d.getDay());
       d.setHours(0, 0, 0, 0);
@@ -2133,6 +2139,145 @@
   }());
 
   /* ====================================================================
+   * KC.RenderShared — 週ビュー・日ビュー共通描画ヘルパー
+   * ==================================================================== */
+  KC.RenderShared = (function () {
+    var U = KC.Utils;
+    var S = KC.State;
+
+    /**
+     * 折りたたみ時の表示レーン数を算出する
+     * @param {number} maxLane - 最大レーン番号（0 始まり）
+     * @returns {number} 表示レーン数（1〜3 の範囲）
+     */
+    function calcCollapsedLanes(maxLane) {
+      return Math.max(1, Math.min(maxLane + 1, 3));
+    }
+
+    /**
+     * .kc-ad-event DOM 要素を生成する（1イベント = 1バー）
+     * @param {Object} ev - 位置情報付き KcEvent（colStart, span, lane, adDateRange を含む）
+     * @param {Object} locator - { colCount: number } 列数（週=7、日=1）
+     * @returns {HTMLElement}
+     */
+    function buildAlldayBar(ev, locator) {
+      var colCount = (locator && locator.colCount) ? locator.colCount : 7;
+      var BAR_H   = 22;
+      var BAR_GAP = 3;
+      var BAR_TOP = 4;
+
+      var mine = KC.LoginContext.isMine(ev);
+      var el = document.createElement('div');
+      el.className = mine ? 'kc-ad-event kc-ad-event--mine' : 'kc-ad-event';
+      if (!mine) el.style.cursor = 'pointer';
+
+      el.style.left   = ((ev.colStart / colCount) * 100) + '%';
+      el.style.width  = ((ev.span    / colCount) * 100) + '%';
+      el.style.top    = (BAR_TOP + ev.lane * (BAR_H + BAR_GAP)) + 'px';
+      el.style.height = BAR_H + 'px';
+
+      if (ev.color) {
+        el.style.background  = ev.color;
+        el.style.borderColor = ev.color;
+        el.style.color = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      }
+
+      el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
+
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      if (ev.color) {
+        dot.style.background = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      }
+
+      var titleSpan = document.createElement('span');
+      titleSpan.className = 'kc-ad-evt-title';
+      titleSpan.textContent = ev.title || '(無題)';
+
+      el.appendChild(dot);
+      el.appendChild(titleSpan);
+
+      var leftHandle = document.createElement('div');
+      leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
+      leftHandle.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        if (!KC.LoginContext.isMine(ev)) return;
+        mdEvt.stopPropagation();
+        KC.DnD.startResizeAllday(ev, 'left', mdEvt, el);
+      });
+
+      var rightHandle = document.createElement('div');
+      rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
+      rightHandle.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        if (!KC.LoginContext.isMine(ev)) return;
+        mdEvt.stopPropagation();
+        KC.DnD.startResizeAllday(ev, 'right', mdEvt, el);
+      });
+
+      el.appendChild(leftHandle);
+      el.appendChild(rightHandle);
+
+      el.addEventListener('click', function (clickEvt) {
+        clickEvt.stopPropagation();
+        KC.Popup.openEdit(ev.id);
+      });
+
+      el.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        if (!KC.LoginContext.isMine(ev)) return;
+        KC.DnD.startMoveAllday(ev, mdEvt, el);
+      });
+
+      return el;
+    }
+
+    /**
+     * レーン展開トグル UI を更新する
+     * @param {HTMLElement} toggleEl - .kc-allday-toggle 要素
+     * @param {number} maxLane - 最大レーン番号（0 始まり）
+     * @param {boolean} expanded - 現在の展開状態
+     * @param {number} hiddenCount - 折りたたみ時に非表示になるイベント数
+     */
+    function updateAlldayToggle(toggleEl, maxLane, expanded, hiddenCount) {
+      if (!toggleEl) return;
+
+      if (maxLane < 3) {
+        toggleEl.style.display = 'none';
+        return;
+      }
+
+      toggleEl.style.display = 'flex';
+      toggleEl.textContent = '';
+      if (expanded) {
+        toggleEl.textContent = '▲ 折りたたむ';
+      } else {
+        toggleEl.textContent = '▼ もっと表示 (+' + hiddenCount + ')';
+      }
+    }
+
+    /** 時間ガター描画（00〜23時、view 非依存） */
+    function renderTimeGutter() {
+      var col = S.els.timeCol;
+      if (!col) return;
+      col.innerHTML = '';
+      for (var h = 0; h < 24; h++) {
+        var t = document.createElement('div');
+        t.className = 'kc-time';
+        t.textContent = (h === 0) ? '' : U.pad2(h) + ':00';
+        col.appendChild(t);
+      }
+    }
+
+    return {
+      calcCollapsedLanes: calcCollapsedLanes,
+      buildAlldayBar:     buildAlldayBar,
+      updateAlldayToggle: updateAlldayToggle,
+      renderTimeGutter:   renderTimeGutter
+    };
+  }());
+
+  /* ====================================================================
    * KC.RenderWeek — 週ビューレンダラー
    * ==================================================================== */
   KC.RenderWeek = (function () {
@@ -2260,145 +2405,6 @@
       S.els.allday = wrap;
     }
 
-    /**
-     * 折りたたみ時の表示レーン数を算出する
-     * @param {number} maxLane - 当週の最大レーン番号（0 始まり）
-     * @returns {number} 表示レーン数（1〜3 の範囲）
-     */
-    function calcCollapsedLanes(maxLane) {
-      return Math.max(1, Math.min(maxLane + 1, 3));
-    }
-
-    /**
-     * .kc-ad-event DOM 要素を生成する（1イベント = 1バー）
-     * @param {Object} ev - 位置情報付き KcEvent（colStart, span, lane, adDateRange を含む）
-     * @returns {HTMLElement}
-     */
-    function buildAlldayBar(ev) {
-      // 高さ計算定数（CSS 変数と同値を使用）
-      var BAR_H   = 22;   /* --kc-ad-bar-h */
-      var BAR_GAP = 3;    /* --kc-ad-bar-gap */
-      var BAR_TOP = 4;    /* --kc-ad-bar-top */
-
-      var mine = KC.LoginContext.isMine(ev);
-      var el = document.createElement('div');
-      // 自分の予定は強調クラスを付与
-      el.className = mine ? 'kc-ad-event kc-ad-event--mine' : 'kc-ad-event';
-      // 他人の予定はドラッグカーソルをポインターに変更
-      if (!mine) el.style.cursor = 'pointer';
-
-      // 絶対配置の位置計算（§3.3 の計算式）
-      el.style.left   = ((ev.colStart / 7) * 100) + '%';
-      el.style.width  = ((ev.span / 7) * 100) + '%';
-      el.style.top    = (BAR_TOP + ev.lane * (BAR_H + BAR_GAP)) + 'px';
-      el.style.height = BAR_H + 'px';
-
-      // 色適用
-      if (ev.color) {
-        el.style.background  = ev.color;
-        el.style.borderColor = ev.color;
-        el.style.color = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
-      }
-
-      // ホバーツールチップ（件名 + 日付範囲）
-      el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
-
-      // ドット
-      var dot = document.createElement('span');
-      dot.className = 'dot';
-      if (ev.color) {
-        dot.style.background = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
-      }
-
-      // 件名のみ（Google カレンダー方式: 単一行・件名のみ表示）
-      var titleSpan = document.createElement('span');
-      titleSpan.className = 'kc-ad-evt-title';
-      titleSpan.textContent = ev.title || '(無題)';  /* XSS 対策: textContent */
-
-      el.appendChild(dot);
-      el.appendChild(titleSpan);
-
-      // 左端リサイズハンドル（他人の予定は DnD 不可）
-      var leftHandle = document.createElement('div');
-      leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
-      leftHandle.addEventListener('mousedown', function (mdEvt) {
-        if (mdEvt.button !== 0) return;
-        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定はリサイズ不可
-        mdEvt.stopPropagation();
-        KC.DnD.startResizeAllday(ev, 'left', mdEvt, el);
-      });
-
-      // 右端リサイズハンドル（他人の予定は DnD 不可）
-      var rightHandle = document.createElement('div');
-      rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
-      rightHandle.addEventListener('mousedown', function (mdEvt) {
-        if (mdEvt.button !== 0) return;
-        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定はリサイズ不可
-        mdEvt.stopPropagation();
-        KC.DnD.startResizeAllday(ev, 'right', mdEvt, el);
-      });
-
-      el.appendChild(leftHandle);
-      el.appendChild(rightHandle);
-
-      // クリック → 編集ポップアップ（AC 4.7）
-      // 注: 5px 未満の mousedown→mouseup は click として処理される
-      el.addEventListener('click', function (clickEvt) {
-        clickEvt.stopPropagation();
-        KC.Popup.openEdit(ev.id);
-      });
-
-      // mousedown → 終日 DnD 開始（バグ B 修正）
-      el.addEventListener('mousedown', function (mdEvt) {
-        if (mdEvt.button !== 0) return;
-        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定は移動 DnD 不可
-        // リサイズハンドルからの mousedown は stopPropagation されるためここには届かない
-        KC.DnD.startMoveAllday(ev, mdEvt, el);
-      });
-
-      return el;
-    }
-
-    /**
-     * レーン展開トグル UI を更新する
-     * @param {HTMLElement} toggleEl - .kc-allday-toggle 要素
-     * @param {number} maxLane - 当週の最大レーン番号（0 始まり）
-     * @param {boolean} expanded - 現在の展開状態
-     * @param {number} hiddenCount - 折りたたみ時に非表示になるイベント数（"+N" 表示用）
-     */
-    function updateAlldayToggle(toggleEl, maxLane, expanded, hiddenCount) {
-      if (!toggleEl) return;
-
-      if (maxLane < 3) {
-        // 必要レーン数 ≤ 3 のときはトグルを非表示（AC 4.11）
-        toggleEl.style.display = 'none';
-        return;
-      }
-
-      toggleEl.style.display = 'flex';
-
-      // ラベルを更新（XSS 対策: textContent）
-      toggleEl.textContent = '';
-      if (expanded) {
-        toggleEl.textContent = '▲ 折りたたむ';
-      } else {
-        toggleEl.textContent = '▼ もっと表示 (+' + hiddenCount + ')';
-      }
-    }
-
-    /** 時間ガター描画 */
-    function renderTimeGutter() {
-      var col = S.els.timeCol;
-      if (!col) return;
-      col.innerHTML = '';
-      for (var h = 0; h < 24; h++) {
-        var t = document.createElement('div');
-        t.className = 'kc-time';
-        t.textContent = (h === 0) ? '' : U.pad2(h) + ':00';
-        col.appendChild(t);
-      }
-    }
-
     /** セルグリッド描画 */
     function renderRows() {
       var rows = S.els.rows;
@@ -2480,13 +2486,13 @@
       }, -1);
 
       // 折りたたみ時の表示レーン数: min(必要レーン数, 3)
-      var collapsedLaneCount = calcCollapsedLanes(maxLane);
+      var collapsedLaneCount = KC.RenderShared.calcCollapsedLanes(maxLane);
 
       // 展開時に隠れるイベント数（トグルラベル "+N" 用）
       var hiddenCount = weekEvents.filter(function (ev) { return ev.lane >= 3; }).length;
 
       // トグル UI を更新（maxLane < 3 のときは非表示）
-      if (toggleEl) updateAlldayToggle(toggleEl, maxLane, S.alldayExpanded, hiddenCount);
+      if (toggleEl) KC.RenderShared.updateAlldayToggle(toggleEl, maxLane, S.alldayExpanded, hiddenCount);
 
       // トグルクリックハンドラ（毎回新規バインド: renderAlldayRow で再生成されるため）
       if (toggleEl && maxLane >= 3) {
@@ -2499,7 +2505,7 @@
       // 各イベントをバーとして .kc-ad-events レイヤに追加
       weekEvents.forEach(function (ev) {
         if (!eventsLayer) return;
-        var bar = buildAlldayBar(ev);
+        var bar = KC.RenderShared.buildAlldayBar(ev, { colCount: 7 });
         eventsLayer.appendChild(bar);
       });
 
@@ -2717,7 +2723,7 @@
 
     /** 完全リフレッシュ（描画 + データ取得） */
     async function refresh() {
-      renderTimeGutter();
+      KC.RenderShared.renderTimeGutter();
       // KC.Render.renderGrid 経由で呼ぶことで KC.TimeSlots のパッチを通過させる
       KC.Render.renderGrid();
 
@@ -3407,19 +3413,389 @@
   }());
 
   /* ====================================================================
-   * KC.RenderDay — 日ビュー（スタブ）
+   * KC.RenderDay — 日ビューレンダラー（REQ_day-view Phase 月-Day-1）
    * ==================================================================== */
-  KC.RenderDay = {
-    refresh: function () { /* 将来実装 */ },
-    renderGrid: function () { /* 将来実装 */ },
-    gridRange: function () {
-      var S = KC.State;
-      var d = S.current;
-      var start = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      var end = new Date(start);
+  KC.RenderDay = (function () {
+    var U = KC.Utils;
+    var S = KC.State;
+
+    /**
+     * 単日の表示範囲を返す（open-end: 翌日 0:00）
+     * @param {Date} date - 基準日
+     * @returns {{ start: Date, end: Date }}
+     */
+    function dayRange(date) {
+      var start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+      var end = U.addDays(start, 1);  // 翌日 0:00（open-end: §10.2 確定済み）
       return { start: start, end: end };
     }
-  };
+
+    /**
+     * 表示期間を返す（KC.Render ファサードが参照する公開 API）
+     * @returns {{ start: Date, end: Date }}
+     */
+    function gridRange() {
+      return dayRange(S.current);
+    }
+
+    /** 曜日ヘッダー描画（1 列分） */
+    function renderDayHeaders() {
+      var days = S.els.days;
+      if (!days) return;
+
+      Array.from(days.querySelectorAll('.kc-day')).forEach(function (n) { n.remove(); });
+
+      var labels = ['日', '月', '火', '水', '木', '金', '土'];
+      var rightSpacer = days.querySelector('.kc-day-spacer-right');
+      var d = S.current;
+      var ymd = U.fmtYMD(d);
+      var today = U.fmtYMD(new Date());
+      var isToday = (ymd === today);
+      var dayOfWeek = d.getDay();
+      var holidayName = U.getHolidayName(d);
+
+      var div = document.createElement('div');
+      div.className = 'kc-day';
+      if (dayOfWeek === 6) div.classList.add('kc-day--sat');
+      if (dayOfWeek === 0) div.classList.add('kc-day--sun');
+      if (holidayName) div.classList.add('kc-day--holiday');
+
+      var head = document.createElement('div');
+      head.className = 'kc-day-head' + (isToday ? ' is-today' : '');
+
+      var wSpan = document.createElement('span');
+      wSpan.className = 'w';
+      wSpan.textContent = labels[dayOfWeek];
+
+      var numSpan = document.createElement('span');
+      numSpan.className = 'num';
+      numSpan.textContent = d.getDate();
+
+      head.appendChild(wSpan);
+      head.appendChild(numSpan);
+
+      if (holidayName) {
+        var holidaySpan = document.createElement('span');
+        holidaySpan.className = 'kc-holiday-name';
+        holidaySpan.textContent = holidayName;
+        head.appendChild(holidaySpan);
+      }
+
+      div.appendChild(head);
+
+      if (rightSpacer) {
+        days.insertBefore(div, rightSpacer);
+      } else {
+        days.appendChild(div);
+      }
+    }
+
+    /** 終日スロット行の描画（1 列分） */
+    function renderAlldayRow() {
+      var wrap = S.els.allday || document.getElementById('kc-allday');
+      if (!wrap) return;
+      wrap.innerHTML = '';
+
+      var gutter = document.createElement('div');
+      gutter.className = 'kc-gutter';
+      wrap.appendChild(gutter);
+
+      var d = S.current;
+      var cell = document.createElement('div');
+      cell.className = 'kc-adcell';
+      var adDow = d.getDay();
+      var adHoliday = U.getHolidayName(d);
+      if (adDow === 6) cell.classList.add('kc-adcell--sat');
+      if (adDow === 0) cell.classList.add('kc-adcell--sun');
+      if (adHoliday) cell.classList.add('kc-adcell--holiday');
+      cell.dataset.date = U.fmtYMD(d);
+      wrap.appendChild(cell);
+
+      var spacer = document.createElement('div');
+      spacer.setAttribute('aria-hidden', 'true');
+      wrap.appendChild(spacer);
+
+      var eventsLayer = document.createElement('div');
+      eventsLayer.className = 'kc-ad-events';
+      wrap.appendChild(eventsLayer);
+
+      var toggleEl = document.createElement('div');
+      toggleEl.className = 'kc-allday-toggle';
+      toggleEl.style.display = 'none';
+      wrap.appendChild(toggleEl);
+
+      S.els.allday = wrap;
+    }
+
+    /** セルグリッド描画（24行 × 1 列） */
+    function renderRows() {
+      var rows = S.els.rows;
+      if (!rows) return;
+      rows.innerHTML = '';
+      document.documentElement.style.setProperty('--kc-hours', 24);
+
+      var d = S.current;
+      var dow = d.getDay();
+      var holiday = !!U.getHolidayName(d);
+      var ymd = U.fmtYMD(d);
+
+      for (var h = 0; h < 24; h++) {
+        var row = document.createElement('div');
+        row.className = 'kc-row';
+        row.dataset.hour = String(h);
+
+        var cell = document.createElement('div');
+        cell.className = 'kc-cell';
+        if (dow === 6) cell.classList.add('kc-cell--sat');
+        if (dow === 0) cell.classList.add('kc-cell--sun');
+        if (holiday) cell.classList.add('kc-cell--holiday');
+        cell.dataset.date = ymd;
+        row.appendChild(cell);
+        rows.appendChild(row);
+      }
+    }
+
+    /** 当日のイベントを配置する */
+    function placeEvents() {
+      var alldayWrap = S.els.allday;
+      var eventsLayer = alldayWrap ? alldayWrap.querySelector('.kc-ad-events') : null;
+      var toggleEl    = alldayWrap ? alldayWrap.querySelector('.kc-allday-toggle') : null;
+      if (eventsLayer) eventsLayer.innerHTML = '';
+
+      var rows = S.els.rows;
+      if (!rows) return;
+      rows.querySelectorAll('.kc-overlay').forEach(function (o) { o.remove(); });
+
+      var ymd = U.fmtYMD(S.current);
+      var dayYMDs = [ymd];
+
+      var filteredEvents = KC.EventFilter.apply(S.events || []);
+
+      // ===== 終日イベント配置 =====
+      var dayEvents = [];
+      filteredEvents.forEach(function (evt) {
+        if (!evt.allday) return;
+        var pos = KC.Lanes.eventToBarPosition(evt, dayYMDs);
+        if (!pos) return;
+        dayEvents.push(Object.assign({}, evt, pos));
+      });
+
+      KC.Lanes.assignLanes(dayEvents);
+
+      var maxLane = dayEvents.reduce(function (m, ev) {
+        return Math.max(m, ev.lane || 0);
+      }, -1);
+
+      var collapsedLaneCount = KC.RenderShared.calcCollapsedLanes(maxLane);
+      var hiddenCount = dayEvents.filter(function (ev) { return ev.lane >= 3; }).length;
+
+      if (toggleEl) KC.RenderShared.updateAlldayToggle(toggleEl, maxLane, S.alldayExpanded, hiddenCount);
+
+      if (toggleEl && maxLane >= 3) {
+        toggleEl.onclick = function () {
+          S.alldayExpanded = !S.alldayExpanded;
+          KC.Render.renderGrid();
+        };
+      }
+
+      dayEvents.forEach(function (ev) {
+        if (!eventsLayer) return;
+        var bar = KC.RenderShared.buildAlldayBar(ev, { colCount: 1 });
+        eventsLayer.appendChild(bar);
+      });
+
+      if (alldayWrap) {
+        var BAR_H    = 22;
+        var BAR_GAP  = 3;
+        var BAR_TOP  = 4;
+        var BAR_BTM  = 4;
+        var TOGGLE_H = 24;
+
+        var displayLanes = S.alldayExpanded ? (maxLane + 1) : collapsedLaneCount;
+        if (displayLanes < 1) displayLanes = 1;
+
+        var totalH = BAR_TOP + (BAR_H + BAR_GAP) * displayLanes - BAR_GAP + BAR_BTM + TOGGLE_H;
+        alldayWrap.style.height = totalH + 'px';
+
+        var gutter = alldayWrap.querySelector('.kc-gutter');
+        if (gutter) gutter.style.height = totalH + 'px';
+
+        if (eventsLayer) {
+          eventsLayer.style.overflow = S.alldayExpanded ? 'visible' : 'hidden';
+        }
+      }
+
+      // ===== 時間イベント配置（当日分のみ・24:00 でクランプ） =====
+      var dayStart = new Date(ymd + 'T00:00:00');
+      var dayEnd   = U.addDays(dayStart, 1);
+      var totalMin = 24 * 60;
+
+      filteredEvents.forEach(function (evt) {
+        if (evt.allday) return;
+
+        var evStart = new Date(evt.start);
+        var evEnd   = new Date(evt.end);
+
+        // 当日とオーバーラップするか確認（AC4.13: 24:00 跨ぎは当日分のみ）
+        if (evStart >= dayEnd || evEnd <= dayStart) return;
+
+        var sTimeStr = U.pad2(evStart.getHours()) + ':' + U.pad2(evStart.getMinutes());
+        var eTimeStr = U.pad2(evEnd.getHours())   + ':' + U.pad2(evEnd.getMinutes());
+        var sDateStr = (evStart.getMonth() + 1) + '/' + evStart.getDate();
+        var eDateStr = (evEnd.getMonth()   + 1) + '/' + evEnd.getDate();
+        var sameDay = U.fmtYMD(evStart) === U.fmtYMD(evEnd);
+        var fullTimeStr = sameDay
+          ? (sDateStr + ' ' + sTimeStr + ' ~ ' + eTimeStr)
+          : (sDateStr + ' ' + sTimeStr + ' ~ ' + eDateStr + ' ' + eTimeStr);
+
+        // 当日内でクランプ
+        var segStartMs = Math.max(evStart.getTime(), dayStart.getTime());
+        var segEndMs   = Math.min(evEnd.getTime(),   dayEnd.getTime());
+        var segStartMin = Math.round((segStartMs - dayStart.getTime()) / 60000);
+        var segEndMin   = Math.round((segEndMs   - dayStart.getTime()) / 60000);
+        if (segEndMin > totalMin) segEndMin = totalMin;
+        if (segStartMin < 0) segStartMin = 0;
+        if (segEndMin <= segStartMin) return;
+
+        var topPct    = (segStartMin / totalMin) * 100;
+        var heightPct = ((segEndMin - segStartMin) / totalMin) * 100;
+
+        var firstHourRow = rows.children[0];
+        if (!firstHourRow) return;
+        var colCell = firstHourRow.children[0];
+        if (!colCell) return;
+
+        var overlay = colCell.querySelector('.kc-overlay');
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.className = 'kc-overlay';
+          overlay.style.position = 'relative';
+          overlay.style.height = 'calc(var(--kc-hours) * var(--kc-hour-height))';
+          overlay.style.width = '100%';
+          overlay.style.pointerEvents = 'none';
+          colCell.appendChild(overlay);
+        }
+
+        var evtMine = KC.LoginContext.isMine(evt);
+        var div = document.createElement('div');
+        div.className = evtMine ? 'kc-event kc-event--mine' : 'kc-event';
+        if (!evtMine) div.style.cursor = 'pointer';
+        div.style.top    = 'calc(' + topPct + '% + 0px)';
+        div.style.height = 'calc(' + heightPct + '% - 2px)';
+        div.style.pointerEvents = 'auto';
+
+        if (evt.color) {
+          div.style.background  = evt.color;
+          div.style.borderColor = evt.color;
+          div.style.color = KC.Lanes.isLightColor(evt.color) ? '#1f2937' : '#ffffff';
+        }
+
+        var titleDiv = document.createElement('div');
+        titleDiv.className = 'kc-evt-title';
+        titleDiv.textContent = evt.title || '(無題)';
+
+        var metaDiv = document.createElement('div');
+        metaDiv.className = 'kc-evt-meta';
+        metaDiv.textContent = fullTimeStr;
+        if (evt.color) {
+          metaDiv.style.color = KC.Lanes.isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
+        }
+
+        var topHandle = document.createElement('div');
+        topHandle.className = 'kc-resize-handle kc-resize-handle--top';
+        var btmHandle = document.createElement('div');
+        btmHandle.className = 'kc-resize-handle kc-resize-handle--bottom';
+
+        div.appendChild(topHandle);
+        div.appendChild(titleDiv);
+        div.appendChild(metaDiv);
+        div.appendChild(btmHandle);
+
+        div.title = (evt.title || '') + '\n' + fullTimeStr;
+
+        div.addEventListener('click', (function (capturedEvt) {
+          return function (clickEvt) {
+            clickEvt.stopPropagation();
+            KC.Popup.openEdit(capturedEvt.id);
+          };
+        }(evt)));
+
+        (function (capturedEvt, el) {
+          el.addEventListener('mousedown', function (mdEvt) {
+            if (mdEvt.button !== 0) return;
+            if (!KC.LoginContext.isMine(capturedEvt)) return;
+            KC.DnD.startMove(capturedEvt, mdEvt, el, [el]);
+          });
+
+          var tHandle = el.querySelector('.kc-resize-handle--top');
+          var bHandle = el.querySelector('.kc-resize-handle--bottom');
+          if (tHandle) {
+            tHandle.addEventListener('mousedown', function (mdEvt) {
+              if (mdEvt.button !== 0) return;
+              if (!KC.LoginContext.isMine(capturedEvt)) return;
+              mdEvt.stopPropagation();
+              KC.DnD.startResize(capturedEvt, 'top', mdEvt, el);
+            });
+          }
+          if (bHandle) {
+            bHandle.addEventListener('mousedown', function (mdEvt) {
+              if (mdEvt.button !== 0) return;
+              if (!KC.LoginContext.isMine(capturedEvt)) return;
+              mdEvt.stopPropagation();
+              KC.DnD.startResize(capturedEvt, 'bottom', mdEvt, el);
+            });
+          }
+        }(evt, div));
+
+        overlay.appendChild(div);
+      });
+    }
+
+    /**
+     * グリッド描画（ヘッダー + 終日 + 行 + イベント配置）
+     * --kc-col-count を 1 にセットして 1 列レイアウトに切替える
+     */
+    function renderGrid() {
+      document.documentElement.style.setProperty('--kc-col-count', '1');
+      renderDayHeaders();
+      renderAlldayRow();
+      renderRows();
+      placeEvents();
+    }
+
+    /**
+     * 完全リフレッシュ（描画 + データ取得）
+     */
+    async function refresh() {
+      document.documentElement.style.setProperty('--kc-col-count', '1');
+      KC.RenderShared.renderTimeGutter();
+      // KC.Render.renderGrid 経由で呼ぶことで KC.TimeSlots のパッチを通過させる
+      KC.Render.renderGrid();
+
+      var range = gridRange();
+      var toISO = function (d) {
+        var d0 = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0);
+        return new Date(d0.getTime() - d0.getTimezoneOffset() * 60000).toISOString();
+      };
+      var isoStart = toISO(range.start);
+      var isoEnd   = toISO(range.end);  // 翌日 0:00（open-end: dayRange が addDays(start,1) を返す）
+
+      try {
+        S.events = await KC.Api.loadEvents(isoStart, isoEnd);
+        KC.Render.renderGrid();
+        KC.Render.refreshTitle();
+      } catch (err) {
+        console.error('[KC.RenderDay] loadEvents error:', err);
+      }
+    }
+
+    return {
+      refresh:    refresh,
+      renderGrid: renderGrid,
+      gridRange:  gridRange,
+      placeEvents: placeEvents
+    };
+  }());
 
   /* ====================================================================
    * KC.Render — レンダラーファサード
@@ -3451,6 +3827,10 @@
         m.renderGrid();
       }
       this.refreshTitle();
+      // view 切替後も aria-label が正しい単位を示すよう更新する（REQ_day-view §3.6）
+      if (KC.Boot && typeof KC.Boot._updateNavAriaLabels === 'function') {
+        KC.Boot._updateNavAriaLabels();
+      }
     },
 
     /** renderGrid ファサード */
@@ -3512,6 +3892,15 @@
       // 月ビュー: "2026年04月"（ゼロ埋め月）— REQ_month-view §3.11
       if (S.view === 'month') {
         return date.getFullYear() + '年' + p2(date.getMonth() + 1) + '月';
+      }
+
+      // 日ビュー: "2026年04月30日(木)" 形式（REQ_day-view §3.7）
+      if (S.view === 'day') {
+        var DAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
+        return date.getFullYear() + '年'
+          + p2(date.getMonth() + 1) + '月'
+          + p2(date.getDate()) + '日'
+          + '(' + DAY_LABELS[date.getDay()] + ')';
       }
 
       // 週ビュー: 既存ロジック維持
@@ -3962,13 +4351,13 @@
       var prevBtn = document.createElement('button');
       prevBtn.className = 'kc-btn kc-btn--icon';
       prevBtn.setAttribute('data-action', 'prev');
-      prevBtn.setAttribute('aria-label', '前の週');
+      prevBtn.setAttribute('aria-label', '前の月');  // デフォルト view が month のため（REQ_day-view §3.6）
       prevBtn.textContent = '\u2039'; // ‹
 
       var nextBtn = document.createElement('button');
       nextBtn.className = 'kc-btn kc-btn--icon';
       nextBtn.setAttribute('data-action', 'next');
-      nextBtn.setAttribute('aria-label', '次の週');
+      nextBtn.setAttribute('aria-label', '次の月');  // デフォルト view が month のため（REQ_day-view §3.6）
       nextBtn.textContent = '\u203A'; // ›
 
       var rangeLabel = document.createElement('div');
@@ -3996,7 +4385,7 @@
       viewBtn.id = 'kc-view-select';
       viewBtn.setAttribute('aria-haspopup', 'listbox');
       viewBtn.setAttribute('aria-expanded', 'false');
-      viewBtn.textContent = '週 ';
+      viewBtn.textContent = '月 ';
       var caret = document.createElement('span');
       caret.className = 'kc-caret';
       caret.textContent = '\u25BE'; // ▾
@@ -4007,23 +4396,32 @@
       menuUl.setAttribute('role', 'listbox');
       menuUl.setAttribute('aria-label', '表示切替');
 
-      var optWeek = document.createElement('li');
-      optWeek.className = 'kc-option';
-      optWeek.setAttribute('role', 'option');
-      optWeek.dataset.value = 'week';
-      optWeek.setAttribute('aria-selected', 'true');
-      optWeek.textContent = '週';
-
-      menuUl.appendChild(optWeek);
-
-      // 月ビューオプション（REQ_month-view §3.9）
+      // 月ビューオプション（デフォルト選択: REQ_day-view §3.4）
       var optMonth = document.createElement('li');
       optMonth.className = 'kc-option';
       optMonth.setAttribute('role', 'option');
       optMonth.dataset.value = 'month';
-      optMonth.setAttribute('aria-selected', 'false');
+      optMonth.setAttribute('aria-selected', 'true');
       optMonth.textContent = '月';
       menuUl.appendChild(optMonth);
+
+      // 週ビューオプション（REQ_day-view §3.4）
+      var optWeek = document.createElement('li');
+      optWeek.className = 'kc-option';
+      optWeek.setAttribute('role', 'option');
+      optWeek.dataset.value = 'week';
+      optWeek.setAttribute('aria-selected', 'false');
+      optWeek.textContent = '週';
+      menuUl.appendChild(optWeek);
+
+      // 日ビューオプション（REQ_day-view §3.4）
+      var optDay = document.createElement('li');
+      optDay.className = 'kc-option';
+      optDay.setAttribute('role', 'option');
+      optDay.dataset.value = 'day';
+      optDay.setAttribute('aria-selected', 'false');
+      optDay.textContent = '日';
+      menuUl.appendChild(optDay);
 
       dropdown.appendChild(viewBtn);
       dropdown.appendChild(menuUl);
@@ -4127,6 +4525,23 @@
       if (fsBtn) fsBtn.style.display = '';
     },
 
+    /**
+     * prev/next ボタンの aria-label を現在の view に合わせて更新する（REQ_day-view §3.6）
+     * view 切替時に KC.Render.refresh 経由で呼ばれるよう外部公開する
+     */
+    _updateNavAriaLabels: function () {
+      var labels = {
+        month: { prev: '前の月', next: '次の月' },
+        week:  { prev: '前の週', next: '次の週' },
+        day:   { prev: '前の日', next: '次の日' }
+      };
+      var v = labels[KC.State.view] || labels.week;
+      var prevBtn = document.querySelector('[data-action="prev"]');
+      var nextBtn = document.querySelector('[data-action="next"]');
+      if (prevBtn) prevBtn.setAttribute('aria-label', v.prev);
+      if (nextBtn) nextBtn.setAttribute('aria-label', v.next);
+    },
+
     /** 初期化 */
     init: async function () {
       var root = document.getElementById('kc-root');
@@ -4148,7 +4563,7 @@
       // 祝日データを非同期取得（await しない: 初回はハードコードで即時描画し、取得完了後に再描画）
       // CSP で外部 API がブロックされた場合は console.warn のみ出力して継続する
       KC.Holidays.fetchHolidays().then(function () {
-        if (KC.State.view === 'month' || KC.State.view === 'week') {
+        if (KC.State.view === 'month' || KC.State.view === 'week' || KC.State.view === 'day') {
           KC.Render.refresh();
         }
       });
@@ -4167,17 +4582,28 @@
       var S = KC.State;
       var R = KC.Render;
 
+      /**
+       * prev/next ボタンの aria-label を現在の view に合わせて更新する（REQ_day-view §3.6）
+       * 外部公開済みの KC.Boot._updateNavAriaLabels に委譲する
+       */
+      function _updateNavAriaLabels() {
+        KC.Boot._updateNavAriaLabels();
+      }
+
       if (S.els.prevBtn) {
         S.els.prevBtn.addEventListener('click', function () {
-          // ドラッグ中の場合はキャンセルしてから月切替（§10.2）
+          // ドラッグ中の場合はキャンセルしてから移動（§10.2）
           KC.DnD._cancel();
           S.alldayExpanded = false;   // 切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
-          // view 別分岐: 月ビューは月単位移動（REQ_month-view §3.8）
+          // view 別分岐: 月は月単位、日は1日単位、週は7日単位（REQ_day-view §3.6）
           if (S.view === 'month') {
             S.current.setMonth(S.current.getMonth() - 1);
+          } else if (S.view === 'day') {
+            S.current.setDate(S.current.getDate() - 1);
           } else {
             S.current.setDate(S.current.getDate() - 7);
           }
+          _updateNavAriaLabels();
           R.refresh();
         });
       }
@@ -4194,15 +4620,18 @@
 
       if (S.els.nextBtn) {
         S.els.nextBtn.addEventListener('click', function () {
-          // ドラッグ中の場合はキャンセルしてから月切替（§10.2）
+          // ドラッグ中の場合はキャンセルしてから移動（§10.2）
           KC.DnD._cancel();
           S.alldayExpanded = false;   // 切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
-          // view 別分岐: 月ビューは月単位移動（REQ_month-view §3.8）
+          // view 別分岐: 月は月単位、日は1日単位、週は7日単位（REQ_day-view §3.6）
           if (S.view === 'month') {
             S.current.setMonth(S.current.getMonth() + 1);
+          } else if (S.view === 'day') {
+            S.current.setDate(S.current.getDate() + 1);
           } else {
             S.current.setDate(S.current.getDate() + 7);
           }
+          _updateNavAriaLabels();
           R.refresh();
         });
       }

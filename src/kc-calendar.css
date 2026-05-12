@@ -1038,3 +1038,16 @@ body.kc-dnd-active * {
 .kc-month-chip--mine .kc-month-chip-dot {
   background: #ffffff !important;
 }
+
+/* ==========================================================================
+ * 19. 日ビュー（KC.RenderDay）固有スタイル（REQ_day-view Phase 月-Day-1）
+ * ========================================================================== */
+
+/* --kc-col-count が 1 のとき（日ビュー）: ヘッダーの .kc-day を 1 列幅いっぱいに表示 */
+/* 既存の repeat(var(--kc-col-count, 7), minmax(0, 1fr)) が自動対応するため追加 CSS は最小限 */
+
+/* 日ビューの .kc-day は white-space を解除して祝日名を折り返し表示できるようにする */
+/* --kc-col-count === 1 の場合は 1 列全幅となるため text-overflow は不要 */
+/* CSS 変数での条件分岐は不可のため JS で kc-day--day-view クラスを付与する代わりに
+   col-count が 1 のときは改行を許可するよう上書きする */
+/* 注: 日ビューでは列幅が広いため既存 CSS のまま問題ない場合が多い（必要に応じて有効化） */
