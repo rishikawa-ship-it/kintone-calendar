@@ -112,8 +112,31 @@
         console.error('[KC] フィールド検出エラー:', e);
         // エラー時はデフォルト値で続行
       }
+    },
+
+    /**
+     * kintone アプリ名を REST API で取得して this.APP_NAME に格納
+     * @returns {Promise<string>} アプリ名 (失敗時はフォールバック値)
+     */
+    detectAppName: async function () {
+      try {
+        var resp = await kintone.api(
+          kintone.api.url('/k/v1/app.json', true),
+          'GET',
+          { id: this.getAppId() }
+        );
+        this.APP_NAME = resp.name || 'カレンダー';
+        console.log('[KC.Config] APP_NAME:', this.APP_NAME);
+      } catch (err) {
+        console.warn('[KC.Config] アプリ名取得失敗、フォールバック使用:', err);
+        this.APP_NAME = 'カレンダー';
+      }
+      return this.APP_NAME;
     }
   };
+
+  // detectAppName 完了前のフォールバック用初期値
+  KC.Config.APP_NAME = 'カレンダー';
 
   /* ====================================================================
    * KC.Utils — 日付ユーティリティ
@@ -3929,7 +3952,7 @@
 
       var title = document.createElement('div');
       title.className = 'kc-title';
-      title.textContent = '貸与Wi-Fi予約カレンダー';
+      title.textContent = KC.Config.APP_NAME || 'カレンダー';
 
       var todayBtn = document.createElement('button');
       todayBtn.className = 'kc-btn kc-today';
@@ -4119,6 +4142,9 @@
       // detectFields 完了後に呼ぶことで、フィールド定義が確定した状態で初期化される
       KC.LoginContext.init();
 
+      // アプリ名を REST API で取得（失敗時もエラーで止まらない設計）
+      await KC.Config.detectAppName();
+
       // 祝日データを非同期取得（await しない: 初回はハードコードで即時描画し、取得完了後に再描画）
       // CSP で外部 API がブロックされた場合は console.warn のみ出力して継続する
       KC.Holidays.fetchHolidays().then(function () {
@@ -4129,6 +4155,10 @@
 
       // DOM構築
       this._buildDOM();
+
+      // アプリ名を DOM に反映（detectAppName 完了済みだが、念のため再設定）
+      var titleEl = document.querySelector('.kc-title');
+      if (titleEl) titleEl.textContent = KC.Config.APP_NAME;
 
       // DOM参照取得
       KC.State.refreshEls();
