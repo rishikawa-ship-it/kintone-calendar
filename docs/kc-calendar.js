@@ -2407,7 +2407,8 @@
 
     /** セルグリッド描画 */
     function renderRows() {
-      var rows = S.els.rows;
+      // DOM キャッシュが未設定の場合は再取得する（ビュー切替後の再描画で S.els.rows が未初期化のケースに対応）
+      var rows = S.els.rows || document.getElementById('kc-rows');
       if (!rows) return;
       rows.innerHTML = '';
       document.documentElement.style.setProperty('--kc-col-count', 7);
@@ -2442,6 +2443,9 @@
         }
         rows.appendChild(row);
       }
+
+      // 描画後に DOM キャッシュを更新する（日ビューと同パターン）
+      S.els.rows = rows;
     }
 
     /** イベント配置 */
@@ -2454,7 +2458,8 @@
       if (eventsLayer) eventsLayer.innerHTML = '';
 
       // 通常イベントのオーバーレイをクリア（セル自体は保持）
-      var rows = S.els.rows;
+      // DOM キャッシュが未設定の場合は再取得する（renderRows 未実行時のフォールバック）
+      var rows = S.els.rows || document.getElementById('kc-rows');
       if (!rows) return;
       rows.querySelectorAll('.kc-overlay').forEach(function (o) { o.remove(); });
 
@@ -3529,7 +3534,8 @@
 
     /** セルグリッド描画（24行 × 1 列） */
     function renderRows() {
-      var rows = S.els.rows;
+      // DOM キャッシュが未設定の場合は再取得する（ビュー切替後の再描画で S.els.rows が未初期化のケースに対応）
+      var rows = S.els.rows || document.getElementById('kc-rows');
       if (!rows) return;
       rows.innerHTML = '';
       document.documentElement.style.setProperty('--kc-hours', 24);
@@ -3553,6 +3559,9 @@
         row.appendChild(cell);
         rows.appendChild(row);
       }
+
+      // 描画後に DOM キャッシュを更新する（週ビューと同パターン）
+      S.els.rows = rows;
     }
 
     /** 当日のイベントを配置する */
@@ -3562,7 +3571,8 @@
       var toggleEl    = alldayWrap ? alldayWrap.querySelector('.kc-allday-toggle') : null;
       if (eventsLayer) eventsLayer.innerHTML = '';
 
-      var rows = S.els.rows;
+      // DOM キャッシュが未設定の場合は再取得する（renderRows 未実行時のフォールバック）
+      var rows = S.els.rows || document.getElementById('kc-rows');
       if (!rows) return;
       rows.querySelectorAll('.kc-overlay').forEach(function (o) { o.remove(); });
 
@@ -3951,7 +3961,8 @@
     /** 30分刻み時間セル追加 */
     buildTimeSlots: function () {
       var S = KC.State;
-      var rows = S.els.rows;
+      // DOM キャッシュが未設定の場合は再取得する（renderRows 未実行時のフォールバック）
+      var rows = S.els.rows || document.getElementById('kc-rows');
       if (!rows) return;
 
       var rowElems = Array.from(rows.children);
