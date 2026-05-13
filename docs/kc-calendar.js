@@ -2972,20 +2972,6 @@
     }
 
     /**
-     * 週ビュー DOM を再表示し、月ビュー DOM を非表示にする
-     * _monthRoot が null の場合（月ビューが一度も描画されていない初期状態など）は
-     * DOM クエリでフォールバックして確実に非表示にする（§True-Cause-A 修正）
-     */
-    function _showWeekDOM() {
-      var gridWrap = document.querySelector('.kc-grid-wrap');
-      if (gridWrap) gridWrap.style.display = '';
-
-      // _monthRoot が未設定の場合は DOM から直接取得して非表示にする
-      var monthRootEl = _monthRoot || document.getElementById('kc-month-root');
-      if (monthRootEl) monthRootEl.style.display = 'none';
-    }
-
-    /**
      * 月ビューの表示期間を返す
      * @returns {{ start: Date, end: Date }}
      */
@@ -3427,8 +3413,6 @@
       placeMonthTimedEvents:  placeMonthTimedEvents,
       applyOverflow:          applyOverflow,
       placeMonthEvents:       placeMonthEvents,
-      // 内部関数を公開（週ビュー復帰用）
-      _showWeekDOM: _showWeekDOM,
       _showMonthDOM: _showMonthDOM
     };
   }());
