@@ -2032,12 +2032,17 @@
   KC.Lanes = (function () {
     var U = KC.Utils;
 
+    // isLightColor の結果キャッシュ（color 文字列 → boolean）
+    var _colorCache = {};
+
     /**
      * 色が明るいかどうかを判定する（文字色選択に使用）
+     * 同一 color 文字列の再計算を省くため結果をキャッシュする
      * @param {string} color - CSS カラー文字列
      * @returns {boolean} true = 明るい色（文字を黒にする）
      */
     function isLightColor(color) {
+      if (_colorCache[color] !== undefined) return _colorCache[color];
       var canvas = document.createElement('canvas');
       canvas.width = canvas.height = 1;
       var ctx = canvas.getContext('2d');
@@ -2045,7 +2050,9 @@
       ctx.fillRect(0, 0, 1, 1);
       var data = ctx.getImageData(0, 0, 1, 1).data;
       var luminance = (0.299 * data[0] + 0.587 * data[1] + 0.114 * data[2]) / 255;
-      return luminance > 0.6;
+      var result = luminance > 0.6;
+      _colorCache[color] = result;
+      return result;
     }
 
     /**
@@ -2781,6 +2788,9 @@
     // 月ビュー DOM ルート要素（_ensureMonthDOM で生成・キャッシュ）
     var _monthRoot = null;
 
+    // _toRgba15 の結果キャッシュ（color 文字列 → rgba 文字列）
+    var _rgba15Cache = {};
+
     /**
      * 月ビューの表示範囲（42日分 = 6行 × 7列）を算出する
      * 月初日が含まれる週の日曜から始め、常に 42 マスを確保する
@@ -3021,6 +3031,7 @@
      */
     function _toRgba15(color) {
       if (!color) return 'rgba(59,130,246,0.15)';
+      if (_rgba15Cache[color] !== undefined) return _rgba15Cache[color];
       try {
         var canvas = document.createElement('canvas');
         canvas.width = canvas.height = 1;
@@ -3028,7 +3039,9 @@
         ctx.fillStyle = color;
         ctx.fillRect(0, 0, 1, 1);
         var d = ctx.getImageData(0, 0, 1, 1).data;
-        return 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',0.15)';
+        var result = 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',0.15)';
+        _rgba15Cache[color] = result;
+        return result;
       } catch (e) {
         return 'rgba(59,130,246,0.15)';
       }
@@ -4001,7 +4014,6 @@
       if (!colCount) return;
 
       var columnDates = this._getColumnDates(colCount);
-      var self = this;
 
       rowElems.forEach(function (row, hour) {
         var cells = Array.from(row.children);
@@ -4018,11 +4030,32 @@
             slot.dataset.date = date;
             slot.dataset.hour = String(hour);
             slot.dataset.half = String(half);
-            slot.addEventListener('click', function (e) { self._onTimeSlotClick(e); });
+            // 個別 click リスナは登録しない（kc-body への event delegation で処理）
             cell.appendChild(slot);
           }
         });
       });
+
+      // kc-body への click 委譲リスナを初回のみ登録する
+      // kc-body は _buildGrid で一度だけ生成される安定要素のため renderGrid をまたいで有効
+      this._bindDelegation();
+    },
+
+    /**
+     * kc-body に .kc-time-slot の click 委譲リスナを登録する
+     * _delegationBound フラグで多重登録を防ぐ
+     */
+    _bindDelegation: function () {
+      if (this._delegationBound) return;
+      var body = document.getElementById('kc-body');
+      if (!body) return;
+      var self = this;
+      body.addEventListener('click', function (e) {
+        var slot = e.target.closest('.kc-time-slot');
+        if (!slot) return;
+        self._onTimeSlotClick(e, slot);
+      });
+      this._delegationBound = true;
     },
 
     /** 終日セルにクリックイベント付与（.kc-adbox 廃止につき .kc-adcell に変更） */
@@ -4052,11 +4085,15 @@
       body.scrollTop = hourHeight * 6.5;
     },
 
-    /** 時間セルクリック → ダイアログ表示 */
-    _onTimeSlotClick: function (e) {
+    /**
+     * 時間セルクリック → ダイアログ表示
+     * event delegation 経由で呼ばれるため slot 要素を第2引数で受け取る
+     * @param {MouseEvent} e
+     * @param {HTMLElement} slot - .kc-time-slot 要素（closest で取得済み）
+     */
+    _onTimeSlotClick: function (e, slot) {
       e.preventDefault();
       e.stopPropagation();
-      var slot = e.currentTarget;
       var date = slot.dataset.date;
       var hour = Number(slot.dataset.hour || 0);
       var half = Number(slot.dataset.half || 0);
@@ -4170,7 +4207,8 @@
       } catch (e) {
         console.warn('[KC.FilterDropdown] localStorage 保存失敗:', e);
       }
-      KC.Render.refresh();
+      // フィルタはクライアント側処理のため API 再取得不要。renderGrid で再描画のみ実施する
+      KC.Render.renderGrid();
     },
 
     /**
