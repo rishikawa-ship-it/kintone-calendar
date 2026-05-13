@@ -3836,6 +3836,9 @@
     /**
      * 指定ビューの DOM ルートを表示状態にし、他ビューの DOM ルートを非表示にする。
      * ビュー切替に伴う DOM 表示制御の唯一のエントリポイント。
+     * 同一 DOM を共用するビュー (week/day は .kc-grid-wrap 共用) を考慮し、
+     * active view の el を識別したうえで、それ以外の el のみ display:'none' を適用する。
+     * 2 段階処理: 非表示ループ (active と同じ el はスキップ) → 表示設定。
      * @param {string} viewName - 'week' | 'month' | 'day'
      */
     setActiveView: function (viewName) {
@@ -3848,12 +3851,18 @@
         day:   { el: function () { return document.querySelector('.kc-grid-wrap'); },  activeDisplay: '' }
         // 将来ビューを追加する場合はここに 1 エントリ追加するだけで済む
       };
+      var activeEntry = VIEW_ROOTS[viewName];
+      var activeEl = activeEntry ? activeEntry.el() : null;
+      // 非表示ループ: active と同じ要素は触らない (共用 DOM の上書き回避)
       Object.keys(VIEW_ROOTS).forEach(function (v) {
-        var entry = VIEW_ROOTS[v];
-        var el = entry.el();
-        if (!el) return;
-        el.style.display = (v === viewName) ? entry.activeDisplay : 'none';
+        var el = VIEW_ROOTS[v].el();
+        if (!el || el === activeEl) return;
+        el.style.display = 'none';
       });
+      // 表示設定: active view の el を最後に activeDisplay で明示
+      if (activeEl) {
+        activeEl.style.display = activeEntry.activeDisplay;
+      }
     },
 
     /** ビューに対応するモジュールを取得 */
@@ -3870,10 +3879,8 @@
       var root = document.getElementById('kc-root');
       if (!root) return;
 
-      // 週ビューに戻った場合は月ビュー DOM を非表示にして週ビューを復帰させる
-      if (KC.State.view !== 'month' && KC.RenderMonth && KC.RenderMonth._showWeekDOM) {
-        KC.RenderMonth._showWeekDOM();
-      }
+      // ビュー切替: 現在の view のみ表示、他を非表示にする（唯一のエントリポイント）
+      this.setActiveView(KC.State.view);
 
       var m = this._pickModule();
       if (m && typeof m.refresh === 'function') {
