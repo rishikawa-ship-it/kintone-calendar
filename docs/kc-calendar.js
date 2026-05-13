@@ -2960,14 +2960,13 @@
     }
 
     /**
-     * 月ビュー用に週ビュー DOM を非表示にし、月ビュー DOM を表示する
+     * 月ビュー DOM の表示状態を保証する（CSS 初期値 none への安全弁）
+     * setActiveView('month') が .kc-grid-wrap の非表示と #kc-month-root の表示を担うため、
+     * ここでは _monthRoot の flex 明示のみ行う。
      */
     function _showMonthDOM() {
-      // 週ビュー DOM を非表示
-      var gridWrap = document.querySelector('.kc-grid-wrap');
-      if (gridWrap) gridWrap.style.display = 'none';
-
-      // 月ビュー DOM を表示
+      // setActiveView('month') が .kc-grid-wrap の非表示と #kc-month-root の表示を担う。
+      // ここでは _monthRoot の flex 明示のみ行う（CSS 初期値 none への安全弁として残す）。
       if (_monthRoot) _monthRoot.style.display = 'flex';
     }
 
