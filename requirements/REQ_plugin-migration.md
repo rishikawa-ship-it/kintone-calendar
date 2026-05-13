@@ -2,15 +2,16 @@
 
 **文書番号**: REQ_plugin-migration
 **作成日**: 2026-05-13
-**最終更新日**: 2026-05-13 (第 2 版)
+**最終更新日**: 2026-05-13 (第 3 版)
 **作成者**: designer (サブエージェント)
-**ステータス**: 確定版 (第 2 版)
+**ステータス**: 確定版 (第 3 版)
 **関連文書**: PLUGIN_DISCUSSION.md, HANDOVER.md, DESIGN.md, FIELD_REFERENCE.md, DEPLOY_GUIDE.md
 
 ### 更新履歴
 
 | 版 | 日付 | 変更内容 |
 |---|---|---|
+| 第 3 版 | 2026-05-13 | Q1 方針変更: アプリテンプレート XML 方式 → REST API スクリプト方式。§2.1・§3 Phase 4・§6 AC21・§9・§10 Q1 を更新 |
 | 第 2 版 | 2026-05-13 | Phase 2 実装との §4.3 整合: calendarTitle キーを追記 (reviewer 指摘 NG#1 対応) |
 | 第 1 版 | 2026-05-13 | Q1〜Q4 ユーザー確定内容を反映。ステータスを確定版に更新。AC9, AC10 追加。§5.3 移行マイルストーン新規追加 |
 | ドラフト | 2026-05-13 | 初版作成 |
@@ -54,7 +55,7 @@
 | ビルドスクリプト | `@kintone/plugin-packer` による zip 化 |
 | 設定値の保存 / 読み込み | `kintone.plugin.app.getConfig` / `setConfig` 利用 |
 | テストアプリ構築 | 時間予定 (DATETIME) + 終日 (DATE or CHECK_BOX) を含む kintone アプリ |
-| テストアプリのアプリテンプレート XML 作成 | 時間予定対応版・終日のみ版の 2 種類を作成。ユーザーが kintone 管理画面でインポートして使用 |
+| テストアプリ構築用 REST API スクリプト (scripts/setup-test-app/) | アプリ ID と API トークンを `.env` で受け取り、フィールド一括追加 → デプロイまで自動化。時間予定対応版 (DATETIME) と終日のみ版 (DATE) の 2 バリエーションを `fields-config.*.json` で提供 |
 | ドキュメント整備 | インストール手順・設定マニュアル・移行ガイド |
 
 ### 2.2 含まれないもの (将来検討)
@@ -117,8 +118,10 @@ PLUGIN_DISCUSSION.md の 5 Phase 構成を踏襲しつつ、ロードマップ 3
 **目的**: プラグイン ZIP を生成し、別 kintone アプリへのインストールと基本動作を確認する (ロードマップ ②)
 
 - ビルドスクリプトで plugin.zip を生成
-- **アプリテンプレート XML 作成**: 時間予定対応版 (DATETIME + CHECK_BOX) と終日のみ版 (DATE) の 2 種類を designer/builder が作成する
-- **ユーザーによるテストアプリ構築**: ユーザーが kintone 管理画面でアプリテンプレート XML をインポートしてテストアプリを作成する
+- **scripts/setup-test-app/ に Node.js スクリプトを配置**: `@kintone/rest-api-client` を使用し、`/k/v1/preview/app/form/fields.json` へのフィールド一括追加と `/k/v1/preview/app/deploy.json` によるデプロイを自動化する
+- **テストアプリ構築手順**: ユーザーが kintone で空アプリを作成 → API トークン発行 (フィールド追加 + 設定変更権限) → `.env` に設定 → `npm run setup:test-app` でフィールド一括投入
+- **時間予定対応版 (DATETIME)** と**終日のみ版 (DATE)** の 2 バリエーションを `fields-config.*.json` で提供する
+- **注意**: ユーザーが手動でアプリ枠 (アプリ名・スペース選択) を作成する必要あり。スクリプトはフィールド追加とデプロイのみを担う
 - テストアプリへのプラグインインストールと設定
 - 終日 DnD 移動・リサイズ・予定作成・編集・削除が現 loader 方式と同等動作することを確認
 
@@ -162,7 +165,7 @@ PLUGIN_DISCUSSION.md の 5 Phase 構成を踏襲しつつ、ロードマップ 3
 | 6 | ドキュメント・公開 | 1〜2 営業日 |
 | | **合計** | **13〜21 営業日** |
 
-> 注: Phase 4 にアプリテンプレート XML 作成ステップを追加したため、PLUGIN_DISCUSSION.md の 10〜17 営業日から微増。
+> 注: Phase 4 に REST API スクリプト実装・ドキュメント作成・実機検証の工数を含むため、PLUGIN_DISCUSSION.md の 10〜17 営業日から微増。
 
 ### 3.7 プラグインディレクトリ構成 (設計時点案)
 
@@ -344,7 +347,7 @@ kintone のカスタマイズビュー HTML への `<div id="kc-root" class="kc-
 - AC18: インストール手順・設定マニュアルが README または別ドキュメントに整備される
 - AC19: `DEPLOY_GUIDE.md` にプラグインビルド手順が追記される
 - AC20: `HANDOVER.md §4` に Phase 5 検証結果が反映される
-- AC21: アプリテンプレート XML (時間予定対応版・終日のみ版) がユーザー環境の kintone 管理画面で正常にインポートできること
+- AC21: `scripts/setup-test-app/` のスクリプトがユーザー環境で正常に実行され、フィールド一括追加とデプロイが完了すること
 - AC22: Phase 5 検証で検出した不具合が HANDOVER.md に追記されていること
 
 ---
@@ -475,6 +478,7 @@ kintone.events.on('app.record.index.show')
 | CSP / CORS 差分 | loader.js 方式 (外部 URL) とプラグイン方式 (zip 内蔵) では CSP の挙動が異なる可能性がある | Phase 4 の実機確認で検証必須 |
 | src と plugin/desktop.js の乖離 | 二重管理となるため、loader 方式への修正をプラグイン版に反映し忘れるリスクがある | 並行運用期間は変更時に両ファイルへの反映を徹底。廃止時期の検討が必要 |
 | テストアプリの kintone アカウント | テストアプリを作成できる kintone 環境・権限が必要 | 前提: ユーザー側で開発用 kintone スペースが利用可能であること |
+| API トークンの管理リスク | スクリプト実行時のトークンは `.env` で管理し `.gitignore` 対象とする。kintone-rules.md / security-rules.md の API トークンスコープ最小化原則に従い、フィールド追加 + 設定変更権限のみ付与する | `.env.example` にキー名のみ記載し、実際のトークンをコミット履歴に含めない。トークン漏洩時は即座に再発行する |
 | `@kintone/customize-uploader` 終了 | 2026 年 8 月にメンテナンス終了予定。プラグイン開発には直接影響しないが、旧 loader 方式のデプロイに使用している場合は後継 `cli-kintone` への移行が必要 | DEPLOY_GUIDE.md に記載済み。プラグイン化後の loader 方式廃止で解消 |
 
 ---
@@ -483,7 +487,7 @@ kintone.events.on('app.record.index.show')
 
 | ID | 事項 | ステータス | 確定内容 / 残課題 |
 |---|---|---|---|
-| Q1 | テストアプリの作成主体 | **確定済** | アプリテンプレート XML を designer/builder が作成し、ユーザーが kintone 管理画面でインポートして構築する |
+| Q1 | テストアプリの作成主体 | **確定済 (第 3 版更新)** | REST API スクリプト方式を採用。`scripts/setup-test-app/` に Node.js スクリプトを配置し、ユーザーが空アプリ作成 + API トークン発行後に `npm run setup:test-app` でフィールド一括投入・デプロイを自動化する。理由: kintone アプリテンプレート XML はフォーマット仕様非公開のため Claude 側で完全自動生成は困難。REST API 方式は公式仕様準拠かつ複数アプリへの展開時に再利用可能 |
 | Q2 | プラグイン署名のタイミング・方式 | **確定済** | 「署名なし + 許可設定」で運用 (kintone システム管理者設定で「署名なしプラグインを許可」を ON)。cybozu develop tools による署名は将来公開時の別タスク |
 | Q3 | 旧 loader 方式の廃止時期 | **確定済** | プラグイン安定後 (Phase 5 検証クリア後) に現運用アプリへ全面移行し、廃止する。廃止までの並行運用期間は Phase 5 完了まで |
 | Q4 | Phase 5 で不具合検出時の管理方法 | **確定済** | 検出した不具合は HANDOVER.md に追記し、個別対応は別タスクとして requirements/ 配下で起案する |
