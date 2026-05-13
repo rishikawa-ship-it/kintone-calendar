@@ -1,20 +1,298 @@
 <!DOCTYPE html>
-<!-- TODO: Phase 2 で実装 -->
-<!-- プラグイン設定画面 HTML -->
-<!-- 設定項目の詳細は requirements/REQ_plugin-migration.md §4 を参照 -->
-<!-- セクション構成:
-  1. 基本設定 (カレンダータイトル、デフォルトビュー)
-  2. フィールドマッピング (必須): タイトル / 開始日時 / 終了日時
-  3. フィールドマッピング (任意): ステータス / 終日 / 色 / 場所 / 氏名 / メール / アカウント / メモ
-  4. フィルタ設定: 除外ステータス / 終日ラベル値
-  5. セットアップガイド: <div id="kc-root"> 設置手順の説明
--->
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>KC Calendar プラグイン設定</title>
+    <link rel="stylesheet" href="../css/config.css" />
   </head>
   <body>
-    <!-- Phase 2 で実装 -->
+    <div class="kc-config-container">
+      <h1 class="kc-config-title">KC Calendar プラグイン設定</h1>
+
+      <!-- バリデーションエラー表示エリア -->
+      <div id="kc-config-error" class="kc-config-error" aria-live="polite"></div>
+
+      <form id="kc-config-form" novalidate>
+
+        <!-- ====================================================
+          セクション 1: 基本設定
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">基本設定</h2>
+
+          <div class="kc-config-field-group">
+            <label for="kc-calendar-title" class="kc-config-label">
+              カレンダータイトル
+            </label>
+            <input
+              type="text"
+              id="kc-calendar-title"
+              name="calendarTitle"
+              class="kc-config-input"
+              placeholder="例: 会議室予約カレンダー"
+              maxlength="100"
+            />
+            <p class="kc-config-hint">未入力の場合はアプリ名を使用します。</p>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label class="kc-config-label">
+              デフォルトビュー <span class="kc-required">*</span>
+            </label>
+            <div class="kc-config-radio-group">
+              <label class="kc-config-radio-label">
+                <input
+                  type="radio"
+                  name="defaultView"
+                  value="month"
+                  id="kc-view-month"
+                  checked
+                />
+                月ビュー
+              </label>
+              <label class="kc-config-radio-label">
+                <input
+                  type="radio"
+                  name="defaultView"
+                  value="week"
+                  id="kc-view-week"
+                />
+                週ビュー
+              </label>
+              <label class="kc-config-radio-label">
+                <input
+                  type="radio"
+                  name="defaultView"
+                  value="day"
+                  id="kc-view-day"
+                />
+                日ビュー
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================================================
+          セクション 2: フィールドマッピング (必須)
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">フィールドマッピング (必須)</h2>
+          <p class="kc-config-section-desc">
+            カレンダー表示に必要なフィールドを選択してください。
+          </p>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-title" class="kc-config-label">
+              タイトルフィールド <span class="kc-required">*</span>
+            </label>
+            <select id="kc-field-title" name="fieldTitle" class="kc-config-select">
+              <option value="">-- フィールドを選択 --</option>
+            </select>
+            <p class="kc-config-hint">SINGLE_LINE_TEXT 型のフィールドが表示されます。</p>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-start" class="kc-config-label">
+              開始日時フィールド <span class="kc-required">*</span>
+            </label>
+            <select id="kc-field-start" name="fieldStart" class="kc-config-select">
+              <option value="">-- フィールドを選択 --</option>
+            </select>
+            <p class="kc-config-hint">DATETIME 型または DATE 型のフィールドが表示されます。</p>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-end" class="kc-config-label">
+              終了日時フィールド <span class="kc-required">*</span>
+            </label>
+            <select id="kc-field-end" name="fieldEnd" class="kc-config-select">
+              <option value="">-- フィールドを選択 --</option>
+            </select>
+            <p class="kc-config-hint">DATETIME 型または DATE 型のフィールドが表示されます。</p>
+          </div>
+        </section>
+
+        <!-- ====================================================
+          セクション 3: フィールドマッピング (任意)
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">フィールドマッピング (任意)</h2>
+          <p class="kc-config-section-desc">
+            追加機能を使用する場合にフィールドを選択してください。
+          </p>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-status" class="kc-config-label">
+              ステータスフィールド
+            </label>
+            <select id="kc-field-status" name="fieldStatus" class="kc-config-select">
+              <option value="">-- 未設定 --</option>
+            </select>
+            <p class="kc-config-hint">DROP_DOWN 型のフィールドが表示されます。未設定時はフィルタ機能が無効になります。</p>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-allday" class="kc-config-label">
+              終日フィールド
+            </label>
+            <select id="kc-field-allday" name="fieldAllday" class="kc-config-select">
+              <option value="">-- 未設定 --</option>
+            </select>
+            <p class="kc-config-hint">CHECK_BOX 型のフィールドが表示されます。開始/終了が DATETIME 型の場合に使用します。</p>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-color" class="kc-config-label">
+              色フィールド
+            </label>
+            <select id="kc-field-color" name="fieldColor" class="kc-config-select">
+              <option value="">-- 未設定 --</option>
+            </select>
+            <p class="kc-config-hint">イベントの色分けに使用するフィールドを選択します。</p>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-place" class="kc-config-label">
+              場所フィールド
+            </label>
+            <select id="kc-field-place" name="fieldPlace" class="kc-config-select">
+              <option value="">-- 未設定 --</option>
+            </select>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-username" class="kc-config-label">
+              利用者氏名フィールド
+            </label>
+            <select id="kc-field-username" name="fieldUserName" class="kc-config-select">
+              <option value="">-- 未設定 --</option>
+            </select>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-usermail" class="kc-config-label">
+              メールアドレスフィールド
+            </label>
+            <select id="kc-field-usermail" name="fieldUserMail" class="kc-config-select">
+              <option value="">-- 未設定 --</option>
+            </select>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-account" class="kc-config-label">
+              アカウントフィールド
+            </label>
+            <select id="kc-field-account" name="fieldAccount" class="kc-config-select">
+              <option value="">-- 未設定 --</option>
+            </select>
+            <p class="kc-config-hint">USER_SELECT 型のフィールドが表示されます。</p>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-field-memo" class="kc-config-label">
+              メモフィールド
+            </label>
+            <select id="kc-field-memo" name="fieldMemo" class="kc-config-select">
+              <option value="">-- 未設定 --</option>
+            </select>
+            <p class="kc-config-hint">MULTI_LINE_TEXT 型のフィールドが表示されます。</p>
+          </div>
+        </section>
+
+        <!-- ====================================================
+          セクション 4: フィルタ設定
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">フィルタ設定</h2>
+
+          <div class="kc-config-field-group">
+            <label for="kc-excluded-statuses" class="kc-config-label">
+              除外ステータス
+            </label>
+            <input
+              type="text"
+              id="kc-excluded-statuses"
+              name="excludedStatuses"
+              class="kc-config-input"
+              placeholder="例: 返却済,削除済"
+            />
+            <p class="kc-config-hint">
+              カレンダーに表示しないステータス値をカンマ区切りで入力します。
+              ステータスフィールドが未設定の場合は無効です。
+            </p>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-allday-label" class="kc-config-label">
+              終日ラベル値
+            </label>
+            <input
+              type="text"
+              id="kc-allday-label"
+              name="alldayLabel"
+              class="kc-config-input"
+              placeholder="例: 終日"
+            />
+            <p class="kc-config-hint">
+              終日フィールド (CHECK_BOX) の選択肢値を入力します。
+              終日フィールドが未設定の場合は無効です。
+            </p>
+          </div>
+        </section>
+
+        <!-- ====================================================
+          セクション 5: セットアップガイド
+        ==================================================== -->
+        <section class="kc-config-section kc-config-guide">
+          <h2 class="kc-config-section-title">セットアップガイド</h2>
+          <p class="kc-config-guide-desc">
+            カレンダーを表示するには、kintone のカスタマイズビューに以下の設定が必要です。
+          </p>
+
+          <ol class="kc-config-guide-steps">
+            <li>
+              kintone アプリの設定画面を開き、「一覧」タブを選択します。
+            </li>
+            <li>
+              「カスタマイズビュー」を追加（または既存のビューを編集）します。
+            </li>
+            <li>
+              「HTML」欄に以下のコードを貼り付けます:
+              <div class="kc-config-code-block">
+                <code id="kc-guide-code">&lt;div id="kc-root" class="kc-root"&gt;&lt;/div&gt;</code>
+                <button type="button" id="kc-guide-copy" class="kc-config-btn-copy">コピー</button>
+              </div>
+            </li>
+            <li>
+              アプリを保存・公開します。
+            </li>
+            <li>
+              カスタマイズビューにアクセスするとカレンダーが表示されます。
+            </li>
+          </ol>
+
+          <div class="kc-config-guide-note">
+            <strong>注意:</strong>
+            このHTML設置はAPIで自動化できないため、管理者が手動で行う必要があります。
+          </div>
+        </section>
+
+        <!-- ====================================================
+          操作ボタン
+        ==================================================== -->
+        <div class="kc-config-actions">
+          <button type="button" id="kc-config-cancel" class="kc-config-btn kc-config-btn-cancel">
+            キャンセル
+          </button>
+          <button type="button" id="kc-config-submit" class="kc-config-btn kc-config-btn-submit">
+            保存
+          </button>
+        </div>
+
+      </form>
+    </div>
+
+    <script src="../js/config.js"></script>
   </body>
 </html>

@@ -1,3 +1,379 @@
-/* TODO: Phase 2 で実装 */
-/* プラグイン設定画面のスタイル */
-/* 詳細は requirements/REQ_plugin-migration.md §3 Phase 2 を参照 */
+/* ====================================================================
+ * KC Calendar プラグイン設定画面スタイル
+ * kintone 管理画面の iframe 内に埋め込まれる前提
+ * ==================================================================== */
+
+/* ====================================================================
+ * リセット・基本
+ * ==================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Meiryo', 'メイリオ', 'Hiragino Sans', 'ヒラギノ角ゴシック', sans-serif;
+  font-size: 14px;
+  color: #333;
+  background: #f5f5f5;
+  margin: 0;
+  padding: 0;
+}
+
+/* ====================================================================
+ * コンテナ
+ * ==================================================================== */
+
+.kc-config-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
+}
+
+/* ====================================================================
+ * タイトル
+ * ==================================================================== */
+
+.kc-config-title {
+  font-size: 20px;
+  font-weight: bold;
+  color: #222;
+  margin: 0 0 24px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #0078d4;
+}
+
+/* ====================================================================
+ * エラー表示エリア
+ * ==================================================================== */
+
+.kc-config-error {
+  display: none;
+  background: #fff0f0;
+  border: 1px solid #e53e3e;
+  border-left: 4px solid #e53e3e;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  color: #c53030;
+  font-size: 13px;
+  white-space: pre-line;
+  line-height: 1.6;
+}
+
+/* エラーアイコン (CSS のみ・画像不要) */
+.kc-config-error::before {
+  content: '\26A0\0020'; /* ⚠ */
+  font-size: 16px;
+}
+
+/* ====================================================================
+ * セクション
+ * ==================================================================== */
+
+.kc-config-section {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+
+.kc-config-section-title {
+  font-size: 16px;
+  font-weight: bold;
+  color: #0078d4;
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.kc-config-section-desc {
+  font-size: 13px;
+  color: #666;
+  margin: -8px 0 16px;
+}
+
+/* ====================================================================
+ * フィールドグループ
+ * ==================================================================== */
+
+.kc-config-field-group {
+  margin-bottom: 18px;
+}
+
+.kc-config-field-group:last-child {
+  margin-bottom: 0;
+}
+
+/* ====================================================================
+ * ラベル
+ * ==================================================================== */
+
+.kc-config-label {
+  display: block;
+  font-weight: bold;
+  margin-bottom: 6px;
+  color: #333;
+  font-size: 13px;
+}
+
+/* 必須マーカー */
+.kc-required {
+  color: #e53e3e;
+  margin-left: 2px;
+  font-weight: bold;
+}
+
+/* ====================================================================
+ * 入力要素 (input / select)
+ * ==================================================================== */
+
+.kc-config-input,
+.kc-config-select {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  padding: 8px 10px;
+  font-size: 14px;
+  color: #333;
+  background: #fff;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  line-height: 1.5;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.kc-config-input:focus,
+.kc-config-select:focus {
+  border-color: #0078d4;
+  box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.2);
+  outline: none;
+}
+
+.kc-config-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23666' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
+/* フィールドが見つからない場合の選択肢 */
+.kc-option-missing {
+  color: #e53e3e;
+  font-style: italic;
+}
+
+/* ====================================================================
+ * ラジオボタングループ
+ * ==================================================================== */
+
+.kc-config-radio-group {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+
+.kc-config-radio-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: normal;
+  cursor: pointer;
+  color: #333;
+  font-size: 14px;
+}
+
+.kc-config-radio-label input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #0078d4;
+}
+
+/* ====================================================================
+ * ヒントテキスト
+ * ==================================================================== */
+
+.kc-config-hint {
+  font-size: 12px;
+  color: #777;
+  margin: 4px 0 0;
+}
+
+/* ====================================================================
+ * セットアップガイド
+ * ==================================================================== */
+
+.kc-config-guide .kc-config-section-title {
+  color: #555;
+}
+
+.kc-config-guide-desc {
+  font-size: 14px;
+  color: #444;
+  margin-bottom: 12px;
+}
+
+.kc-config-guide-steps {
+  font-size: 14px;
+  color: #333;
+  line-height: 1.8;
+  padding-left: 20px;
+  margin: 0 0 16px;
+}
+
+.kc-config-guide-steps li {
+  margin-bottom: 8px;
+}
+
+.kc-config-code-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f0f4f8;
+  border: 1px solid #c8d8e8;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 8px 0 4px;
+  flex-wrap: wrap;
+}
+
+.kc-config-code-block code {
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 13px;
+  color: #0a5a8a;
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.kc-config-btn-copy {
+  padding: 4px 10px;
+  font-size: 12px;
+  background: #fff;
+  border: 1px solid #aaa;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #555;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+
+.kc-config-btn-copy:hover {
+  background: #e8e8e8;
+}
+
+.kc-config-guide-note {
+  font-size: 13px;
+  color: #664400;
+  background: #fff8e0;
+  border: 1px solid #f0d060;
+  border-left: 4px solid #f0d060;
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin-top: 8px;
+}
+
+/* ====================================================================
+ * 操作ボタンエリア
+ * ==================================================================== */
+
+.kc-config-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #ddd;
+}
+
+.kc-config-btn {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: bold;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1.5;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.kc-config-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 保存ボタン */
+.kc-config-btn-submit {
+  background: #0078d4;
+  color: #fff;
+  min-width: 100px;
+}
+
+.kc-config-btn-submit:hover:not(:disabled) {
+  background: #005fa3;
+}
+
+.kc-config-btn-submit:active:not(:disabled) {
+  background: #004a80;
+}
+
+/* キャンセルボタン */
+.kc-config-btn-cancel {
+  background: #fff;
+  color: #333;
+  border: 1px solid #bbb;
+  min-width: 100px;
+}
+
+.kc-config-btn-cancel:hover:not(:disabled) {
+  background: #f0f0f0;
+}
+
+.kc-config-btn-cancel:active:not(:disabled) {
+  background: #e0e0e0;
+}
+
+/* ====================================================================
+ * レスポンシブ
+ * ==================================================================== */
+
+@media (max-width: 600px) {
+  .kc-config-container {
+    padding: 16px 12px 32px;
+  }
+
+  .kc-config-section {
+    padding: 16px;
+  }
+
+  .kc-config-input,
+  .kc-config-select {
+    max-width: 100%;
+  }
+
+  .kc-config-radio-group {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .kc-config-actions {
+    flex-direction: column-reverse;
+  }
+
+  .kc-config-btn {
+    width: 100%;
+    text-align: center;
+  }
+
+  .kc-config-code-block {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
