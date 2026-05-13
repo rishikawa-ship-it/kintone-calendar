@@ -2,7 +2,7 @@
 
 **文書番号**: REQ_day-view
 **作成日**: 2026-04-30
-**最終更新日**: 2026-04-30（初版）
+**最終更新日**: 2026-05-13（第 2 版: §3.1 DOM 共有方針・§9.1 を `KC.Render.setActiveView` ベースに更新）
 **作成者**: designer (サブエージェント)
 **対象ファイル**: `src/kc-calendar.js`, `src/kc-calendar.css`（および `docs/` ミラー）
 **ステータス**: 確定版（確定済み仕様 10 件 / 未確定事項 4 件 — §10 参照）
@@ -11,6 +11,7 @@
 
 | 日付 | 版 | 内容 |
 |---|---|---|
+| 2026-05-13 | 第 2 版 | §3.1 DOM 共有方針の記述を `KC.Render.setActiveView` ベースに更新（`_showWeekDOM` 言及を削除）。§9.1 引き継ぎコメントを `setActiveView` ベースに更新（Step 4-B 対応） |
 | 2026-04-30 | 初版 | 2026-05-12 ユーザー確認済み仕様 10 件を反映して新規作成 |
 
 ---
@@ -151,7 +152,9 @@ KC.ViewDropdown → KC.State.view = 'day' → KC.Render.refresh()
 
 #### DOM 共有方針
 
-日ビューは週ビューと同じ `.kc-grid-wrap` を使用する。切替時は `--kc-col-count` を `1` にセットするだけでレイアウトが 1 列に変わる。月ビューから日ビューへの切替時は `KC.RenderMonth._showWeekDOM()` を呼んで `.kc-grid-wrap` を再表示する（既存 `KC.Render.refresh` の処理で自動対応）。
+日ビューは週ビューと同じ `.kc-grid-wrap` を使用する。切替時は `--kc-col-count` を `1` にセットするだけでレイアウトが 1 列に変わる。月ビューから日ビューへの切替時は、`KC.Render.refresh()` 冒頭で `KC.Render.setActiveView('day')` が呼ばれることで `#kc-month-root` が `display:none` に設定され、`.kc-grid-wrap` が表示状態に復帰する（`KC.Render.refresh` の処理で自動対応）。
+
+ビュー切替時の DOM 表示制御は `KC.Render.setActiveView(viewName)` に一元化されている。内部では VIEW_ROOTS レジストリ（week / month / day）を参照し、active view の DOM ルートのみ表示・他は `display:none` にする 3 段階方式で動作する（詳細は `DESIGN.md §4.8`・`REQ_view-switch-refactor.md §3.1` 参照）。
 
 ### 3.2 KC.RenderShared 共通モジュール
 
@@ -817,6 +820,7 @@ day 時: "YYYY年MM月DD日(曜)" 形式（§3.7 参照）
 - **段階的実装**: `KC.RenderShared` 切り出しは `KC.RenderWeek` の動作に影響する。切り出し後に週ビューの AC（`REQ_allday-bar-redesign.md §4` の全 AC）が合格することを確認してから次ステップへ進む
 - **`buildAlldayBar` の `locator` パラメータ**: 週ビューからの呼び出し箇所すべてに `{ colCount: 7 }` を追加すること。漏れがあると終日バーの位置が崩れる
 - **`--kc-col-count` のセット**: `KC.RenderDay.renderGrid()` の先頭で `document.documentElement.style.setProperty('--kc-col-count', '1')` を呼ぶ。週ビューに戻る際は `KC.RenderWeek.renderGrid()` 先頭で `'7'` に戻す（またはビュー切替ファサードで管理する）
+- **ビュー切替の DOM 表示制御**: `KC.Render.setActiveView(viewName)` に一元化されている。`KC.Render.refresh()` 冒頭で `this.setActiveView(KC.State.view)` が呼ばれ、active view の DOM ルートのみ表示・他は `display:none` に設定される。新規ビューを追加する場合は `setActiveView` 内の `VIEW_ROOTS` レジストリに 1 エントリ追加するだけで対応可能（詳細は `REQ_view-switch-refactor.md §3.1`・`DESIGN.md §4.8` 参照）
 - **XSS 対策**: `textContent` を使用し `innerHTML` にユーザー入力を直接代入しない（`DESIGN.md §10.3`）
 - **1 関数 1 責務**: `KC.RenderDay` 内の各処理は責務ごとに関数を分割する（`coding-rules.md` 準拠）
 - **未確定事項 §10.1 のモジュール名**: `KC.RenderShared` で実装して問題ない。管理者が別名を指定した場合はそちらを優先する

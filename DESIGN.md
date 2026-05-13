@@ -223,12 +223,39 @@ KC.RenderWeek = {
 
 ```javascript
 KC.Render = {
-  refresh(),        // 現ビューのrefreshを委譲
+  setActiveView(viewName), // ビュー切替時のDOM表示制御（唯一のエントリポイント）
+  refresh(),        // 冒頭でsetActiveView(KC.State.view)を呼び、現ビューのrefreshを委譲
   renderGrid(),     // 現ビューのrenderGridを委譲
   refreshTitle(),   // 年月ラベル更新
   gridRange(),      // 現ビューの期間を返す
 };
 ```
+
+#### `setActiveView(viewName)` の設計
+
+ビュー切替時の DOM 表示制御の唯一のエントリポイント。`KC.Render.refresh()` 冒頭で `this.setActiveView(KC.State.view)` が呼ばれることにより、現在ビューの DOM ルートのみ表示・他は `display:none` に設定される。
+
+内部では `VIEW_ROOTS` レジストリ（`setActiveView` 関数内のローカル定数）を参照する。
+
+```javascript
+// VIEW_ROOTS: ビュー名 → { el取得関数, 表示時のdisplay値 } のレジストリ
+var VIEW_ROOTS = {
+  week:  { el: function () { return document.querySelector('.kc-grid-wrap'); },  activeDisplay: '' },
+  month: { el: function () { return document.getElementById('kc-month-root'); }, activeDisplay: 'flex' },
+  day:   { el: function () { return document.querySelector('.kc-grid-wrap'); },  activeDisplay: '' }
+  // 将来ビューを追加する場合はここに 1 エントリ追加するだけで済む
+};
+```
+
+**3 段階方式**（week / day が `.kc-grid-wrap` を共用するため、単純 forEach では共用 DOM が上書きされる問題を回避）:
+
+1. **active view 識別**: `VIEW_ROOTS[viewName].el()` で active view の DOM 要素を取得
+2. **非表示ループ**: `VIEW_ROOTS` の全エントリを走査し、active view と同じ要素はスキップして残りを `display:none` に設定
+3. **表示設定**: active view の DOM 要素に `activeDisplay` 値を適用（`month` は CSS 初期値 `none` を上書きするため `'flex'` を明示）
+
+**`month` の `activeDisplay: 'flex'` を明示する理由**: `kc-calendar.css` で `.kc-month-root { display: none; }` が定義されており、`display: ''` では CSS の `none` に戻ってしまうため。
+
+**新規ビュー追加時**: `VIEW_ROOTS` への 1 行追加のみで対応可能。ビュー切替の DOM 表示制御に関する他のコード変更は不要。
 
 ### 4.9 KC.TimeSlots
 
