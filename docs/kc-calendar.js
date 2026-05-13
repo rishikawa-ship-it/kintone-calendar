@@ -3833,6 +3833,29 @@
    * KC.Render — レンダラーファサード
    * ==================================================================== */
   KC.Render = {
+    /**
+     * 指定ビューの DOM ルートを表示状態にし、他ビューの DOM ルートを非表示にする。
+     * ビュー切替に伴う DOM 表示制御の唯一のエントリポイント。
+     * @param {string} viewName - 'week' | 'month' | 'day'
+     */
+    setActiveView: function (viewName) {
+      // VIEW_ROOTS: ビュー名 → { el取得関数, 表示時のdisplay値 } のレジストリ
+      // KC.Render はオブジェクトリテラルのため IIFE 化せず、ローカル定数で定義する（C 案）
+      // activeDisplay: 表示時に適用する display 値（month は CSS 初期値 none を上書きするため 'flex' を明示）
+      var VIEW_ROOTS = {
+        week:  { el: function () { return document.querySelector('.kc-grid-wrap'); },  activeDisplay: '' },
+        month: { el: function () { return document.getElementById('kc-month-root'); }, activeDisplay: 'flex' },
+        day:   { el: function () { return document.querySelector('.kc-grid-wrap'); },  activeDisplay: '' }
+        // 将来ビューを追加する場合はここに 1 エントリ追加するだけで済む
+      };
+      Object.keys(VIEW_ROOTS).forEach(function (v) {
+        var entry = VIEW_ROOTS[v];
+        var el = entry.el();
+        if (!el) return;
+        el.style.display = (v === viewName) ? entry.activeDisplay : 'none';
+      });
+    },
+
     /** ビューに対応するモジュールを取得 */
     _pickModule: function () {
       var v = KC.State.view || 'week';
