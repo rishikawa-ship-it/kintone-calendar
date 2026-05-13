@@ -11,7 +11,10 @@
 
   // ===== 設定 =====
   var BASE_URL = 'https://rishikawa-ship-it.github.io/kintone-calendar';
-  var V = Date.now(); // キャッシュバスター（常に最新を取得）
+  // キャッシュバスター（固定版数文字列）
+  // 本体 JS/CSS を更新してデプロイする際はこの値を新しいものに手動更新すること
+  // 例: '2026-05-13-perf1' → '2026-06-01-v2' のように日付＋識別子で更新する
+  var V = '2026-05-13-perf1';
 
   // ===== CSS 読み込み =====
   var link = document.createElement('link');

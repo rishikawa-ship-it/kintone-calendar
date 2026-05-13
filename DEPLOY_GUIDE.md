@@ -90,6 +90,13 @@ JS/CSSを GitHub Pages 等でホストし、kintone に URL 登録:
 URL登録は初回のみ。以降はファイル更新だけで反映。
 ただしキャッシュバスティングやサーバーダウンリスクの考慮が必要。
 
+### loader.js のキャッシュバスター版数管理
+
+`docs/loader.js` の `var V` に固定版数文字列（例: `'2026-05-13-perf1'`）を設定している。
+本体 `kc-calendar.js` または `kc-calendar.css` を更新してデプロイする際は、`docs/loader.js` の `var V` を新しい値（例: `'YYYY-MM-DD-識別子'` 形式）に手動更新してから push すること。
+更新しない場合、ブラウザが古いキャッシュを使い続けて変更が反映されないことがある。
+（注: GitHub Pages のキャッシュ制御ヘッダーの設定によって効果が変わる場合があるため、初回デプロイ後に DevTools Network タブで `304 Not Modified` が返ることを実機確認すること）
+
 ---
 
 ## 将来の移行先: cli-kintone
