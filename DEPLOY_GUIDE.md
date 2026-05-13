@@ -97,6 +97,8 @@ URL登録は初回のみ。以降はファイル更新だけで反映。
 更新しない場合、ブラウザが古いキャッシュを使い続けて変更が反映されないことがある。
 （注: GitHub Pages のキャッシュ制御ヘッダーの設定によって効果が変わる場合があるため、初回デプロイ後に DevTools Network タブで `304 Not Modified` が返ることを実機確認すること）
 
+**2026-05-13 実機確認結果**: `kc-calendar.css?v=2026-05-13-perf1` および `kc-calendar.js?v=2026-05-13-perf1` について、DevTools Network タブで Status 200 / Size: (disk cache) / Time: 2〜5 ms を確認。期待していた 304 Not Modified を上回るキャッシュヒット（disk cache から即取得・ネットワーク経由ゼロ）を達成。バージョン文字列を更新するまで本体 JS/CSS はキャッシュから配信されるため、リリース時は `docs/loader.js` の `var V` を確実に更新すること。
+
 ---
 
 ## 将来の移行先: cli-kintone
