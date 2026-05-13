@@ -1,3 +1,1053 @@
-/* TODO: Phase 3 で実装 */
-/* src/kc-calendar.css の内容をコピーする */
-/* 詳細は requirements/REQ_plugin-migration.md §3 Phase 3 を参照 */
+/* ==========================================================================
+ * kc-calendar.css
+ * kintone Customize-View Calendar Stylesheet
+ * --------------------------------------------------------------------------
+ * GAS版 index.html の <style> をベースに、kintone環境向けに調整。
+ *  - html/body へのスタイル適用なし（kintone本体を壊さない）
+ *  - .kc-root にフルハイト・overflow制御を集約
+ *  - ダイアログ / D&D / 範囲選択ハイライト用CSSを追加
+ *  - すべてのセレクタは .kc- プレフィックスを維持
+ * ========================================================================== */
+
+/* ---------- CSS Custom Properties ---------- */
+:root {
+  --kc-bg: #fff;
+  --kc-surface: #fff;
+  --kc-text: #111827;
+  --kc-subtext: #6b7280;
+  --kc-border: #e5e7eb;
+  --kc-muted: #f3f4f6;
+  --kc-time-bg: #fafafa;
+  --kc-sticky-shadow: 0 1px 0 rgba(0,0,0,.05), 0 2px 4px rgba(0,0,0,.05);
+  --kc-radius: 12px;
+
+  --kc-col-count: 7;
+  --kc-hours: 24;
+  --kc-hour-height: 60px;
+  --kc-allday-h: 110px;         /* 折りたたみ時の最大高（3レーン分）: 4+27*3-3+4+24=110 */
+  --kc-allday-lane-h: 27px;     /* 1レーン分の高さ（bar-h + bar-gap = 24 + 3） */
+  --kc-ad-bar-h: 24px;          /* 終日イベントバー 1本の高さ（font-size 16px 対応で 22→24px） */
+  --kc-ad-bar-gap: 3px;         /* バー間の縦隙間 */
+  --kc-ad-bar-top: 4px;         /* .kc-ad-events 上端からの最初のバーまでのオフセット */
+  --kc-month-cell-min-h: 90px;  /* 月ビュー: セルの最小高（REQ_month-view §7.1 確定値） */
+  --kc-month-dateline-h: 28px;  /* 月ビュー: 日付行（dateline）の確保高（祝日名インライン対応で 24px + 4px バッファ） */
+  --kc-fullscreen-header-h: 0px; /* 全画面時 kintone ヘッダー高（kc-expanded は fixed で隠れるため 0px） */
+  --kc-allday-toggle-h: 24px;   /* 行下部横断トグルバーの高さ */
+  --kc-header-h: 48px;
+  --kc-time-col-w: 50px;
+  --kc-scrollbar-w: 0px;       /* JSで上書き: 縦スクロールバー幅（ヘッダー補正用） */
+  --kc-dnd-handle-h: 8px;      /* 時間予定リサイズハンドル高さ（NG#5 修正: :root に明示定義） */
+}
+
+/* ==========================================================================
+ * 1. Root / Layout
+ * ========================================================================== */
+.kc-root * { box-sizing: border-box; }
+
+.kc-root {
+  box-sizing: border-box;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto,
+               "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
+  color: var(--kc-text);
+  background: var(--kc-bg);
+  line-height: 1.5;
+
+  /* kintoneヘッダー(約230px)を差し引いたフルハイト */
+  height: calc(100vh - 230px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+/* カレンダー外枠: 残り高さを受け取る */
+.kc-grid-wrap {
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius);
+  background: var(--kc-surface);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* スクロール本体 */
+.kc-body {
+  display: grid;
+  grid-template-columns: var(--kc-time-col-w) 1fr;
+  height: calc(100% - var(--kc-header-h));
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  flex: 1 1 auto;
+  min-height: 0;
+  scrollbar-gutter: stable;
+}
+
+/* ==========================================================================
+ * 2. Header
+ * ========================================================================== */
+.kc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius);
+  background: var(--kc-surface);
+  box-shadow: var(--kc-sticky-shadow);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.kc-head-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.kc-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 24px;
+}
+
+.kc-title,
+.kc-range {
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 20px;
+}
+
+/* ==========================================================================
+ * 3. Buttons
+ * ========================================================================== */
+.kc-btn {
+  border: 1px solid #c1c5ca;
+  background: #fff;
+  border-radius: 10px;
+  height: 38px;
+  padding: 0 18px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
+}
+.kc-btn:hover {
+  background: var(--kc-muted);
+  border-color: #9aa0a6;
+}
+
+.kc-today { font-weight: 600; }
+
+/* 円形ナビボタン */
+.kc-btn--icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  line-height: 32px;
+  text-align: center;
+  border: none;
+  border-radius: 50%;
+  font-size: 28px;
+  font-weight: 400;
+}
+.kc-btn--icon:hover {
+  background: var(--kc-muted);
+  border: 1px solid var(--kc-border);
+}
+
+/* ==========================================================================
+ * 4. Dropdown
+ * ========================================================================== */
+.kc-dropdown {
+  position: relative;
+  margin-right: 8px;
+}
+
+.kc-dropdown-btn {
+  border: 1px solid #b6bcc2;
+  background: #fff;
+  border-radius: 10px;
+  height: 38px;
+  padding: 0 20px;
+  font-size: 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  transition: border-color .2s, background .2s;
+}
+.kc-dropdown-btn:hover {
+  border-color: #9aa0a6;
+  background: var(--kc-muted);
+}
+
+.kc-caret {
+  font-size: 16px;
+  opacity: .8;
+}
+
+.kc-dropdown-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 220px;
+  background: #f5f6f7;
+  border: 1px solid #d6dadd;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  padding: 6px;
+  list-style: none;
+  margin: 0;
+  display: none;
+  z-index: 100;
+}
+.kc-dropdown.open .kc-dropdown-menu { display: block; }
+
+.kc-option {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 16px;
+  cursor: pointer;
+}
+.kc-option:hover  { background: #e9ecef; }
+.kc-option:focus  { outline: 2px solid #9ab; }
+
+/* 旧 select 互換 */
+.kc-view {
+  border: 1px solid #c1c5ca;
+  background: #fff;
+  border-radius: 10px;
+  height: 38px;
+  padding: 0 18px;
+  font-size: 16px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .2s;
+}
+.kc-view:hover { border-color: #9aa0a6; }
+
+/* ==========================================================================
+ * 5. Day Headers
+ * ========================================================================== */
+.kc-days {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--kc-surface);
+  display: grid;
+  grid-template-columns:
+    var(--kc-time-col-w)
+    repeat(var(--kc-col-count, 7), minmax(0, 1fr))
+    var(--kc-scrollbar-w);
+  border-bottom: none;
+  box-shadow: var(--kc-sticky-shadow);
+  height: var(--kc-header-h);
+  flex: 0 0 auto;
+}
+.kc-days,
+.kc-time-col,
+.kc-rows,
+.kc-row,
+.kc-cell { box-sizing: border-box; }
+
+.kc-day-spacer-left {
+  background: var(--kc-time-bg);
+  border-right: 1px solid var(--kc-border);
+}
+
+.kc-days .kc-day {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  border-left: 1px solid var(--kc-border);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kc-days .kc-day .kc-day-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  line-height: 1;
+}
+.kc-days .kc-day .kc-day-head .w {
+  color: var(--kc-subtext);
+  font-weight: 600;
+}
+.kc-days .kc-day .kc-day-head .num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.kc-days .kc-day .kc-day-head.is-today .num {
+  background: #1a73e8;
+  color: #fff;
+}
+
+.kc-day .kc-day-label { font-weight: 600; font-size: 16px; }
+.kc-day .kc-day-sub   { color: var(--kc-subtext); font-size: 16px; }
+
+/* ==========================================================================
+ * 6. All-Day Slot
+ * ========================================================================== */
+.kc-allday {
+  position: sticky;
+  top: var(--kc-header-h);
+  z-index: 40;
+  background: var(--kc-surface);
+  /* grid: time-col + 7列 + scrollbar-spacer。イベントバーレイヤは absolute で乗せる */
+  display: grid;
+  grid-template-columns:
+    var(--kc-time-col-w)
+    repeat(var(--kc-col-count, 7), minmax(0, 1fr))
+    var(--kc-scrollbar-w, 0px);
+  /* 高さは JS（placeEvents）が style.height で動的に設定する */
+  height: var(--kc-allday-h);
+  border-bottom: 1px solid var(--kc-border);
+  /* .kc-ad-events と .kc-allday-toggle を絶対配置するために
+   * overflow: visible を維持。position: sticky 内でも子要素の
+   * absolute 配置は機能する。 */
+  overflow: visible;
+}
+
+.kc-allday .kc-gutter {
+  background: var(--kc-time-bg);
+  border-right: 1px solid var(--kc-border);
+  /* 高さは JS が allday と合わせて同期する */
+}
+
+.kc-adcell {
+  position: relative;
+  /* 高さは .kc-allday の height に追随する（grid アイテムのため自動） */
+  border-left: 1px solid var(--kc-border);
+}
+
+/* 終日セルのホバー効果（.kc-adbox:hover の代替） — AC 4.17 対応 */
+.kc-adcell:hover {
+  background: var(--kc-muted);
+}
+
+/* 終日イベントバー専用絶対配置レイヤ — AC 4.2 列境界線干渉問題の解決 */
+.kc-ad-events {
+  position: absolute;
+  top: 0;
+  /* time-col 幅分オフセット: left/right で JS の位置計算（colStart/7*100%）の基準を 7列分に揃える */
+  left: var(--kc-time-col-w);
+  right: var(--kc-scrollbar-w, 0px);
+  /* トグルバー分の余白を下部に確保 */
+  bottom: var(--kc-allday-toggle-h, 24px);
+  pointer-events: none;   /* .kc-adcell へのクリックを透過させる */
+  z-index: 1;
+  overflow: hidden;
+}
+
+/* 新方式の終日イベントバー（1イベント = 1要素、位置は JS が絶対座標で設定） */
+.kc-ad-event {
+  position: absolute;
+  height: var(--kc-ad-bar-h, 24px);
+  background: #eef2ff;
+  border: 1px solid var(--kc-border);
+  border-radius: 10px;
+  padding: 0 8px;
+  font-size: 16px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: grab;
+  pointer-events: auto;   /* レイヤは pointer-events: none だがバー自体はクリック受付 */
+  box-sizing: border-box;
+}
+
+/* レーン展開トグルバー（行最下部横断）— AC 4.11〜4.13 対応 */
+.kc-allday-toggle {
+  /* grid の外に出るために absolute で配置（grid ではなく allday 全体の最下部） */
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--kc-allday-toggle-h, 24px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: auto;
+  font-size: 12px;
+  color: var(--kc-subtext);
+  gap: 4px;
+  white-space: nowrap;
+  border-top: 1px solid var(--kc-border);
+  background: transparent;
+  box-sizing: border-box;
+  z-index: 2;   /* .kc-ad-events (z-index: 1) より前面 */
+}
+.kc-allday-toggle:hover {
+  color: var(--kc-text);
+  background: var(--kc-muted);
+}
+
+.kc-ad-event .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #3b82f6;
+  flex: 0 0 auto;
+}
+
+/* 件名（Google カレンダー方式: 単一行・件名のみ表示） */
+.kc-ad-evt-title {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ==========================================================================
+ * 7. Time Grid
+ * ========================================================================== */
+.kc-time-col {
+  position: sticky;
+  left: 0;
+  z-index: 30;
+  background: var(--kc-time-bg);
+  border-right: 1px solid var(--kc-border);
+  display: grid;
+  grid-template-rows: repeat(var(--kc-hours), var(--kc-hour-height));
+  width: var(--kc-time-col-w);
+  min-width: var(--kc-time-col-w);
+}
+
+.kc-time {
+  font-size: 12px;
+  color: var(--kc-subtext);
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--kc-border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+.kc-time:first-child { border-top: 1px solid var(--kc-border); }
+
+.kc-rows {
+  position: relative;
+  display: grid;
+  grid-template-rows: repeat(var(--kc-hours), var(--kc-hour-height));
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(var(--kc-hour-height) - 1px),
+      var(--kc-border) calc(var(--kc-hour-height) - 1px),
+      var(--kc-border) var(--kc-hour-height)
+    );
+  border-top: 1px solid var(--kc-border);
+}
+
+.kc-row {
+  display: grid;
+  grid-template-columns: repeat(var(--kc-col-count), minmax(0, 1fr));
+}
+
+.kc-row .kc-cell {
+  border-left: 1px solid var(--kc-border);
+  position: relative;
+}
+.kc-row .kc-cell:first-child { border-left: none; }
+
+/* ==========================================================================
+ * 8. Time Slots (30-min divisions)
+ * ========================================================================== */
+.kc-time-slot {
+  height: 50%;
+  width: 100%;
+}
+
+.kc-time-slot:hover {
+  background: var(--kc-muted);
+}
+
+/* ==========================================================================
+ * 9. Events
+ * ========================================================================== */
+.kc-event {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--kc-border);
+  background: #eef2ff;
+  padding: 4px 8px;
+  font-size: 16px;
+  line-height: 1.25;
+  overflow: hidden;
+  white-space: normal;
+  text-overflow: ellipsis;
+  box-shadow: 0 1px 2px rgba(0,0,0,.05);
+  cursor: grab;
+  pointer-events: auto;
+}
+.kc-event .kc-evt-title {
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.25;
+}
+.kc-event .kc-evt-meta {
+  color: var(--kc-subtext);
+  font-size: 12px;
+  line-height: 1.25;
+  margin-top: 1px;
+}
+
+/* イベントオーバーレイ */
+.kc-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+ * 10. Buttons (Primary / Danger) — used by header buttons
+ * ========================================================================== */
+.kc-btn--primary {
+  background: #1a73e8;
+  color: #fff;
+  border: none;
+  font-weight: 600;
+}
+.kc-btn--primary:hover { background: #1557b0; }
+
+.kc-btn--danger {
+  color: #e53e3e;
+  border-color: #e53e3e;
+  background: transparent;
+}
+.kc-btn--danger:hover { background: #fef2f2; }
+
+/* ==========================================================================
+ * 11. Drag & Drop / Range Selection
+ * ========================================================================== */
+
+/* ゴーストバー（時間予定・終日予定共通）— バグ C 修正: .kc-event.ghost 廃止 */
+.kc-event--ghost {
+  opacity: 0.85;
+  pointer-events: none;
+  border: 2px dashed var(--kc-border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 9999;
+}
+
+/* DnD ゴーストは一律灰色（元イベントの色は引き継がない）
+ * 色変更時はここの3値を変更する:
+ *   背景: #9ca3af（gray-400）/ 枠線: #6b7280（gray-500）/ 文字: #ffffff
+ * JS 側が ev.color をインラインスタイルで設定するため !important で上書きする */
+.kc-event--ghost,
+.kc-event--ghost.kc-ad-event,
+.kc-event--ghost.kc-month-chip {
+  background: #9ca3af !important;
+  border-color: #6b7280 !important;
+  color: #ffffff !important;
+}
+
+/* ゴースト内の dot も白に統一（元イベントの色ドットを引き継がない） */
+.kc-event--ghost .dot,
+.kc-event--ghost .kc-month-chip-dot {
+  background: #ffffff !important;
+}
+
+/* ゴーストバー内の時刻ラベル（終日予定: "M/D ~ M/D"、時間予定: "HH:MM〜HH:MM"） */
+.kc-evt-ghost-time {
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
+/* 時間予定リサイズハンドル（ホバー時のみ出現） */
+.kc-resize-handle--top,
+.kc-resize-handle--bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--kc-dnd-handle-h, 8px);
+  cursor: ns-resize;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.kc-resize-handle--top    { top: 0; }
+.kc-resize-handle--bottom { bottom: 0; }
+
+/* 時間予定バーホバー時にリサイズハンドルを表示 */
+.kc-event:hover .kc-resize-handle--top,
+.kc-event:hover .kc-resize-handle--bottom {
+  opacity: 1;
+}
+
+/* 終日予定リサイズハンドル（ホバー時のみ出現、幅 6px） */
+.kc-resize-handle--left,
+.kc-resize-handle--right {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+.kc-resize-handle--left  { left: 0; }
+.kc-resize-handle--right { right: 0; }
+
+/* 終日予定バーホバー時にリサイズハンドルを表示 */
+.kc-ad-event:hover .kc-resize-handle--left,
+.kc-ad-event:hover .kc-resize-handle--right {
+  opacity: 1;
+}
+
+/* ドラッグ中の元バー薄表示 */
+.kc-event--dragging {
+  opacity: 0.4;
+}
+
+/* 終日予定ドラッグ中の元バー薄表示 */
+.kc-ad-event--dragging {
+  opacity: 0.4;
+}
+
+/* ドラッグ中のカーソル変更 */
+body.kc-dnd-active,
+body.kc-dnd-active * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+/* 日跨ぎ時間予定の角丸調整 */
+.kc-event--span-start {
+  border-bottom-left-radius: 1px;
+  border-bottom-right-radius: 1px;
+}
+
+.kc-event--span-end {
+  border-top-left-radius: 1px;
+  border-top-right-radius: 1px;
+}
+
+.kc-event--span-middle {
+  border-radius: 1px;
+}
+
+.kc-cell.selecting,
+.kc-time-slot.selecting {
+  background: rgba(26, 115, 232, 0.1);
+}
+
+/* ==========================================================================
+ * 12. Fullscreen
+ * ========================================================================== */
+
+/* 全画面ボタン（通常時） */
+.kc-fullscreen-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: 1px solid #c1c5ca;
+  color: var(--kc-text);
+}
+.kc-fullscreen-btn {
+  width: auto;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid #1a73e8;
+  background: #1a73e8;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.kc-fullscreen-btn:hover {
+  background: #1557b0;
+  border-color: #1557b0;
+}
+.kc-fullscreen-btn svg {
+  pointer-events: none;
+}
+
+/* 全画面を閉じるボタン（デフォルト非表示） */
+.kc-exit-fullscreen-btn {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid #e53e3e;
+  border-radius: 10px;
+  background: #fff;
+  color: #e53e3e;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
+  white-space: nowrap;
+}
+.kc-exit-fullscreen-btn:hover {
+  background: #fef2f2;
+}
+
+/* 全画面表示（ビューポート全体を覆う） */
+.kc-root.kc-expanded {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 9999;
+  background: #fff;
+  padding: 12px;
+  overflow: hidden;
+}
+
+/* ==========================================================================
+ * 13. Weekend & Holiday Coloring
+ * ========================================================================== */
+
+/* 土曜日 */
+.kc-day--sat .kc-day-head .w { color: #1a73e8; }
+.kc-day--sat { background: rgba(26, 115, 232, 0.03); }
+.kc-cell--sat { background: rgba(26, 115, 232, 0.03); }
+.kc-adcell--sat { background: rgba(26, 115, 232, 0.03); }
+
+/* 日曜・祝日 */
+.kc-day--sun .kc-day-head .w { color: #e53e3e; }
+.kc-day--holiday .kc-day-head .w { color: #e53e3e; }
+.kc-day--sun { background: rgba(229, 62, 62, 0.03); }
+.kc-day--holiday { background: rgba(229, 62, 62, 0.03); }
+.kc-cell--sun { background: rgba(229, 62, 62, 0.03); }
+.kc-cell--holiday { background: rgba(229, 62, 62, 0.03); }
+.kc-adcell--sun { background: rgba(229, 62, 62, 0.03); }
+.kc-adcell--holiday { background: rgba(229, 62, 62, 0.03); }
+
+/* 祝日名表示 */
+.kc-holiday-name { font-size: 12px; color: #e53e3e; font-weight: 400; }
+
+/* ---------- 14. kintone 標準UIの非表示（カレンダービュー不要要素） ---------- */
+.gaia-argoui-app-index-pager {
+  display: none !important;
+}
+
+/* ==========================================================================
+ * 15. Month View（月ビュー骨格）— REQ_month-view §6.4 / §7
+ * ========================================================================== */
+
+/* 月ビュールート: 初期非表示。view='month' 切替時に JS が display: flex に変更 */
+.kc-month-root {
+  display: none;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius);
+  background: var(--kc-surface);
+  overflow: hidden;
+}
+
+/* 曜日ヘッダー行（日〜土 7列） */
+.kc-month-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-bottom: 1px solid var(--kc-border);
+  flex: 0 0 auto;
+}
+
+/* 曜日ラベルセル */
+.kc-month-dayhead {
+  text-align: center;
+  font-size: 16px;
+  color: var(--kc-subtext);
+  font-weight: 600;
+  padding: 6px 0;
+  border-left: 1px solid var(--kc-border);
+}
+.kc-month-dayhead:first-child { border-left: none; }
+
+/* 月グリッド本体（6行）*/
+.kc-month-grid {
+  display: grid;
+  grid-template-rows: repeat(6, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+/* 週行ラッパー（7列グリッド + 終日バー絶対配置の基準）*/
+.kc-month-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  position: relative;
+}
+
+/* 日付セル */
+.kc-month-cell {
+  border-top: 1px solid var(--kc-border);
+  border-left: 1px solid var(--kc-border);
+  min-height: var(--kc-month-cell-min-h, 90px);
+  overflow: hidden;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  box-sizing: border-box;
+}
+.kc-month-cell:hover { background: var(--kc-muted); }
+
+/* 各週行の先頭セルは左 border を非表示 */
+.kc-month-week .kc-month-cell:first-child { border-left: none; }
+
+/* 第1週行のセルは上 border を非表示（.kc-month-days の下線と重なる）*/
+.kc-month-grid .kc-month-week:first-child .kc-month-cell { border-top: none; }
+
+/* 当月外セル: 文字色を薄く（gray-400） */
+.kc-month-cell--other-month { color: #9ca3af; }
+
+/* 当日セル: .kc-month-datehead に青丸を適用 */
+.kc-month-cell--today .kc-month-datehead {
+  background: #3b82f6;
+  color: #fff;
+  border-radius: 999px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;  /* dateline の flex レイアウトに合わせる（旧: margin: 0 auto） */
+}
+
+/* 日付行ラッパー（datehead + 祝日名を横並びに）
+ * セル上端に配置し、祝日名は ellipsis で詰める。
+ * .kc-month-cell--today の青丸は datehead 自体に当たるため、ラッパー化しても影響なし。
+ * padding-bottom: 4px で日付ヘッダーと予定エリアの間に 4px の余白を確保する。
+ */
+.kc-month-dateline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  flex: 0 0 auto;
+  min-height: var(--kc-month-dateline-h, 28px);
+  padding-bottom: 4px; /* 日付ヘッダーと終日バー/chip エリアの間の余白 */
+}
+
+/* セル内日付数字（左上）*/
+.kc-month-datehead {
+  font-size: 16px;
+  font-weight: 500;
+  text-align: center;
+  padding: 2px;
+  line-height: 1;
+  flex: 0 0 auto;
+  align-self: center;
+  width: 24px;
+}
+
+/* 終日バー専用絶対配置レイヤ（週行全幅に張る）*/
+/* position: absolute により grid フローから外れるが height は内部バー依存（height: auto）*/
+/* bottom: 0 を設定するとセル全体を覆いクリック競合が生じるため除去（NG#5対応）*/
+/* top を --kc-month-dateline-h + 4px に設定することで日付行と終日バーが被らなくなる。
+ * adLayer を dateline の下（+ 4px の余白）から開始させ、BAR_TOP (JS) は 0 に変更して整合させる。 */
+.kc-month-ad-events {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--kc-month-dateline-h, 28px) + 4px); /* dateline min-height + padding-bottom 分 */
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 時間予定 chip */
+.kc-month-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 1px 4px;
+  cursor: grab;
+  border-radius: 3px;
+  overflow: hidden;
+  white-space: nowrap;
+  margin-top: 1px;
+  pointer-events: auto;
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 2;  /* .kc-month-ad-events (z-index: 1) より前面に表示 */
+}
+.kc-month-chip:hover { filter: brightness(0.95); }
+
+/* chip のカラードット */
+.kc-month-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+/* chip の時刻 */
+.kc-month-chip-time {
+  font-size: 12px;
+  flex: 0 0 auto;
+  color: var(--kc-subtext);
+}
+
+/* chip の件名 */
+.kc-month-chip-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* +N more ラベル */
+.kc-month-more {
+  font-size: 12px;
+  color: var(--kc-subtext);
+  padding: 1px 4px;
+  cursor: default;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  position: relative;
+  z-index: 2;  /* .kc-month-ad-events (z-index: 1) より前面に表示 */
+}
+
+/* 全画面モード時の月グリッド高（REQ_month-view §7.2）*/
+.kc-root.kc-expanded .kc-month-grid {
+  height: calc(100vh - var(--kc-fullscreen-header-h, 0px));
+  grid-template-rows: repeat(6, 1fr);
+}
+
+/* ==========================================================================
+ * 16. 月ビュー: 土日祝の色付け（週ビュー .kc-cell--sat 等と同色系）
+ * ========================================================================== */
+
+/* 曜日ヘッダーの文字色 */
+.kc-month-dayhead--sat { color: #1a73e8; }
+.kc-month-dayhead--sun { color: #e53e3e; }
+.kc-month-dayhead--holiday { color: #e53e3e; }
+
+/* セル背景色（週ビューの rgba 値と統一） */
+.kc-month-cell--sat { background: rgba(26, 115, 232, 0.03); }
+.kc-month-cell--sun { background: rgba(229, 62, 62, 0.03); }
+.kc-month-cell--holiday { background: rgba(229, 62, 62, 0.03); }
+
+/* hover 時は --muted を優先（既存 .kc-month-cell:hover との整合）*/
+.kc-month-cell--sat:hover,
+.kc-month-cell--sun:hover,
+.kc-month-cell--holiday:hover { background: var(--kc-muted); }
+
+/* 当日（青丸）は背景色を上書きしない。.kc-month-datehead の青丸スタイルはそのまま維持 */
+.kc-month-cell--today.kc-month-cell--sat,
+.kc-month-cell--today.kc-month-cell--sun,
+.kc-month-cell--today.kc-month-cell--holiday { background: rgba(229, 62, 62, 0.03); }
+.kc-month-cell--today.kc-month-cell--sat { background: rgba(26, 115, 232, 0.03); }
+
+/* 祝日名表示（.kc-month-dateline 内で日付数字の右隣にインライン配置）
+ * flex: 1 で残幅を占有し、ellipsis で末尾を詰める。
+ */
+.kc-month-holiday-name {
+  font-size: 12px;
+  color: #e53e3e;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ==========================================================================
+ * 17. 月ビュー DnD（REQ_month-dnd Phase A）
+ * ========================================================================== */
+
+/* 月ビュー終日バー: 1 列幅でも左右ハンドルが重ならないよう最小幅を保証（§10.3）*/
+.kc-month-ad-events .kc-ad-event {
+  min-width: 24px;
+}
+
+/* 月ビュー chip ドラッグ中の薄表示（§6.5）*/
+.kc-month-chip.kc-event--dragging {
+  opacity: 0.4;
+}
+
+/* ==========================================================================
+ * 18. 自分の予定の強調表示（ログインユーザーの account と一致する予定）
+ * ========================================================================== */
+
+/* 自分の予定は固定オレンジ色で強調表示する。
+ * !important が必要な理由: JS が el.style.background = evt.color でインラインスタイルを
+ * 設定するため、CSS クラスルールだけでは上書きできない。
+ * 色を変更したい場合はここの 3 変数（background-color / border-color / color）を修正する。 */
+
+/* 週ビュー: 時間予定バーの強調 */
+.kc-event--mine,
+/* 週ビュー・月ビュー: 終日イベントバーの強調 */
+.kc-ad-event--mine,
+/* 月ビュー: chip の強調 */
+.kc-month-chip--mine {
+  background-color: #ea580c !important; /* 強調オレンジ（変更時はここを修正） */
+  border-color:     #c2410c !important; /* やや濃いオレンジ枠（変更時はここを修正） */
+  color:            #ffffff !important; /* 文字白（変更時はここを修正） */
+}
+
+/* 自分の予定の dot は白（オレンジ背景上で視認性確保）
+ * !important が必要な理由: JS が dot.style.background = evt.color でインラインスタイルを
+ * 設定するため、CSS クラスルールだけでは上書きできない。
+ * 他人の予定の dot（.kc-ad-event .dot, .kc-month-chip-dot）は JS のインラインスタイルのままとなる。 */
+.kc-ad-event--mine .dot,
+.kc-month-chip--mine .kc-month-chip-dot {
+  background: #ffffff !important;
+}
+
+/* ==========================================================================
+ * 19. 日ビュー（KC.RenderDay）固有スタイル（REQ_day-view Phase 月-Day-1）
+ * ========================================================================== */
+
+/* --kc-col-count が 1 のとき（日ビュー）: ヘッダーの .kc-day を 1 列幅いっぱいに表示 */
+/* 既存の repeat(var(--kc-col-count, 7), minmax(0, 1fr)) が自動対応するため追加 CSS は最小限 */
+
+/* 日ビューの .kc-day は white-space を解除して祝日名を折り返し表示できるようにする */
+/* --kc-col-count === 1 の場合は 1 列全幅となるため text-overflow は不要 */
+/* CSS 変数での条件分岐は不可のため JS で kc-day--day-view クラスを付与する代わりに
+   col-count が 1 のときは改行を許可するよう上書きする */
+/* 注: 日ビューでは列幅が広いため既存 CSS のまま問題ない場合が多い（必要に応じて有効化） */
