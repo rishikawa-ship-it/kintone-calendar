@@ -2,7 +2,7 @@
 
 **文書番号**: REQ_view-switch-refactor
 **作成日**: 2026-05-12
-**最終更新日**: 2026-05-12（第 3 版: §3.1・§3.2・§4.3 サンプルコード `show` → `activeDisplay` に統一）
+**最終更新日**: 2026-05-13（第 4 版: Step 2 実機検証リグレッションを受け §3.1・§3.2・§4.3 の setActiveView サンプルロジックを修正。共用 DOM 上書き対策を反映）
 **作成者**: designer (サブエージェント)
 **対象ファイル**: `src/kc-calendar.js`（および `docs/kc-calendar.js` ミラー）
 **ステータス**: 確定版（未解決事項 0 件）
@@ -11,6 +11,7 @@
 
 | 日付 | 版 | 内容 |
 |---|---|---|
+| 2026-05-13 | 第 4 版 | Step 2 実機検証でリグレッション発覚 (週ビューが消える) を受け、§3.1/§3.2/§4.3 の setActiveView サンプルロジックを修正。共用 DOM 上書き問題への対策を反映 |
 | 2026-05-12 | 第 3 版 | §3.1・§3.2・§4.3 のサンプルコード `show` → `activeDisplay` に統一（reviewer 指摘の追跡可能性確保） |
 | 2026-05-12 | 第 2 版 | §8.1・§8.2 確定済みに更新。§3.1・§3.2・§3.3・§4.3・§5.3・§6.2・§8.4 に確定内容を反映 |
 | 2026-05-12 | 初版 | コミット `d6aa4d8` 後のレビュー観察事項を受けて新規作成 |
@@ -133,6 +134,8 @@ function _showWeekDOM() {
 /**
  * 指定ビューの DOM ルートを表示状態にし、他ビューの DOM ルートを非表示にする。
  * ビュー切替に伴う DOM 表示制御の唯一のエントリポイント。
+ * 同一 DOM を共用するビュー (week/day は .kc-grid-wrap 共用) を考慮し、
+ * active view の el を識別したうえで、それ以外の el のみ display:'none' を適用する。
  * @param {string} viewName - 'week' | 'month' | 'day'
  */
 setActiveView: function (viewName) {
@@ -145,12 +148,18 @@ setActiveView: function (viewName) {
     day:   { el: function () { return document.querySelector('.kc-grid-wrap'); },  activeDisplay: '' }
     // 将来ビューを追加する場合はここに 1 エントリ追加するだけで済む
   };
+  var activeEntry = VIEW_ROOTS[viewName];
+  var activeEl = activeEntry ? activeEntry.el() : null;
+  // 非表示ループ: active と同じ要素は触らない (共用 DOM の上書き回避)
   Object.keys(VIEW_ROOTS).forEach(function (v) {
-    var entry = VIEW_ROOTS[v];
-    var el = entry.el();
-    if (!el) return;
-    el.style.display = (v === viewName) ? entry.activeDisplay : 'none';
+    var el = VIEW_ROOTS[v].el();
+    if (!el || el === activeEl) return;
+    el.style.display = 'none';
   });
+  // 表示設定: active view の el を最後に activeDisplay で明示
+  if (activeEl) {
+    activeEl.style.display = activeEntry.activeDisplay;
+  }
 },
 ```
 
@@ -174,6 +183,7 @@ var VIEW_ROOTS = {
 - `month` が active のときは `#kc-month-root` が `display: 'flex'` で表示、`.kc-grid-wrap` が `display: 'none'` で非表示になる
 - `month` の `activeDisplay: 'flex'` を明示する理由: `src/kc-calendar.css:775–784` で `.kc-month-root { display: none; }` が定義されており、`display: ''` では CSS の `none` に戻ってしまうため（§8.1 確定判定）
 - `week` / `day` の `activeDisplay: ''`（空文字）: `.kc-grid-wrap` の CSS 初期値は `none` ではないため、空文字で CSS 規定値に戻す方式で問題ない
+- **week と day が同じ要素を返すため、forEach 単純ループでは day 反復が week を上書きしてしまう問題がある。よって setActiveView は active view の el を識別したうえで非表示ループを実行する設計とする**（§3.1 サンプル参照。2026-05-13 第 4 版で修正済み）
 
 ### 3.3 `KC.RenderMonth._showMonthDOM` との整合
 
@@ -292,12 +302,18 @@ KC.Render = {
       month: { el: function () { return document.getElementById('kc-month-root'); }, activeDisplay: 'flex' },
       day:   { el: function () { return document.querySelector('.kc-grid-wrap'); },  activeDisplay: '' }
     };
+    var activeEntry = VIEW_ROOTS[viewName];
+    var activeEl = activeEntry ? activeEntry.el() : null;
+    // 非表示ループ: active と同じ要素は触らない (共用 DOM の上書き回避)
     Object.keys(VIEW_ROOTS).forEach(function (v) {
-      var entry = VIEW_ROOTS[v];
-      var el = entry.el();
-      if (!el) return;
-      el.style.display = (v === viewName) ? entry.activeDisplay : 'none';
+      var el = VIEW_ROOTS[v].el();
+      if (!el || el === activeEl) return;
+      el.style.display = 'none';
     });
+    // 表示設定: active view の el を最後に activeDisplay で明示
+    if (activeEl) {
+      activeEl.style.display = activeEntry.activeDisplay;
+    }
   },
   // ... 既存のプロパティをそのまま維持
 };
@@ -355,6 +371,7 @@ KC.Render = {
 - **When**: `KC.State.view` が `'week'`, `'month'`, `'day'` のいずれかである
 - **Then**: `KC.Render.setActiveView(KC.State.view)` が必ず呼ばれる
 - **And**: `setActiveView` 以外の箇所で `style.display` によるビュー DOM の表示切替が行われていない
+- **And**: setActiveView 自体のループが共用 DOM を上書きしないこと (週/日切替時に `.kc-grid-wrap` が `display:''` のまま保たれること)
 
 ### AC6.2 月ビューへの切替で週ビュー DOM が必ず非表示になる
 
@@ -483,7 +500,7 @@ KC.Render = {
 
 | リスク | 対策 |
 |---|---|
-| `VIEW_ROOTS` の `.kc-grid-wrap` を week/day が共有することで、week → day 切替時に非表示にならない懸念 | week と day は同じ DOM を共用する設計のため、どちらが active でも `.kc-grid-wrap` が表示状態になるのが正しい動作 |
+| `VIEW_ROOTS` の `.kc-grid-wrap` を week/day が共有することで、forEach 単純ループでは day 反復が week を上書きし、`.kc-grid-wrap` が常に `display:'none'` になる問題 | setActiveView を `active view の el 識別 → 非表示ループ (active と同じ el はスキップ) → 表示設定` の 3 段階で実装。§3.1 サンプル参照。2026-05-13 第 4 版で対応済 (Step 2 実機検証リグレッションを契機に発覚) |
 | Step ごとの段階リファクタ中の中間状態でリグレッションが発生する | 各 Step 完了後に AC6.8 の往復切替テストを実施してから次 Step に進む |
 
 > **Note**: 「`display: ''` で意図しない表示状態になる（CSS 初期値が `none` の場合）」のリスクは §8.1 の確定判定により解決済み。`month` の表示には `display: 'flex'` を明示する設計で対処する。
@@ -509,4 +526,4 @@ KC.Render = {
 
 ---
 
-*本要件定義書: 章数 8、受け入れ条件 9 件（AC6.1〜AC6.9）、未解決事項 0 件、段階的リファクタ計画 5 Step。2026-05-12 初版 → 第 2 版（§8.1・§8.2 確定済み）→ 第 3 版（サンプルコード `show` → `activeDisplay` 統一）。*
+*本要件定義書: 章数 8、受け入れ条件 9 件（AC6.1〜AC6.9）、未解決事項 0 件、段階的リファクタ計画 5 Step。2026-05-12 初版 → 第 2 版（§8.1・§8.2 確定済み）→ 第 3 版（サンプルコード `show` → `activeDisplay` 統一）→ **第 4 版（setActiveView 共用 DOM 上書き対策）**。*
