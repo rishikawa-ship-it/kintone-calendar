@@ -1,0 +1,47 @@
+{
+  "properties": {
+    "title": {
+      "type": "SINGLE_LINE_TEXT",
+      "code": "title",
+      "label": "タイトル",
+      "required": true
+    },
+    "startDate": {
+      "type": "DATE",
+      "code": "startDate",
+      "label": "開始日",
+      "required": true
+    },
+    "endDate": {
+      "type": "DATE",
+      "code": "endDate",
+      "label": "終了日",
+      "required": true
+    },
+    "status": {
+      "type": "DROP_DOWN",
+      "code": "status",
+      "label": "ステータス",
+      "options": {
+        "予定": { "label": "予定", "index": "0" },
+        "完了": { "label": "完了", "index": "1" },
+        "キャンセル": { "label": "キャンセル", "index": "2" }
+      }
+    },
+    "userColor": {
+      "type": "DROP_DOWN",
+      "code": "userColor",
+      "label": "色",
+      "options": {
+        "#3B82F6": { "label": "#3B82F6", "index": "0" },
+        "#EF4444": { "label": "#EF4444", "index": "1" },
+        "#10B981": { "label": "#10B981", "index": "2" }
+      }
+    },
+    "memo": {
+      "type": "MULTI_LINE_TEXT",
+      "code": "memo",
+      "label": "メモ"
+    }
+  }
+}
