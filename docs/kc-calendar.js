@@ -3870,8 +3870,10 @@
       var root = document.getElementById('kc-root');
       if (!root) return;
 
-      // ビュー切替: 現在の view のみ表示、他を非表示にする（唯一のエントリポイント）
-      this.setActiveView(KC.State.view);
+      // 週ビューに戻った場合は月ビュー DOM を非表示にして週ビューを復帰させる
+      if (KC.State.view !== 'month' && KC.RenderMonth && KC.RenderMonth._showWeekDOM) {
+        KC.RenderMonth._showWeekDOM();
+      }
 
       var m = this._pickModule();
       if (m && typeof m.refresh === 'function') {
