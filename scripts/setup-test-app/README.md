@@ -24,8 +24,10 @@ kintone の空アプリに対して、KC Calendar プラグイン動作検証用
 
 ### 1. .env を作成する
 
+`.env` はプロジェクトルートで一元管理しています。プラグインアップローダーとこのスクリプトで同じ `.env` を共有します。
+
 ```bash
-cp scripts/setup-test-app/.env.example scripts/setup-test-app/.env
+cp .env.example .env
 ```
 
 `.env` を開いて以下の値を入力します。
@@ -43,6 +45,8 @@ KC_FIELDS_VARIANT=datetime
 | `KINTONE_API_TOKEN` | 手順 3 で発行した API トークン |
 | `KINTONE_APP_ID` | 空アプリのアプリ ID（URL の `/k/123/` の数字） |
 | `KC_FIELDS_VARIANT` | `datetime`（時間予定対応）または `date`（終日のみ） |
+
+> 注意: `.env` はプロジェクトルート (`kintone-calendar/.env`) に配置してください。`scripts/setup-test-app/.env` は不要です。
 
 ### 2. 依存パッケージをインストールする
 

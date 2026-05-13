@@ -32,6 +32,4 @@ plugin.zip
 # プラグイン署名秘密鍵 (npm run build:plugin 実行時に生成される場合がある)
 *.ppk
 
-# テストアプリセットアップスクリプトの環境変数ファイル (機密情報のためコミット禁止)
-# .env.example はコミット対象に含める
-scripts/setup-test-app/.env
+# .env.example はコミット対象に含める (ルートおよびサブディレクトリ共通)

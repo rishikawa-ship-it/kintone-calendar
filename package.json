@@ -8,6 +8,8 @@
     "deploy": "kintone-customize-uploader customize-manifest.json",
     "dev": "kintone-customize-uploader --watch customize-manifest.json",
     "build:plugin": "kintone-plugin-packer plugin --out plugin/dist/plugin.zip",
+    "upload:plugin": "kintone-plugin-uploader plugin/dist/plugin.zip",
+    "upload:plugin:watch": "kintone-plugin-uploader plugin/dist/plugin.zip --watch",
     "setup:test-app": "node scripts/setup-test-app/index.js"
   },
   "keywords": [],
@@ -20,6 +22,7 @@
   },
   "devDependencies": {
     "@kintone/customize-uploader": "^9.0.4",
-    "@kintone/plugin-packer": "^9.1.1"
+    "@kintone/plugin-packer": "^9.1.1",
+    "@kintone/plugin-uploader": "^9.1.5"
   }
 }

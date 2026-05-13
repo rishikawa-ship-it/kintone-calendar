@@ -3,8 +3,9 @@
 const path = require('path');
 const fs = require('fs');
 
-// .env を読み込む（dotenv がなければ自前パーサにフォールバック）
-loadEnv(path.join(__dirname, '.env'));
+// ルートの .env を読み込む（dotenv がなければ自前パーサにフォールバック）
+// プラグインアップローダーとテストアプリスクリプトで .env を共有するためルートを参照する
+loadEnv(path.resolve(__dirname, '../../.env'));
 
 const { KintoneRestAPIClient } = require('@kintone/rest-api-client');
 
@@ -48,7 +49,7 @@ function requireEnv(keys) {
   const missing = keys.filter((k) => !process.env[k]);
   if (missing.length > 0) {
     console.error('[ERROR] 以下の環境変数が設定されていません: ' + missing.join(', '));
-    console.error('        .env.example をコピーして .env を作成し、値を入力してください。');
+    console.error('        ルートの .env.example をコピーして .env を作成し、値を入力してください。');
     process.exit(1);
   }
 }

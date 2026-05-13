@@ -61,6 +61,45 @@ npm run build:plugin
 > 注意: 組織内運用では kintone システム管理者設定の「署名なしプラグインを許可」を ON にすること。
 > 詳細は `DEPLOY_GUIDE.md` を参照予定 (Phase 6 で追記)。
 
+---
+
+## プラグインのアップロード (自動化)
+
+### 初回セットアップ
+
+1. ルートディレクトリの `.env.example` をコピーして `.env` を作成:
+   ```bash
+   cp .env.example .env
+   ```
+2. `.env` を編集:
+   - `KINTONE_BASE_URL`: 例 `https://your-domain.cybozu.com`
+   - `KINTONE_USERNAME`: kintone システム管理者のログイン名
+   - `KINTONE_PASSWORD`: 同パスワード
+3. kintone 側設定:
+   - システム管理 → セキュリティ → 「**署名のないプラグインの追加を許可する**」を ON
+   - 2 段階認証が有効な場合は無効化または専用ユーザー作成を検討
+
+### アップロード実行
+
+```bash
+# 単発アップロード
+npm run upload:plugin
+
+# 開発中: plugin.zip 変更時に自動再アップロード
+npm run upload:plugin:watch
+```
+
+実行すると Puppeteer 経由でブラウザが起動し、`plugin/dist/plugin.zip` が kintone にアップロードされます。
+
+### 注意
+
+- パスワード認証のみサポート (API トークンは非対応)
+- システム管理者権限が必要
+- アップロード後、対象アプリで「アプリの設定 → プラグイン → 追加」で適用してください (初回のみ)
+- 2 回目以降はアップロードだけで自動的に最新版が反映されます
+
+---
+
 ### ディレクトリ構成 (プラグイン版)
 
 ```
