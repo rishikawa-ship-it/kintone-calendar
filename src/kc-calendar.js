@@ -3783,12 +3783,6 @@
      */
     function renderGrid() {
       document.documentElement.style.setProperty('--kc-col-count', '1');
-      // 月ビュー DOM が残留している場合は確実に非表示にする（§True-Cause-A 防御）
-      // KC.Render.refresh() の _showWeekDOM() 呼び出しが何らかの理由で
-      // 適用されなかった場合のフォールバックとして機能する
-      if (KC.RenderMonth && typeof KC.RenderMonth._showWeekDOM === 'function') {
-        KC.RenderMonth._showWeekDOM();
-      }
       renderDayHeaders();
       renderAlldayRow();
       renderRows();
