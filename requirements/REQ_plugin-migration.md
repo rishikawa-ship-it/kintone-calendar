@@ -2,15 +2,16 @@
 
 **文書番号**: REQ_plugin-migration
 **作成日**: 2026-05-13
-**最終更新日**: 2026-05-13
+**最終更新日**: 2026-05-13 (第 2 版)
 **作成者**: designer (サブエージェント)
-**ステータス**: 確定版 (第 1 版)
+**ステータス**: 確定版 (第 2 版)
 **関連文書**: PLUGIN_DISCUSSION.md, HANDOVER.md, DESIGN.md, FIELD_REFERENCE.md, DEPLOY_GUIDE.md
 
 ### 更新履歴
 
 | 版 | 日付 | 変更内容 |
 |---|---|---|
+| 第 2 版 | 2026-05-13 | Phase 2 実装との §4.3 整合: calendarTitle キーを追記 (reviewer 指摘 NG#1 対応) |
 | 第 1 版 | 2026-05-13 | Q1〜Q4 ユーザー確定内容を反映。ステータスを確定版に更新。AC9, AC10 追加。§5.3 移行マイルストーン新規追加 |
 | ドラフト | 2026-05-13 | 初版作成 |
 
@@ -234,6 +235,7 @@ kintone-calendar/ (既存)
   fieldTitle:    'フィールドコード',  // 必須
   fieldStart:    'フィールドコード',  // 必須
   fieldEnd:      'フィールドコード',  // 必須
+  calendarTitle: '',                 // 任意。空文字時は detectAppName フォールバック (§10 Q5)
   defaultView:   'month',            // 'month' | 'week' | 'day'
   fieldStatus:   'フィールドコード',  // 任意 (未設定時は空文字)
   excludedStatuses: '返却済,削除済', // カンマ区切り文字列
