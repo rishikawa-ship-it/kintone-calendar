@@ -24,3 +24,10 @@ desktop.ini
 # ログ
 *.log
 npm-debug.log*
+
+# プラグインビルド成果物
+plugin/dist/
+plugin.zip
+
+# プラグイン署名秘密鍵 (npm run build:plugin 実行時に生成される場合がある)
+*.ppk

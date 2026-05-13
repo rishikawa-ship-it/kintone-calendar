@@ -6,13 +6,15 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "deploy": "kintone-customize-uploader customize-manifest.json",
-    "dev": "kintone-customize-uploader --watch customize-manifest.json"
+    "dev": "kintone-customize-uploader --watch customize-manifest.json",
+    "build:plugin": "kintone-plugin-packer plugin --out plugin/dist/plugin.zip"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
-    "@kintone/customize-uploader": "^9.0.4"
+    "@kintone/customize-uploader": "^9.0.4",
+    "@kintone/plugin-packer": "^9.1.1"
   }
 }

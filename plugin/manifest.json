@@ -1,0 +1,24 @@
+{
+  "manifest_version": 1,
+  "version": 1,
+  "type": "APP",
+  "name": {
+    "ja": "KC カレンダー",
+    "en": "KC Calendar"
+  },
+  "description": {
+    "ja": "kintone レコードを Google カレンダー風に表示するプラグイン",
+    "en": "A plugin to display kintone records in a Google Calendar-like view"
+  },
+  "icon": "src/image/icon.png",
+  "desktop": {
+    "js": ["src/js/desktop.js"],
+    "css": ["src/css/desktop.css"]
+  },
+  "config": {
+    "html": "src/html/config.html",
+    "js": ["src/js/config.js"],
+    "css": ["src/css/config.css"],
+    "required_params": ["fieldTitle", "fieldStart", "fieldEnd"]
+  }
+}
