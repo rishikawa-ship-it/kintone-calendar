@@ -85,15 +85,38 @@ async function waitForDeploy(client, appId) {
 }
 
 /**
+ * 既存フィールドコードを取得し、追加対象外のコードを除外した properties を返す。
+ * preview: true で取得することで、未デプロイのフィールドも含めて確認する。
+ * @param {KintoneRestAPIClient} client - REST API クライアント
+ * @param {number} appId - アプリ ID
+ * @param {Object} configProperties - fields-config の properties オブジェクト
+ * @returns {Promise<{newProperties: Object, existingCodes: string[], skippedCodes: string[]}>}
+ */
+async function resolveNewProperties(client, appId, configProperties) {
+  const existingFields = await client.app.getFormFields({ app: appId, preview: true });
+  const existingCodes = Object.keys(existingFields.properties);
+
+  const newProperties = Object.fromEntries(
+    Object.entries(configProperties).filter(([code]) => !existingCodes.includes(code))
+  );
+
+  const skippedCodes = Object.keys(configProperties).filter((code) => existingCodes.includes(code));
+
+  return { newProperties, existingCodes, skippedCodes };
+}
+
+/**
  * テストアプリセットアップのメイン処理。
  *
  * 1. 環境変数を検証する
  * 2. fields-config.{variant}.json を読み込む
  * 3. KintoneRestAPIClient を初期化する
- * 4. addFormFields でフィールドを追加する (preview 環境)
- * 5. deployApp でデプロイを開始する
- * 6. getDeployStatus をポーリングしてデプロイ完了を待つ
- * 7. 完了ログを表示する
+ * 4. 既存フィールドコードを取得し、追加対象を絞り込む
+ * 5. 追加対象が 0 件の場合はスキップしてデプロイも行わない
+ * 6. 追加対象が 1 件以上の場合は addFormFields でフィールドを追加する (preview 環境)
+ * 7. deployApp でデプロイを開始する
+ * 8. getDeployStatus をポーリングしてデプロイ完了を待つ
+ * 9. 完了ログを表示する
  *
  * @returns {Promise<void>}
  */
@@ -141,7 +164,7 @@ async function main() {
   console.log('--- kintone テストアプリセットアップ ---');
   console.log('対象アプリ ID   : ' + appId);
   console.log('フィールド構成  : ' + variant);
-  console.log('追加フィールド数: ' + Object.keys(properties).length);
+  console.log('設定フィールド数: ' + Object.keys(properties).length);
   console.log('');
 
   // --- 3. KintoneRestAPIClient の初期化 ---
@@ -150,29 +173,54 @@ async function main() {
     auth: { apiToken: apiToken },
   });
 
-  // --- 4. フィールド追加 (preview 環境) ---
+  // --- 4. 既存フィールドを確認して追加対象を絞り込む ---
   console.log('[1/3] フィールドを追加しています...');
+
+  let newProperties;
+  let existingCodes;
+  let skippedCodes;
+
   try {
-    await client.app.addFormFields({
-      app: appId,
-      properties: properties,
-    });
-    console.log('      フィールド追加完了');
+    ({ newProperties, existingCodes, skippedCodes } = await resolveNewProperties(client, appId, properties));
   } catch (e) {
-    // 重複フィールドコードの場合は分かりやすいメッセージを表示
-    if (e.message && e.message.includes('code')) {
-      console.error('[ERROR] フィールド追加に失敗しました。');
-      console.error('        既に同じフィールドコードが存在する可能性があります。');
-      console.error('        kintone 管理画面でフォームを確認し、重複するフィールドを削除してから再実行してください。');
-      console.error('        詳細: ' + e.message);
-    } else {
-      console.error('[ERROR] フィールド追加に失敗しました:', e.message);
-    }
+    console.error('[ERROR] 既存フィールドの取得に失敗しました:', e.message);
     console.error(e.stack || e);
     process.exit(1);
   }
 
-  // --- 5. デプロイ開始 ---
+  if (existingCodes.length > 0) {
+    console.log('      既存フィールド検出: ' + existingCodes.join(', '));
+  }
+
+  const newCount = Object.keys(newProperties).length;
+  const skipCount = skippedCodes.length;
+
+  // --- 5. 追加対象が 0 件の場合はスキップ ---
+  if (newCount === 0) {
+    console.log('      追加対象: なし (全 ' + skipCount + ' 件が既存)');
+    console.log('      追加処理をスキップします。デプロイも不要のため終了します。');
+    console.log('');
+    console.log('セットアップが完了しました (変更なし)。');
+    console.log('アプリ URL: ' + baseUrl + '/k/' + appId + '/');
+    return;
+  }
+
+  console.log('      追加対象: ' + Object.keys(newProperties).join(', ') + ' (' + newCount + ' 件)');
+
+  // --- 6. フィールド追加 (preview 環境) ---
+  try {
+    await client.app.addFormFields({
+      app: appId,
+      properties: newProperties,
+    });
+    console.log('      フィールド追加完了 (新規 ' + newCount + ' 件 / スキップ ' + skipCount + ' 件)');
+  } catch (e) {
+    console.error('[ERROR] フィールド追加に失敗しました:', e.message);
+    console.error(e.stack || e);
+    process.exit(1);
+  }
+
+  // --- 7. デプロイ開始 ---
   console.log('[2/3] デプロイを開始しています...');
   try {
     await client.app.deployApp({
@@ -185,7 +233,7 @@ async function main() {
     process.exit(1);
   }
 
-  // --- 6. デプロイ完了待機 ---
+  // --- 8. デプロイ完了待機 ---
   console.log('[3/3] デプロイ完了を待機しています (最大 ' + POLL_TIMEOUT_MS / 1000 + '秒)...');
   try {
     await waitForDeploy(client, appId);
@@ -194,7 +242,7 @@ async function main() {
     process.exit(1);
   }
 
-  // --- 7. 完了 ---
+  // --- 9. 完了 ---
   console.log('');
   console.log('セットアップが完了しました。');
   console.log('アプリ URL: ' + baseUrl + '/k/' + appId + '/');

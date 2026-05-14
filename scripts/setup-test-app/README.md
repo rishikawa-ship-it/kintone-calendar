@@ -66,25 +66,58 @@ npm run setup:test-app
 
 実行すると以下の処理が行われます。
 
-1. フィールドを追加する（preview 環境）
-2. デプロイを開始する
-3. デプロイ完了まで待機する（最大 120 秒）
+1. 既存フィールドコードを確認する
+2. 不足しているフィールドのみを追加する（preview 環境）
+3. デプロイを開始する
+4. デプロイ完了まで待機する（最大 120 秒）
 
-完了すると以下のようなメッセージが表示されます。
+完了すると以下のようなメッセージが表示されます（新規アプリの場合）。
 
 ```
 --- kintone テストアプリセットアップ ---
 対象アプリ ID   : 123
 フィールド構成  : datetime
-追加フィールド数: 6
+設定フィールド数: 11
 
 [1/3] フィールドを追加しています...
-      フィールド追加完了
+      追加対象: title, startDate, endDate, status, userColor, memo, allday, place, userName, userMail, account (11 件)
+      フィールド追加完了 (新規 11 件 / スキップ 0 件)
 [2/3] デプロイを開始しています...
       デプロイ開始
-[3/3] デプロイ完了を待機しています (最大 120 秒)...
+[3/3] デプロイ完了を待機しています (最大 120秒)...
 
 セットアップが完了しました。
+アプリ URL: https://your-domain.cybozu.com/k/123/
+```
+
+## 既存アプリへの再実行
+
+すでにフィールドが追加済みのアプリに対して再実行した場合、不足しているフィールドのみが追加されます。全フィールドが追加済みの場合はデプロイも行わずに終了します。
+
+例: 既存 6 フィールド (title/startDate/endDate/status/userColor/memo) に 5 件追加する場合
+
+```
+[1/3] フィールドを追加しています...
+      既存フィールド検出: title, startDate, endDate, status, userColor, memo
+      追加対象: allday, place, userName, userMail, account (5 件)
+      フィールド追加完了 (新規 5 件 / スキップ 6 件)
+[2/3] デプロイを開始しています...
+      デプロイ開始
+[3/3] デプロイ完了を待機しています (最大 120秒)...
+
+セットアップが完了しました。
+アプリ URL: https://your-domain.cybozu.com/k/123/
+```
+
+例: 全フィールドが既存の場合（変更なしで終了）
+
+```
+[1/3] フィールドを追加しています...
+      既存フィールド検出: title, startDate, endDate, status, userColor, memo, allday, place, userName, userMail, account
+      追加対象: なし (全 11 件が既存)
+      追加処理をスキップします。デプロイも不要のため終了します。
+
+セットアップが完了しました (変更なし)。
 アプリ URL: https://your-domain.cybozu.com/k/123/
 ```
 
@@ -100,12 +133,19 @@ npm run setup:test-app
 | `status` | ステータス | DROP_DOWN | 任意 |
 | `userColor` | 色 | DROP_DOWN | 任意 |
 | `memo` | メモ | MULTI_LINE_TEXT | 任意 |
+| `allday` | 終日 | CHECK_BOX | 任意 |
+| `place` | 場所 | SINGLE_LINE_TEXT | 任意 |
+| `userName` | 利用者氏名 | SINGLE_LINE_TEXT | 任意 |
+| `userMail` | メールアドレス | SINGLE_LINE_TEXT | 任意 |
+| `account` | アカウント | USER_SELECT | 任意 |
 
 ### date バリアント（終日のみ版）
 
 `startDate` / `endDate` のフィールド型が `DATE` になります。他は datetime バリアントと同じです。
 
 > 注意: `date` バリアントはすべての予定が自動的に終日扱いになります。時間ありレーンには表示されません（FIELD_REFERENCE.md §1 参照）。
+
+> 補足: `date` バリアントでは `startDate`/`endDate` が DATE 型（終日固定）のため、追加された `allday` CHECK_BOX フィールドは実質的に参照されません。時間あり予定と終日予定の混在運用を想定する場合は `datetime` バリアントを使用してください。
 
 ## KC Calendar プラグインとのフィールドマッピング
 
@@ -117,7 +157,12 @@ npm run setup:test-app
 | 開始日時フィールド | `startDate` |
 | 終了日時フィールド | `endDate` |
 | ステータスフィールド | `status` |
+| 終日フィールド | `allday` |
 | 色フィールド | `userColor` |
+| 場所フィールド | `place` |
+| 利用者氏名フィールド | `userName` |
+| メールアドレスフィールド | `userMail` |
+| アカウントフィールド | `account` |
 | メモフィールド | `memo` |
 
 ## 失敗時の対処
@@ -126,9 +171,9 @@ npm run setup:test-app
 
 `.env` ファイルが存在するか、値が正しく入力されているか確認してください。
 
-### 「既に同じフィールドコードが存在する」
+### 「既存フィールドの取得に失敗しました」
 
-kintone 管理画面でアプリのフォーム設定を開き、同名のフィールドコード（`title`、`startDate` 等）を削除してから再実行してください。
+API トークンのスコープを確認してください。`getFormFields` (preview) の呼び出しにはアプリ管理権限が必要です。
 
 ### 「デプロイが FAIL ステータスで終了しました」
 
