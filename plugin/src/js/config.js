@@ -80,14 +80,6 @@
    * ==================================================================== */
 
   /**
-   * kintone プラグイン設定一覧画面の URL を返す
-   * @returns {string} 遷移先 URL
-   */
-  function getPluginListUrl() {
-    return '../../' + kintone.app.getId() + '/plugin/';
-  }
-
-  /**
    * エラーメッセージを表示する (XSS 対策: textContent 経由)
    * @param {string} message - 表示するエラーメッセージ
    */
@@ -348,8 +340,8 @@
 
     try {
       kintone.plugin.app.setConfig(config, function () {
-        // 成功時: プラグイン一覧画面へ遷移
-        window.location.href = getPluginListUrl();
+        // 設定保存後、直前画面に戻る
+        history.back();
       });
     } catch (e) {
       // setConfig 自体が例外を投げた場合のフォールバック
@@ -362,10 +354,11 @@
   }
 
   /**
-   * キャンセルボタンクリック時のハンドラ
+   * キャンセルボタン処理。直前の画面に戻る。
+   * kintone プラグイン設定画面の URL 構造に依存しないよう history.back() を使用。
    */
   function handleCancel() {
-    window.location.href = getPluginListUrl();
+    history.back();
   }
 
   /**

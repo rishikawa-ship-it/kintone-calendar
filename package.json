@@ -10,7 +10,8 @@
     "build:plugin": "kintone-plugin-packer plugin --out plugin/dist/plugin.zip",
     "upload:plugin": "kintone-plugin-uploader plugin/dist/plugin.zip",
     "upload:plugin:watch": "kintone-plugin-uploader plugin/dist/plugin.zip --watch",
-    "setup:test-app": "node scripts/setup-test-app/index.js"
+    "setup:test-app": "node scripts/setup-test-app/index.js",
+    "reset:test-app:fields": "node scripts/setup-test-app/reset-fields.js"
   },
   "keywords": [],
   "author": "",
