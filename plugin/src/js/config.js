@@ -127,7 +127,6 @@
   /* --- 操作ボタン --- */
   var elSubmit = document.getElementById('kc-config-submit');
   var elCancel = document.getElementById('kc-config-cancel');
-  var elGuideCopy = document.getElementById('kc-guide-copy');
 
   /* ====================================================================
    * ユーティリティ関数
@@ -939,48 +938,6 @@
     history.back();
   }
 
-  /**
-   * セットアップガイドのコードをクリップボードにコピーするハンドラ
-   */
-  function handleGuideCopy() {
-    var code = '<div id="kc-root" class="kc-root"></div>';
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(code).then(function () {
-        elGuideCopy.textContent = 'コピー済';
-        setTimeout(function () {
-          elGuideCopy.textContent = 'コピー';
-        }, 2000);
-      }).catch(function () {
-        fallbackCopy(code);
-      });
-    } else {
-      fallbackCopy(code);
-    }
-  }
-
-  /**
-   * clipboard API 非対応環境向けのフォールバックコピー
-   * @param {string} text - コピーするテキスト
-   */
-  function fallbackCopy(text) {
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.top = '-9999px';
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand('copy');
-      elGuideCopy.textContent = 'コピー済';
-      setTimeout(function () {
-        elGuideCopy.textContent = 'コピー';
-      }, 2000);
-    } catch (e) {
-      console.warn('[KC Config] クリップボードコピー失敗:', e);
-    }
-    document.body.removeChild(ta);
-  }
-
   /* ====================================================================
    * 初期化
    * ==================================================================== */
@@ -1018,9 +975,6 @@
     // ボタンイベントを登録
     elSubmit.addEventListener('click', handleSubmit);
     elCancel.addEventListener('click', handleCancel);
-    if (elGuideCopy) {
-      elGuideCopy.addEventListener('click', handleGuideCopy);
-    }
 
     // Phase 7: ビュー管理
     elViewTarget.addEventListener('change', updateNewNameFieldVisibility);
