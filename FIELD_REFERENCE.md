@@ -10,7 +10,6 @@
 | `end` | 終了日時 | **DATETIME または DATE** | **必須** | 期間フィルタ・イベント配置 |
 | `allday` | 終日 | CHECK_BOX | 任意 | 終日/通常の表示分岐（DATETIME型のときのみ参照） |
 | `place` | 場所 | SINGLE_LINE_TEXT | 任意 | ダイアログ入力のみ |
-| `userName` | 利用者氏名 | SINGLE_LINE_TEXT | 任意 | ダイアログ（ログインユーザー自動セット） |
 | `userMail` | 利用者メールアドレス | SINGLE_LINE_TEXT | 任意 | ダイアログ（ログインユーザー自動セット） |
 | `account` | アカウント | USER_SELECT | 任意 | ログインユーザー自動セット（UI非表示） |
 | `memo` | 説明欄 | MULTI_LINE_TEXT | 任意 | ダイアログ入力のみ |

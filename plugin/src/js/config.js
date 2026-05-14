@@ -100,7 +100,6 @@
   var elFieldAllday = document.getElementById('kc-field-allday');
   var elFieldColor = document.getElementById('kc-field-color');
   var elFieldPlace = document.getElementById('kc-field-place');
-  var elFieldUserName = document.getElementById('kc-field-username');
   var elFieldUserMail = document.getElementById('kc-field-usermail');
   var elFieldAccount = document.getElementById('kc-field-account');
   var elFieldMemo = document.getElementById('kc-field-memo');
@@ -289,7 +288,6 @@
       fieldAllday:   elFieldAllday.value,
       fieldColor:    elFieldColor.value,
       fieldPlace:    elFieldPlace.value,
-      fieldUserName: elFieldUserName.value,
       fieldUserMail: elFieldUserMail.value,
       fieldAccount:  elFieldAccount.value,
       fieldMemo:     elFieldMemo.value,
@@ -329,7 +327,6 @@
     selectValue(elFieldAllday,   fieldMapping.fieldAllday   || '');
     selectValue(elFieldColor,    fieldMapping.fieldColor    || '');
     selectValue(elFieldPlace,    fieldMapping.fieldPlace    || '');
-    selectValue(elFieldUserName, fieldMapping.fieldUserName || '');
     selectValue(elFieldUserMail, fieldMapping.fieldUserMail || '');
     selectValue(elFieldAccount,  fieldMapping.fieldAccount  || '');
     selectValue(elFieldMemo,     fieldMapping.fieldMemo     || '');
@@ -523,7 +520,6 @@
       populateSelect(elFieldAllday,   filterFields(props, ALLDAY_FIELD_TYPES),  true);
       populateSelect(elFieldColor,    filterFields(props, COLOR_FIELD_TYPES),   true);
       populateSelect(elFieldPlace,    filterFields(props, TEXT_FIELD_TYPES),    true);
-      populateSelect(elFieldUserName, filterFields(props, TEXT_FIELD_TYPES),    true);
       populateSelect(elFieldUserMail, filterFields(props, TEXT_FIELD_TYPES),    true);
       populateSelect(elFieldAccount,  filterFields(props, ACCOUNT_FIELD_TYPES), true);
       populateSelect(elFieldMemo,     filterFields(props, MEMO_FIELD_TYPES),    true);

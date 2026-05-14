@@ -56,11 +56,6 @@
       "code": "place",
       "label": "場所"
     },
-    "userName": {
-      "type": "SINGLE_LINE_TEXT",
-      "code": "userName",
-      "label": "利用者氏名"
-    },
     "userMail": {
       "type": "SINGLE_LINE_TEXT",
       "code": "userMail",

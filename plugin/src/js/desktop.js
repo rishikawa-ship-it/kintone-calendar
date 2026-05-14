@@ -37,7 +37,6 @@
       color:    { required: false, type: null },
       status:   { required: false, type: 'DROP_DOWN' },
       place:    { required: false, type: null },
-      userName: { required: false, type: null },
       userMail: { required: false, type: null },
       account:  { required: false, type: 'USER_SELECT' },
       memo:     { required: false, type: null },
@@ -52,7 +51,6 @@
       color:    '',
       status:   '貸出ステータス',
       place:    '場所',
-      userName: '利用者氏名',
       userMail: '利用者メールアドレス',
       account:  'アカウント',
       memo:     '説明欄'
@@ -156,7 +154,6 @@
      *   fieldMapping.fieldAllday   → KC.Config.FIELD.allday
      *   fieldMapping.fieldColor    → KC.Config.FIELD.color
      *   fieldMapping.fieldPlace    → KC.Config.FIELD.place
-     *   fieldMapping.fieldUserName → KC.Config.FIELD.userName
      *   fieldMapping.fieldUserMail → KC.Config.FIELD.userMail
      *   fieldMapping.fieldAccount  → KC.Config.FIELD.account
      *   fieldMapping.fieldMemo     → KC.Config.FIELD.memo
@@ -208,7 +205,6 @@
         if (fm.fieldAllday)   KC.Config.FIELD.allday   = fm.fieldAllday;
         if (fm.fieldColor)    KC.Config.FIELD.color    = fm.fieldColor;
         if (fm.fieldPlace)    KC.Config.FIELD.place    = fm.fieldPlace;
-        if (fm.fieldUserName) KC.Config.FIELD.userName = fm.fieldUserName;
         if (fm.fieldUserMail) KC.Config.FIELD.userMail = fm.fieldUserMail;
         if (fm.fieldAccount)  KC.Config.FIELD.account  = fm.fieldAccount;
         if (fm.fieldMemo)     KC.Config.FIELD.memo     = fm.fieldMemo;
@@ -534,7 +530,6 @@
         status:   self._safeVal(rec, F.status),
         color:    self._safeVal(rec, F.color),
         place:    self._safeVal(rec, F.place),
-        userName: self._safeVal(rec, F.userName),
         userMail: self._safeVal(rec, F.userMail),
         account:  F.account && rec[F.account] ? ((rec[F.account].value || [])[0]?.code || '') : '',
         memo:     self._safeVal(rec, F.memo)
@@ -689,7 +684,6 @@
       if (F.allday) record[F.allday] = { value: ev.allday ? [KC.Config.ALLDAY_LABEL] : [] };
       if (F.color)  this._safeSet(record, F.color, ev.color || '');
       this._safeSet(record, F.place,    ev.place || '');
-      this._safeSet(record, F.userName, ev.userName || '');
       this._safeSet(record, F.userMail, ev.userMail || '');
       if (F.account) {
         record[F.account] = ev.account ? { value: [{ code: ev.account }] } : { value: [] };
@@ -728,7 +722,6 @@
       if ('color'    in ev && F.color)    record[F.color]    = { value: ev.color || '' };
       if ('status'   in ev && F.status)   record[F.status]   = { value: ev.status || '' };
       if ('userMail' in ev && F.userMail) record[F.userMail] = { value: ev.userMail || '' };
-      if ('userName' in ev && F.userName) record[F.userName]  = { value: ev.userName || '' };
       if ('account'  in ev && F.account)  record[F.account]  = ev.account ? { value: [{ code: ev.account }] } : { value: [] };
       if ('place'    in ev && F.place)    record[F.place]    = { value: ev.place || '' };
       if ('memo'     in ev && F.memo)     record[F.memo]     = { value: ev.memo || '' };
@@ -5082,7 +5075,6 @@
 
     // ログインユーザー情報をセット
     var user = kintone.getLoginUser();
-    if (F.userName && record[F.userName]) record[F.userName].value = user.name || '';
     if (F.userMail && record[F.userMail]) record[F.userMail].value = user.email || '';
     if (F.account && record[F.account]) record[F.account].value = [{ code: user.code }];
 

@@ -25,7 +25,6 @@
     memo:       { type: 'MULTI_LINE_TEXT',  code: 'memo',       label: 'メモ' },
     allday:     { type: 'CHECK_BOX',        code: 'allday',     label: '終日' },
     place:      { type: 'SINGLE_LINE_TEXT', code: 'place',      label: '場所' },
-    userName:   { type: 'SINGLE_LINE_TEXT', code: 'userName',   label: '利用者氏名' },
     userMail:   { type: 'SINGLE_LINE_TEXT', code: 'userMail',   label: 'メールアドレス' },
     account:    { type: 'USER_SELECT',      code: 'account',    label: 'アカウント' },
     // kintone 標準フィールドもいくつか追加 (filterFields の挙動確認用)

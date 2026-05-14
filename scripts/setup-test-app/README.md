@@ -77,11 +77,11 @@ npm run setup:test-app
 --- kintone テストアプリセットアップ ---
 対象アプリ ID   : 123
 フィールド構成  : datetime
-設定フィールド数: 11
+設定フィールド数: 10
 
 [1/3] フィールドを追加しています...
-      追加対象: title, startDate, endDate, status, userColor, memo, allday, place, userName, userMail, account (11 件)
-      フィールド追加完了 (新規 11 件 / スキップ 0 件)
+      追加対象: title, startDate, endDate, status, userColor, memo, allday, place, userMail, account (10 件)
+      フィールド追加完了 (新規 10 件 / スキップ 0 件)
 [2/3] デプロイを開始しています...
       デプロイ開始
 [3/3] デプロイ完了を待機しています (最大 120秒)...
@@ -94,13 +94,13 @@ npm run setup:test-app
 
 すでにフィールドが追加済みのアプリに対して再実行した場合、不足しているフィールドのみが追加されます。全フィールドが追加済みの場合はデプロイも行わずに終了します。
 
-例: 既存 6 フィールド (title/startDate/endDate/status/userColor/memo) に 5 件追加する場合
+例: 既存 6 フィールド (title/startDate/endDate/status/userColor/memo) に 4 件追加する場合
 
 ```
 [1/3] フィールドを追加しています...
       既存フィールド検出: title, startDate, endDate, status, userColor, memo
-      追加対象: allday, place, userName, userMail, account (5 件)
-      フィールド追加完了 (新規 5 件 / スキップ 6 件)
+      追加対象: allday, place, userMail, account (4 件)
+      フィールド追加完了 (新規 4 件 / スキップ 6 件)
 [2/3] デプロイを開始しています...
       デプロイ開始
 [3/3] デプロイ完了を待機しています (最大 120秒)...
@@ -113,8 +113,8 @@ npm run setup:test-app
 
 ```
 [1/3] フィールドを追加しています...
-      既存フィールド検出: title, startDate, endDate, status, userColor, memo, allday, place, userName, userMail, account
-      追加対象: なし (全 11 件が既存)
+      既存フィールド検出: title, startDate, endDate, status, userColor, memo, allday, place, userMail, account
+      追加対象: なし (全 10 件が既存)
       追加処理をスキップします。デプロイも不要のため終了します。
 
 セットアップが完了しました (変更なし)。
@@ -135,7 +135,6 @@ npm run setup:test-app
 | `memo` | メモ | MULTI_LINE_TEXT | 任意 |
 | `allday` | 終日 | CHECK_BOX | 任意 |
 | `place` | 場所 | SINGLE_LINE_TEXT | 任意 |
-| `userName` | 利用者氏名 | SINGLE_LINE_TEXT | 任意 |
 | `userMail` | メールアドレス | SINGLE_LINE_TEXT | 任意 |
 | `account` | アカウント | USER_SELECT | 任意 |
 
@@ -160,7 +159,6 @@ npm run setup:test-app
 | 終日フィールド | `allday` |
 | 色フィールド | `userColor` |
 | 場所フィールド | `place` |
-| 利用者氏名フィールド | `userName` |
 | メールアドレスフィールド | `userMail` |
 | アカウントフィールド | `account` |
 | メモフィールド | `memo` |

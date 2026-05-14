@@ -429,6 +429,27 @@ body {
 }
 
 /* ====================================================================
+ * 終日フィールド + 終日ラベル値 横並びペア
+ * ==================================================================== */
+
+.kc-allday-pair {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.kc-allday-pair-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.kc-allday-pair-item .kc-config-select,
+.kc-allday-pair-item .kc-config-input {
+  width: 100%;
+  max-width: none;
+}
+
+/* ====================================================================
  * レスポンシブ
  * ==================================================================== */
 
@@ -444,6 +465,10 @@ body {
   .kc-config-input,
   .kc-config-select {
     max-width: 100%;
+  }
+
+  .kc-allday-pair {
+    flex-direction: column;
   }
 
   .kc-config-radio-group {

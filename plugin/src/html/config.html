@@ -59,29 +59,27 @@
           <h3 class="kc-config-subsection-title">任意フィールド</h3>
 
           <div class="kc-config-field-group">
-            <label for="kc-field-allday" class="kc-config-label">
-              終日フィールド
-            </label>
-            <select id="kc-field-allday" name="fieldAllday" class="kc-config-select">
-              <option value="">-- 未設定 --</option>
-            </select>
-            <p class="kc-config-hint">CHECK_BOX 型のフィールドが表示されます。開始/終了が DATETIME 型の場合に使用します。</p>
-          </div>
-
-          <div class="kc-config-field-group">
-            <label for="kc-allday-label" class="kc-config-label">
-              終日ラベル値
-            </label>
-            <input
-              type="text"
-              id="kc-allday-label"
-              name="alldayLabel"
-              class="kc-config-input"
-              placeholder="例: 終日"
-            />
+            <div class="kc-allday-pair">
+              <div class="kc-allday-pair-item">
+                <label for="kc-field-allday" class="kc-config-label">終日フィールド</label>
+                <select id="kc-field-allday" name="fieldAllday" class="kc-config-select">
+                  <option value="">-- 未設定 --</option>
+                </select>
+              </div>
+              <div class="kc-allday-pair-item">
+                <label for="kc-allday-label" class="kc-config-label">終日ラベル値</label>
+                <input
+                  type="text"
+                  id="kc-allday-label"
+                  name="alldayLabel"
+                  class="kc-config-input"
+                  placeholder="例: 終日"
+                />
+              </div>
+            </div>
             <p class="kc-config-hint">
-              終日フィールド (CHECK_BOX) の選択肢値を入力します。
-              終日フィールドが未設定の場合は無効です。
+              CHECK_BOX 型フィールドと、終日判定に使う選択肢値を設定します。
+              開始/終了が DATETIME 型の場合に使用します。
             </p>
           </div>
 
@@ -100,15 +98,6 @@
               場所フィールド
             </label>
             <select id="kc-field-place" name="fieldPlace" class="kc-config-select">
-              <option value="">-- 未設定 --</option>
-            </select>
-          </div>
-
-          <div class="kc-config-field-group">
-            <label for="kc-field-username" class="kc-config-label">
-              利用者氏名フィールド
-            </label>
-            <select id="kc-field-username" name="fieldUserName" class="kc-config-select">
               <option value="">-- 未設定 --</option>
             </select>
           </div>
