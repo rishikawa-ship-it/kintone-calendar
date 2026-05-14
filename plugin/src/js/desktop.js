@@ -141,67 +141,106 @@
     },
 
     /**
-     * kintone プラグイン設定から KC.Config の各値を上書きする。
-     * プラグイン設定が存在しない場合は既存のハードコード値を維持する（フォールバック）。
+     * kintone プラグイン設定から KC.Config の各値を上書きする (Phase 9: 2 階層設計対応)。
+     * プラグイン設定が存在しない / version 2 でない場合はハードコード値を維持する（フォールバック）。
      * KC.Boot.init の冒頭で呼び出すこと。
      *
-     * 設定キーと KC.Config の対応:
-     *   fieldTitle         → KC.Config.FIELD.title
-     *   fieldStart         → KC.Config.FIELD.start
-     *   fieldEnd           → KC.Config.FIELD.end
-     *   fieldStatus        → KC.Config.FIELD.status (設定画面からは削除済、ハードコード値のみ)
-     *   fieldAllday        → KC.Config.FIELD.allday
-     *   fieldColor         → KC.Config.FIELD.color
-     *   fieldPlace         → KC.Config.FIELD.place
-     *   fieldUserName      → KC.Config.FIELD.userName
-     *   fieldUserMail      → KC.Config.FIELD.userMail
-     *   fieldAccount       → KC.Config.FIELD.account
-     *   fieldMemo          → KC.Config.FIELD.memo
-     *   alldayLabel        → KC.Config.ALLDAY_LABEL
-     *   (excludedStatuses は Phase 8 で廃止。旧設定値は無視する)
-     *   defaultView        → KC.State.view (初期ビュー)
-     *   calendarTitle      → KC.Config.CALENDAR_TITLE / KC.Config.APP_NAME
-     *                        (空文字の場合は detectAppName フォールバック)
+     * 保存形式 (version 2):
+     *   getConfig 返り値の .config キーを JSON.parse した 2 階層オブジェクトを使用する
+     *   { version: 2, fieldMapping: { ... }, views: { "<viewId>": { calendarTitle, defaultView } } }
+     *
+     * 設定キーと KC.Config の対応 (fieldMapping 共通取得):
+     *   fieldMapping.fieldTitle    → KC.Config.FIELD.title
+     *   fieldMapping.fieldStart    → KC.Config.FIELD.start
+     *   fieldMapping.fieldEnd      → KC.Config.FIELD.end
+     *   fieldMapping.fieldAllday   → KC.Config.FIELD.allday
+     *   fieldMapping.fieldColor    → KC.Config.FIELD.color
+     *   fieldMapping.fieldPlace    → KC.Config.FIELD.place
+     *   fieldMapping.fieldUserName → KC.Config.FIELD.userName
+     *   fieldMapping.fieldUserMail → KC.Config.FIELD.userMail
+     *   fieldMapping.fieldAccount  → KC.Config.FIELD.account
+     *   fieldMapping.fieldMemo     → KC.Config.FIELD.memo
+     *   fieldMapping.alldayLabel   → KC.Config.ALLDAY_LABEL
+     *
+     * ビュー個別設定 (views[viewId] から取得):
+     *   calendarTitle → KC.Config.CALENDAR_TITLE / KC.Config.APP_NAME
+     *   defaultView   → KC.State.view (初期ビュー)
+     *
+     * 旧フラット設定 (version キーなし): 破棄 (Q11 確定)。detectFields フォールバックへ。
+     * (excludedStatuses は Phase 8 で廃止。旧設定値は無視する)
      */
     loadFromPluginConfig: function () {
-      var config = kintone.plugin.app.getConfig(PLUGIN_ID);
-      // 設定なし（初回インストール・設定未完了）はハードコード値を維持
-      if (!config) {
+      var rawConfig = kintone.plugin.app.getConfig(PLUGIN_ID);
+
+      // 設定なし (初回インストール・設定未完了) はハードコード値を維持
+      if (!rawConfig || Object.keys(rawConfig).length === 0) {
         console.log('[KC.Config] プラグイン設定なし。ハードコード値 / detectFields を使用');
         return;
       }
 
-      // フィールドマッピング（必須）
-      if (config.fieldTitle)    KC.Config.FIELD.title    = config.fieldTitle;
-      if (config.fieldStart)    KC.Config.FIELD.start    = config.fieldStart;
-      if (config.fieldEnd)      KC.Config.FIELD.end      = config.fieldEnd;
-
-      // フィールドマッピング（任意）
-      if (config.fieldAllday)   KC.Config.FIELD.allday   = config.fieldAllday;
-      if (config.fieldColor)    KC.Config.FIELD.color    = config.fieldColor;
-      if (config.fieldPlace)    KC.Config.FIELD.place    = config.fieldPlace;
-      if (config.fieldUserName) KC.Config.FIELD.userName = config.fieldUserName;
-      if (config.fieldUserMail) KC.Config.FIELD.userMail = config.fieldUserMail;
-      if (config.fieldAccount)  KC.Config.FIELD.account  = config.fieldAccount;
-      if (config.fieldMemo)     KC.Config.FIELD.memo     = config.fieldMemo;
-
-      // 終日ラベル
-      if (config.alldayLabel) {
-        KC.Config.ALLDAY_LABEL = config.alldayLabel;
+      // config.js は { config: JSON.stringify(obj) } 形式で保存する
+      var config;
+      try {
+        var jsonStr = rawConfig.config;
+        if (jsonStr) {
+          config = JSON.parse(jsonStr);
+        } else {
+          // 互換: rawConfig 全体がオブジェクトの場合を試みる (旧形式)
+          config = rawConfig;
+        }
+      } catch (e) {
+        console.error('[KC.Config] プラグイン設定のパース失敗:', e);
+        return;
       }
 
-      // デフォルトビュー（KC.State.view を直接更新）
-      if (config.defaultView && ['month', 'week', 'day'].indexOf(config.defaultView) !== -1) {
-        KC.State.view = config.defaultView;
+      // version 2 でない場合は旧フラット設定として破棄 (Q11 確定)
+      if (!config || !config.version || Number(config.version) < 2) {
+        console.log('[KC.Config] version 2 未満の設定を無視。detectFields フォールバックへ');
+        return;
       }
 
-      // カレンダータイトル: 空文字なら detectAppName フォールバック（§10 Q5）
-      if (config.calendarTitle && config.calendarTitle.trim()) {
-        KC.Config.CALENDAR_TITLE = config.calendarTitle.trim();
-        KC.Config.APP_NAME = config.calendarTitle.trim();
-        console.log('[KC.Config] calendarTitle 設定済み:', KC.Config.CALENDAR_TITLE);
+      // 共通設定 (fieldMapping) を適用
+      var fm = config.fieldMapping;
+      if (fm) {
+        if (fm.fieldTitle)    KC.Config.FIELD.title    = fm.fieldTitle;
+        if (fm.fieldStart)    KC.Config.FIELD.start    = fm.fieldStart;
+        if (fm.fieldEnd)      KC.Config.FIELD.end      = fm.fieldEnd;
+        if (fm.fieldAllday)   KC.Config.FIELD.allday   = fm.fieldAllday;
+        if (fm.fieldColor)    KC.Config.FIELD.color    = fm.fieldColor;
+        if (fm.fieldPlace)    KC.Config.FIELD.place    = fm.fieldPlace;
+        if (fm.fieldUserName) KC.Config.FIELD.userName = fm.fieldUserName;
+        if (fm.fieldUserMail) KC.Config.FIELD.userMail = fm.fieldUserMail;
+        if (fm.fieldAccount)  KC.Config.FIELD.account  = fm.fieldAccount;
+        if (fm.fieldMemo)     KC.Config.FIELD.memo     = fm.fieldMemo;
+        if (fm.alldayLabel)   KC.Config.ALLDAY_LABEL   = fm.alldayLabel;
       }
-      // else: detectAppName が後段で呼ばれてフォールバック
+
+      // ビュー個別設定 (views[viewId]) を適用
+      // kintone.app.getViewId() は未検証の API のため try-catch で保護する
+      if (config.views) {
+        try {
+          var viewId = String(kintone.app.getViewId());
+          var viewCfg = config.views[viewId];
+          if (viewCfg) {
+            // カレンダータイトル: 空文字なら detectAppName フォールバック
+            if (viewCfg.calendarTitle && viewCfg.calendarTitle.trim()) {
+              KC.Config.CALENDAR_TITLE = viewCfg.calendarTitle.trim();
+              KC.Config.APP_NAME = viewCfg.calendarTitle.trim();
+              console.log('[KC.Config] calendarTitle (ビュー個別):', KC.Config.CALENDAR_TITLE);
+            }
+            // デフォルトビュー
+            if (viewCfg.defaultView &&
+                ['month', 'week', 'day'].indexOf(viewCfg.defaultView) !== -1) {
+              KC.State.view = viewCfg.defaultView;
+              console.log('[KC.Config] defaultView (ビュー個別):', KC.State.view);
+            }
+          } else {
+            console.log('[KC.Config] views[' + viewId + '] なし。フォールバック動作');
+          }
+        } catch (e) {
+          console.warn('[KC.Config] getViewId() 失敗。ビュー個別設定をスキップ:', e);
+        }
+      }
 
       console.log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD);
     }

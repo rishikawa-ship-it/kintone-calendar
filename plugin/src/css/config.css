@@ -46,27 +46,49 @@ body {
 }
 
 /* ====================================================================
- * エラー表示エリア
+ * エラー / 成功メッセージ表示エリア
  * ==================================================================== */
 
+/* ベーススタイル: デフォルトは非表示 */
 .kc-config-error {
   display: none;
-  background: #fff0f0;
-  border: 1px solid #e53e3e;
-  border-left: 4px solid #e53e3e;
   border-radius: 4px;
   padding: 12px 16px;
   margin-bottom: 20px;
-  color: #c53030;
   font-size: 13px;
   white-space: pre-line;
   line-height: 1.6;
 }
 
+/* エラー表示 (showError で付与) */
+.kc-config-error-active {
+  display: block;
+  background: #fff0f0;
+  border: 1px solid #e53e3e;
+  border-left: 4px solid #e53e3e;
+  color: #c53030;
+}
+
 /* エラーアイコン (CSS のみ・画像不要) */
-.kc-config-error::before {
+.kc-config-error-active::before {
   content: '\26A0\0020'; /* ⚠ */
   font-size: 16px;
+}
+
+/* 成功表示 (showSuccess で付与) */
+.kc-config-success-active {
+  display: block;
+  background: #f0fff4;
+  border: 1px solid #38a169;
+  border-left: 4px solid #38a169;
+  color: #276749;
+}
+
+/* 成功アイコン (CSS のみ・画像不要) */
+.kc-config-success-active::before {
+  content: '\2713\0020'; /* ✓ */
+  font-size: 16px;
+  font-weight: bold;
 }
 
 /* ====================================================================
@@ -359,6 +381,100 @@ body {
   padding: 1px 4px;
   font-size: 12px;
   color: #0a5a8a;
+}
+
+/* ====================================================================
+ * サブセクション見出し (Phase 9: セクション 1 内の小見出し)
+ * ==================================================================== */
+
+.kc-config-subsection-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #444;
+  margin: 20px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed #ddd;
+}
+
+.kc-config-subsection-title:first-of-type {
+  margin-top: 8px;
+}
+
+/* ====================================================================
+ * ビュー個別設定セクション (Phase 9)
+ * ==================================================================== */
+
+/* 編集中ビューラベル */
+.kc-per-view-label {
+  background: #e8f4fd;
+  border: 1px solid #90cdf4;
+  border-left: 4px solid #3182ce;
+  border-radius: 4px;
+  padding: 8px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #2c5282;
+  font-weight: bold;
+}
+
+/* 未選択ガイダンス */
+.kc-per-view-guide {
+  font-size: 13px;
+  color: #718096;
+  padding: 10px 14px;
+  background: #f7fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  margin: 0 0 4px;
+}
+
+/* ビュー個別設定フォームエリア */
+.kc-per-view-fields {
+  margin-top: 8px;
+}
+
+/* 非活性状態のスタイル */
+.kc-per-view-fields--disabled .kc-config-input,
+.kc-per-view-fields--disabled .kc-config-radio-label {
+  opacity: 0.5;
+}
+
+/* コピーセクション */
+.kc-copy-section {
+  background: #fafafa;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+/* コピー行 (ドロップダウン + ボタン を横並び) */
+.kc-copy-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.kc-copy-source-select {
+  flex: 1;
+  min-width: 180px;
+  max-width: 320px;
+}
+
+/* コピー結果メッセージ */
+.kc-copy-result {
+  font-size: 13px;
+  margin: 6px 0 0;
+  min-height: 1.4em;
+}
+
+.kc-copy-result--success {
+  color: #38a169;
+}
+
+.kc-copy-result--error {
+  color: #e53e3e;
 }
 
 /* ====================================================================

@@ -16,71 +16,15 @@
       <form id="kc-config-form" novalidate>
 
         <!-- ====================================================
-          セクション 1: 基本設定
+          セクション 1: 共通設定 (フィールドマッピング)
         ==================================================== -->
         <section class="kc-config-section">
-          <h2 class="kc-config-section-title">基本設定</h2>
-
-          <div class="kc-config-field-group">
-            <label for="kc-calendar-title" class="kc-config-label">
-              カレンダータイトル
-            </label>
-            <input
-              type="text"
-              id="kc-calendar-title"
-              name="calendarTitle"
-              class="kc-config-input"
-              placeholder="例: 会議室予約カレンダー"
-              maxlength="100"
-            />
-            <p class="kc-config-hint">未入力の場合はアプリ名を使用します。</p>
-          </div>
-
-          <div class="kc-config-field-group">
-            <label class="kc-config-label">
-              デフォルトビュー <span class="kc-required">*</span>
-            </label>
-            <div class="kc-config-radio-group">
-              <label class="kc-config-radio-label">
-                <input
-                  type="radio"
-                  name="defaultView"
-                  value="month"
-                  id="kc-view-month"
-                  checked
-                />
-                月ビュー
-              </label>
-              <label class="kc-config-radio-label">
-                <input
-                  type="radio"
-                  name="defaultView"
-                  value="week"
-                  id="kc-view-week"
-                />
-                週ビュー
-              </label>
-              <label class="kc-config-radio-label">
-                <input
-                  type="radio"
-                  name="defaultView"
-                  value="day"
-                  id="kc-view-day"
-                />
-                日ビュー
-              </label>
-            </div>
-          </div>
-        </section>
-
-        <!-- ====================================================
-          セクション 2: フィールドマッピング (必須)
-        ==================================================== -->
-        <section class="kc-config-section">
-          <h2 class="kc-config-section-title">フィールドマッピング (必須)</h2>
+          <h2 class="kc-config-section-title">共通設定 (フィールドマッピング)</h2>
           <p class="kc-config-section-desc">
-            カレンダー表示に必要なフィールドを選択してください。
+            アプリ全体で共通のフィールド設定です。すべてのカレンダービューに適用されます。
           </p>
+
+          <h3 class="kc-config-subsection-title">必須フィールド</h3>
 
           <div class="kc-config-field-group">
             <label for="kc-field-title" class="kc-config-label">
@@ -111,16 +55,8 @@
             </select>
             <p class="kc-config-hint">DATETIME 型または DATE 型のフィールドが表示されます。</p>
           </div>
-        </section>
 
-        <!-- ====================================================
-          セクション 3: フィールドマッピング (任意)
-        ==================================================== -->
-        <section class="kc-config-section">
-          <h2 class="kc-config-section-title">フィールドマッピング (任意)</h2>
-          <p class="kc-config-section-desc">
-            追加機能を使用する場合にフィールドを選択してください。
-          </p>
+          <h3 class="kc-config-subsection-title">任意フィールド</h3>
 
           <div class="kc-config-field-group">
             <label for="kc-field-allday" class="kc-config-label">
@@ -188,13 +124,8 @@
             </select>
             <p class="kc-config-hint">MULTI_LINE_TEXT 型のフィールドが表示されます。</p>
           </div>
-        </section>
 
-        <!-- ====================================================
-          セクション 4: フィルタ設定
-        ==================================================== -->
-        <section class="kc-config-section">
-          <h2 class="kc-config-section-title">フィルタ</h2>
+          <h3 class="kc-config-subsection-title">フィルタ</h3>
           <p class="kc-config-help">
             表示するレコードの絞り込みは <strong>kintone 一覧の標準フィルタ機能</strong> をご利用ください。
             レコード一覧画面の絞り込み設定がカレンダー表示にも反映されます。
@@ -219,7 +150,114 @@
         </section>
 
         <!-- ====================================================
-          セクション 5: カレンダー用ビュー管理 (Phase 7)
+          セクション 2: ビュー個別設定 (Phase 9)
+        ==================================================== -->
+        <section class="kc-config-section" id="kc-per-view-section">
+          <h2 class="kc-config-section-title">ビュー個別設定</h2>
+          <p class="kc-config-section-desc">
+            カレンダービューごとに独立した表示設定を行います。
+          </p>
+
+          <!-- 対象ビュー選択 -->
+          <div class="kc-config-field-group">
+            <label class="kc-config-label" for="kc-per-view-select">
+              対象ビュー
+            </label>
+            <select id="kc-per-view-select" class="kc-config-select">
+              <option value="">-- ビューを選択 --</option>
+              <!-- CUSTOM ビューが動的に追加される -->
+            </select>
+            <p class="kc-config-hint">
+              設定するカレンダービューを選択してください。CUSTOM タイプのビューが表示されます。
+            </p>
+          </div>
+
+          <!-- 編集中ビュー表示 -->
+          <div id="kc-per-view-label" class="kc-per-view-label" style="display: none;" aria-live="polite"></div>
+
+          <!-- 他ビューからコピー -->
+          <div class="kc-config-field-group kc-copy-section" id="kc-copy-section">
+            <label class="kc-config-label">他のビューからコピー</label>
+            <div class="kc-copy-row">
+              <select id="kc-copy-source" class="kc-config-select kc-copy-source-select">
+                <option value="">-- コピー元を選択 --</option>
+              </select>
+              <button type="button" id="kc-copy-execute" class="kc-config-btn kc-config-btn-secondary">
+                コピー実行
+              </button>
+            </div>
+            <p id="kc-copy-result" class="kc-copy-result" aria-live="polite"></p>
+            <p class="kc-config-hint">
+              コピー対象はカレンダータイトルと初期ビューのみです。フィールドマッピングはコピーされません。
+            </p>
+          </div>
+
+          <!-- ビュー個別設定フォーム (ビュー未選択時は disabled) -->
+          <div id="kc-per-view-fields" class="kc-per-view-fields">
+            <div class="kc-config-field-group">
+              <label for="kc-calendar-title" class="kc-config-label">
+                カレンダータイトル
+              </label>
+              <input
+                type="text"
+                id="kc-calendar-title"
+                name="calendarTitle"
+                class="kc-config-input"
+                placeholder="例: 会議室予約カレンダー"
+                maxlength="100"
+                disabled
+              />
+              <p class="kc-config-hint">未入力の場合はアプリ名を使用します。</p>
+            </div>
+
+            <div class="kc-config-field-group">
+              <label class="kc-config-label">
+                初期ビュー
+              </label>
+              <div class="kc-config-radio-group">
+                <label class="kc-config-radio-label">
+                  <input
+                    type="radio"
+                    name="defaultView"
+                    value="month"
+                    id="kc-view-month"
+                    checked
+                    disabled
+                  />
+                  月ビュー
+                </label>
+                <label class="kc-config-radio-label">
+                  <input
+                    type="radio"
+                    name="defaultView"
+                    value="week"
+                    id="kc-view-week"
+                    disabled
+                  />
+                  週ビュー
+                </label>
+                <label class="kc-config-radio-label">
+                  <input
+                    type="radio"
+                    name="defaultView"
+                    value="day"
+                    id="kc-view-day"
+                    disabled
+                  />
+                  日ビュー
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- ビュー未選択時のガイダンス -->
+          <p id="kc-per-view-guide" class="kc-per-view-guide">
+            上の「対象ビュー」から設定したいカレンダービューを選択してください。
+          </p>
+        </section>
+
+        <!-- ====================================================
+          セクション 3: カレンダー用ビュー管理 (Phase 7)
         ==================================================== -->
         <section class="kc-config-section" id="kc-view-section">
           <h2 class="kc-config-section-title">カレンダー用ビュー管理</h2>
@@ -251,7 +289,7 @@
         </section>
 
         <!-- ====================================================
-          セクション 6: セットアップガイド
+          セクション 4: セットアップガイド
         ==================================================== -->
         <section class="kc-config-section kc-config-guide">
           <h2 class="kc-config-section-title">セットアップガイド</h2>
@@ -283,7 +321,7 @@
 
           <div class="kc-config-guide-note">
             <strong>注意:</strong>
-            このHTML設置はAPIで自動化できないため、管理者が手動で行う必要があります。
+            「カレンダー用ビュー管理」セクションの「ビューを作成 / 更新」ボタンでも自動設置できます。
           </div>
         </section>
 

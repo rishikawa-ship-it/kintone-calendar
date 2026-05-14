@@ -34,26 +34,33 @@
     更新者:       { type: 'MODIFIER',      code: '更新者',       label: '更新者' }
   };
 
-  // モックビュー一覧 (handleViewApply の動作確認用)
+  // モックビュー一覧 (handleViewApply / ビュー個別設定の動作確認用)
+  // id プロパティを追加: kintone ビュー ID の模倣 (Phase 9 対応)
   var MOCK_VIEWS = {
-    '一覧': { type: 'LIST', name: '一覧', index: '0', fields: ['title', 'startDate', 'endDate'] },
-    'カレンダー (既存)': { type: 'CUSTOM', name: 'カレンダー (既存)', index: '1', html: '<div>old html</div>' }
+    '一覧': { type: 'LIST', name: '一覧', index: '0', id: '8888', fields: ['title', 'startDate', 'endDate'] },
+    'カレンダー (既存)': { type: 'CUSTOM', name: 'カレンダー (既存)', index: '1', id: '9999', html: '<div>old html</div>' }
   };
 
   window.kintone = {
     $PLUGIN_ID: PLUGIN_ID,
     app: {
-      getId: function () { return APP_ID; }
+      getId: function () { return APP_ID; },
+      // Phase 9: kintone.app.getViewId() モック (仮 ID)
+      // 実機では現在表示中のカスタマイズビューの ID が返る (未検証)
+      getViewId: function () { return 9999; }
     },
     plugin: {
       app: {
         getConfig: function (pluginId) {
           var raw = localStorage.getItem(STORAGE_KEY);
-          var config = raw ? JSON.parse(raw) : {};
-          console.log('[kintone-mock] getConfig:', config);
-          return config;
+          // Phase 9: { config: "<JSON文字列>" } 形式で保存されている前提
+          // 旧形式 (フラットオブジェクト) との互換のため raw をそのまま返す
+          var stored = raw ? JSON.parse(raw) : {};
+          console.log('[kintone-mock] getConfig:', stored);
+          return stored;
         },
         setConfig: function (config, callback) {
+          // Phase 9: config は { config: JSON.stringify(currentConfig) } 形式を期待
           localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
           console.log('[kintone-mock] setConfig:', config);
           if (callback) setTimeout(callback, 100);
