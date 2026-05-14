@@ -7,6 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "deploy": "kintone-customize-uploader customize-manifest.json",
     "dev": "kintone-customize-uploader --watch customize-manifest.json",
+    "dev:config": "serve plugin -p 3000 --no-clipboard",
     "build:plugin": "kintone-plugin-packer plugin --out plugin/dist/plugin.zip",
     "upload:plugin": "kintone-plugin-uploader plugin/dist/plugin.zip",
     "upload:plugin:watch": "kintone-plugin-uploader plugin/dist/plugin.zip --watch",
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@kintone/customize-uploader": "^9.0.4",
     "@kintone/plugin-packer": "^9.1.1",
-    "@kintone/plugin-uploader": "^9.1.5"
+    "@kintone/plugin-uploader": "^9.1.5",
+    "serve": "^14.2.6"
   }
 }
