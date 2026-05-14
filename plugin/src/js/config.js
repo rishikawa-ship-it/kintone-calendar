@@ -342,14 +342,16 @@
    */
   function applyViewConfig(viewId) {
     if (!viewId) {
-      // 新規作成モード: フォームをデフォルト値で活性化、コピーセクションは非表示
+      // 新規作成モード: フォームをデフォルト値で活性化
       elCalendarTitle.value = '';
       var monthRadio = document.querySelector('input[name="defaultView"][value="month"]');
       if (monthRadio) { monthRadio.checked = true; }
       setPerViewFieldsEnabled(true);
-      elPerViewLabel.textContent = '';
+      elPerViewLabel.textContent = '(新規ビュー)';
       elNewViewNameField.style.display = 'block';
-      elCopySection.style.display = 'none';
+      // 新規作成時もコピーセクションを表示 (全 CUSTOM ビューを選択肢として提示)
+      elCopySection.style.display = '';
+      rebuildCopySourceSelect(null);
       // 新規作成モード: 「保存」は disabled、「保存して更新」は enabled
       elSubmit.disabled = true;
       elSubmitDeploy.disabled = false;
@@ -423,8 +425,8 @@
   }
 
   /**
-   * コピー元ドロップダウンを再構築する (現在編集中ビューを除外)
-   * @param {string} excludeViewId - 除外するビュー ID
+   * コピー元ドロップダウンを再構築する
+   * @param {string|null} excludeViewId - 除外するビュー ID。null の場合は全件表示 (新規作成モード)
    */
   function rebuildCopySourceSelect(excludeViewId) {
     while (elCopySource.options.length > 0) {
@@ -436,10 +438,12 @@
     emptyOpt.textContent = '-- コピー元を選択 --';
     elCopySource.appendChild(emptyOpt);
 
-    // CUSTOM ビューを index 順でソートして追加 (編集中ビューは除外)
+    // CUSTOM ビューを index 順でソートして追加
+    // excludeViewId が null の場合 (新規作成モード) は除外なし
     var entries = Object.keys(availableViews).map(function (name) {
       return availableViews[name];
     }).filter(function (v) {
+      if (excludeViewId === null) { return true; }
       return String(v.id) !== String(excludeViewId);
     });
     entries.sort(function (a, b) {
