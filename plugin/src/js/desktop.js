@@ -62,7 +62,6 @@
     START_FIELD_TYPE: 'DATETIME',
 
     ALLDAY_LABEL: '終日',
-    EXCLUDED_STATUSES: ['返却済', '削除済'],
     QUERY_LIMIT: 500,
 
     // フィールド自動検出メソッド
@@ -150,7 +149,7 @@
      *   fieldTitle         → KC.Config.FIELD.title
      *   fieldStart         → KC.Config.FIELD.start
      *   fieldEnd           → KC.Config.FIELD.end
-     *   fieldStatus        → KC.Config.FIELD.status
+     *   fieldStatus        → KC.Config.FIELD.status (設定画面からは削除済、ハードコード値のみ)
      *   fieldAllday        → KC.Config.FIELD.allday
      *   fieldColor         → KC.Config.FIELD.color
      *   fieldPlace         → KC.Config.FIELD.place
@@ -158,8 +157,8 @@
      *   fieldUserMail      → KC.Config.FIELD.userMail
      *   fieldAccount       → KC.Config.FIELD.account
      *   fieldMemo          → KC.Config.FIELD.memo
-     *   excludedStatuses   → KC.Config.EXCLUDED_STATUSES (CSV → 配列変換)
      *   alldayLabel        → KC.Config.ALLDAY_LABEL
+     *   (excludedStatuses は Phase 8 で廃止。旧設定値は無視する)
      *   defaultView        → KC.State.view (初期ビュー)
      *   calendarTitle      → KC.Config.CALENDAR_TITLE / KC.Config.APP_NAME
      *                        (空文字の場合は detectAppName フォールバック)
@@ -178,7 +177,6 @@
       if (config.fieldEnd)      KC.Config.FIELD.end      = config.fieldEnd;
 
       // フィールドマッピング（任意）
-      if (config.fieldStatus)   KC.Config.FIELD.status   = config.fieldStatus;
       if (config.fieldAllday)   KC.Config.FIELD.allday   = config.fieldAllday;
       if (config.fieldColor)    KC.Config.FIELD.color    = config.fieldColor;
       if (config.fieldPlace)    KC.Config.FIELD.place    = config.fieldPlace;
@@ -186,14 +184,6 @@
       if (config.fieldUserMail) KC.Config.FIELD.userMail = config.fieldUserMail;
       if (config.fieldAccount)  KC.Config.FIELD.account  = config.fieldAccount;
       if (config.fieldMemo)     KC.Config.FIELD.memo     = config.fieldMemo;
-
-      // 除外ステータス: CSV 文字列 → 配列変換
-      if (config.excludedStatuses) {
-        KC.Config.EXCLUDED_STATUSES = config.excludedStatuses
-          .split(',')
-          .map(function (s) { return s.trim(); })
-          .filter(function (s) { return s.length > 0; });
-      }
 
       // 終日ラベル
       if (config.alldayLabel) {
@@ -533,7 +523,19 @@
       return ev;
     },
 
-    /** 一覧取得（cursor API: 500件超も全件取得） */
+    /**
+     * 一覧取得（cursor API: 500件超も全件取得）
+     * @param {string} isoStart - 表示期間の開始日時 (ISO8601)
+     * @param {string} isoEnd   - 表示期間の終了日時 (ISO8601)
+     * @returns {Promise<Array>} イベントオブジェクトの配列
+     *
+     * クエリ組み立て仕様 (Phase 8):
+     *   1. 期間絞り込み条件 (start < qEnd AND end >= qStart) を常に付与する
+     *   2. kintone.app.getQueryCondition() で kintone 一覧の絞り込み条件を取得する
+     *      非空文字の場合は AND で結合する (AC26 / AC27)
+     *      null または空文字の場合はスキップし期間絞り込みのみで動作する
+     *   3. order by 句を末尾に付与する
+     */
     loadEvents: async function (isoStart, isoEnd) {
       var F = KC.Config.FIELD;
       var self = this;
@@ -560,9 +562,11 @@
       // DATETIME 型運用が発生した際に挙動を実機確認し、本コメントに追記すること。
       conditions.push('(' + F.end + ' >= "' + qStart + '")');
 
-      if (F.status) {
-        var excluded = KC.Config.EXCLUDED_STATUSES.map(function (s) { return '"' + s + '"'; }).join(',');
-        conditions.push('(' + F.status + ' not in (' + excluded + '))');
+      // kintone 一覧の絞り込み条件を AND 結合する (Phase 8: AC26/AC27)
+      // getQueryCondition() はビュー非表示時や絞り込み未設定時に null または空文字を返す
+      var userCondition = kintone.app.getQueryCondition();
+      if (userCondition) {
+        conditions.push('(' + userCondition + ')');
       }
 
       var query = conditions.join(' and ') + ' order by ' + F.start + ' asc';

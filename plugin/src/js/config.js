@@ -14,13 +14,13 @@
  *   3. プラグイン一覧画面へ遷移
  *
  * Phase 3 (desktop.js) への引き継ぎ事項:
- * - excludedStatuses は CSV 文字列で保存する
- *   読込時: config.excludedStatuses.split(',').map(function (s) { return s.trim(); })
  * - setConfig の値はすべて文字列型で保存される (数値・真偽値も文字列)
  *   読込時に必要に応じて Number / Boolean 変換すること
  * - calendarTitle が空文字の場合は KC.Config.detectAppName() フォールバックを実行
  * - 必須キー (fieldTitle / fieldStart / fieldEnd) はバリデーション済のため
  *   desktop.js では存在前提でよいが、念のため defensive に存在チェックを推奨
+ * - フィルタは kintone 一覧の絞り込み機能で管理する (Phase 8)
+ *   desktop.js の KC.Api.loadEvents が kintone.app.getQueryCondition() を使用する
  */
 (function (PLUGIN_ID) {
   'use strict';
@@ -34,9 +34,6 @@
 
   /** 開始/終了フィールドとして選択可能な型 */
   var DATE_FIELD_TYPES = ['DATETIME', 'DATE'];
-
-  /** ステータスフィールドとして選択可能な型 */
-  var STATUS_FIELD_TYPES = ['DROP_DOWN', 'RADIO_BUTTON', 'STATUS'];
 
   /** 終日フィールドとして選択可能な型 */
   var ALLDAY_FIELD_TYPES = ['CHECK_BOX'];
@@ -61,7 +58,6 @@
   var elFieldTitle = document.getElementById('kc-field-title');
   var elFieldStart = document.getElementById('kc-field-start');
   var elFieldEnd = document.getElementById('kc-field-end');
-  var elFieldStatus = document.getElementById('kc-field-status');
   var elFieldAllday = document.getElementById('kc-field-allday');
   var elFieldColor = document.getElementById('kc-field-color');
   var elFieldPlace = document.getElementById('kc-field-place');
@@ -69,11 +65,17 @@
   var elFieldUserMail = document.getElementById('kc-field-usermail');
   var elFieldAccount = document.getElementById('kc-field-account');
   var elFieldMemo = document.getElementById('kc-field-memo');
-  var elExcludedStatuses = document.getElementById('kc-excluded-statuses');
   var elAlldayLabel = document.getElementById('kc-allday-label');
   var elSubmit = document.getElementById('kc-config-submit');
   var elCancel = document.getElementById('kc-config-cancel');
   var elGuideCopy = document.getElementById('kc-guide-copy');
+
+  /* --- Phase 7: ビュー管理 DOM 参照 --- */
+  var elViewTarget = document.getElementById('kc-view-target');
+  var elViewNewName = document.getElementById('kc-view-new-name');
+  var elViewNewNameField = document.getElementById('kc-view-new-name-field');
+  var elViewApply = document.getElementById('kc-view-apply');
+  var elViewStatus = document.getElementById('kc-view-status');
 
   /* ====================================================================
    * ユーティリティ関数
@@ -200,17 +202,6 @@
       errors.push('「開始日時フィールド」と「終了日時フィールド」に同じフィールドを指定することはできません。');
     }
 
-    // 除外ステータスの形式チェック（全角カンマや全角スペース警告）
-    if (config.excludedStatuses) {
-      var zenkakuPattern = /[，、　]/;
-      if (zenkakuPattern.test(config.excludedStatuses)) {
-        errors.push(
-          '「除外ステータス」に全角カンマ（，）・読点（、）・全角スペースが含まれています。' +
-          '区切り文字には半角カンマ（,）を使用してください。'
-        );
-      }
-    }
-
     return {
       valid: errors.length === 0,
       errors: errors
@@ -233,7 +224,6 @@
       fieldTitle:       elFieldTitle.value,
       fieldStart:       elFieldStart.value,
       fieldEnd:         elFieldEnd.value,
-      fieldStatus:      elFieldStatus.value,
       fieldAllday:      elFieldAllday.value,
       fieldColor:       elFieldColor.value,
       fieldPlace:       elFieldPlace.value,
@@ -241,7 +231,6 @@
       fieldUserMail:    elFieldUserMail.value,
       fieldAccount:     elFieldAccount.value,
       fieldMemo:        elFieldMemo.value,
-      excludedStatuses: elExcludedStatuses.value.trim(),
       alldayLabel:      elAlldayLabel.value.trim()
     };
   }
@@ -255,7 +244,6 @@
 
     // テキスト入力
     elCalendarTitle.value = savedConfig.calendarTitle || '';
-    elExcludedStatuses.value = savedConfig.excludedStatuses || '';
     elAlldayLabel.value = savedConfig.alldayLabel || '';
 
     // デフォルトビューのラジオボタン
@@ -269,7 +257,6 @@
     selectValue(elFieldTitle, savedConfig.fieldTitle || '');
     selectValue(elFieldStart, savedConfig.fieldStart || '');
     selectValue(elFieldEnd, savedConfig.fieldEnd || '');
-    selectValue(elFieldStatus, savedConfig.fieldStatus || '');
     selectValue(elFieldAllday, savedConfig.fieldAllday || '');
     selectValue(elFieldColor, savedConfig.fieldColor || '');
     selectValue(elFieldPlace, savedConfig.fieldPlace || '');
@@ -299,7 +286,6 @@
       populateSelect(elFieldTitle,    filterFields(props, TITLE_FIELD_TYPES),   false);
       populateSelect(elFieldStart,    filterFields(props, DATE_FIELD_TYPES),    false);
       populateSelect(elFieldEnd,      filterFields(props, DATE_FIELD_TYPES),    false);
-      populateSelect(elFieldStatus,   filterFields(props, STATUS_FIELD_TYPES),  true);
       populateSelect(elFieldAllday,   filterFields(props, ALLDAY_FIELD_TYPES),  true);
       populateSelect(elFieldColor,    filterFields(props, COLOR_FIELD_TYPES),   true);
       populateSelect(elFieldPlace,    filterFields(props, TEXT_FIELD_TYPES),    true);
@@ -314,6 +300,205 @@
       showError('フィールド一覧の取得に失敗しました。ページを再読み込みしてください。');
       throw err;
     });
+  }
+
+  /* ====================================================================
+   * Phase 7: ビュー管理
+   * ==================================================================== */
+
+  /**
+   * ステータスメッセージを表示する (XSS 対策: textContent 経由)
+   * @param {string} msg - 表示するメッセージ
+   * @param {string} type - 'success' / 'error' / '' のいずれか
+   */
+  function showViewStatus(msg, type) {
+    elViewStatus.textContent = msg;
+    elViewStatus.className = 'kc-view-status' + (type ? ' kc-view-status-' + type : '');
+  }
+
+  /**
+   * kintone 本番側のビュー一覧を取得する
+   * 設定画面では本番運用中ビューを参照するのが自然なため本番 API を使用する
+   * @returns {Promise<Object>} ビュー名をキーとするビュー設定オブジェクト
+   */
+  async function loadViews() {
+    var resp = await kintone.api(
+      kintone.api.url('/k/v1/app/views.json', true),
+      'GET',
+      { app: kintone.app.getId() }
+    );
+    return resp.views;
+  }
+
+  /**
+   * カレンダー用カスタマイズビューのビュー設定オブジェクトを生成する
+   * @param {string} name - ビュー名
+   * @param {number|string} index - ビューの表示順
+   * @returns {Object} kintone ビュー設定オブジェクト
+   */
+  function buildCalendarView(name, index) {
+    return {
+      type: 'CUSTOM',
+      index: String(index),
+      name: name,
+      html: '<div id="kc-root" class="kc-root"></div>',
+      pager: false,
+      htmlForMobile: '<div id="kc-root" class="kc-root"></div>'
+    };
+  }
+
+  /**
+   * ビュー対象プルダウンを最新のビュー一覧で再構築する
+   * 「新規作成」を先頭に、既存ビューを index 順で追加する
+   * @returns {Promise<void>}
+   */
+  async function refreshViewSelect() {
+    var views;
+    try {
+      views = await loadViews();
+    } catch (e) {
+      // ビュー一覧取得失敗時はプルダウンを変更しない
+      console.error('[KC Plugin Config] ビュー一覧取得失敗:', e);
+      return;
+    }
+
+    // 現在の選択値を保持
+    var currentValue = elViewTarget.value;
+
+    // 「新規作成」以外の選択肢を削除
+    while (elViewTarget.options.length > 1) {
+      elViewTarget.remove(1);
+    }
+
+    // ビューを index 順でソートして追加
+    var viewEntries = Object.keys(views).map(function (name) {
+      return { name: name, index: Number(views[name].index) };
+    });
+    viewEntries.sort(function (a, b) { return a.index - b.index; });
+
+    viewEntries.forEach(function (entry) {
+      var opt = document.createElement('option');
+      opt.value = entry.name;
+      opt.textContent = entry.name;
+      elViewTarget.appendChild(opt);
+    });
+
+    // 元の選択値を復元 (存在する場合のみ)
+    if (currentValue && currentValue !== '__new__') {
+      elViewTarget.value = currentValue;
+      if (elViewTarget.value !== currentValue) {
+        // 復元できなかった場合は新規作成に戻す
+        elViewTarget.value = '__new__';
+      }
+    }
+
+    // 新規名フィールドの表示状態を更新
+    updateNewNameFieldVisibility();
+  }
+
+  /**
+   * 「新規ビュー名」入力フィールドの表示/非表示を切り替える
+   * 「新規作成」選択時: 表示 / 既存ビュー選択時: 非表示
+   */
+  function updateNewNameFieldVisibility() {
+    if (elViewTarget.value === '__new__') {
+      elViewNewNameField.style.display = '';
+    } else {
+      elViewNewNameField.style.display = 'none';
+    }
+  }
+
+  /**
+   * カレンダー用 CUSTOM ビューを作成または更新する。
+   * REST API: GET views → 差分書き換え → PUT views → POST deploy。
+   *
+   * 注意: POST deploy.json はアプリの全 preview 変更を本番に反映するため、
+   *       他の未保存変更 (フィールド追加など) も同時に公開される。
+   *       ユーザーには成功メッセージでこのリスクを通知する。
+   *
+   * AC23 (新規作成) / AC24 (既存ビュー上書き) を実装する
+   * @returns {Promise<void>}
+   */
+  async function handleViewApply() {
+    // refreshViewSelect() 後も target の値を保持するため先頭で取得
+    var target = elViewTarget.value;
+    showViewStatus('処理中...', '');
+    elViewApply.disabled = true;
+
+    try {
+      // 最新のビュー一覧を取得
+      var views = await loadViews();
+
+      if (target === '__new__') {
+        // 新規作成
+        var newName = (elViewNewName.value || 'カレンダー').trim();
+        if (!newName) {
+          showViewStatus('ビュー名を入力してください', 'error');
+          elViewApply.disabled = false;
+          return;
+        }
+        // 同名ビューが既に存在する場合はエラー
+        if (views[newName]) {
+          showViewStatus(
+            '「' + newName + '」は既に存在します。既存ビュー選択から上書きしてください。',
+            'error'
+          );
+          elViewApply.disabled = false;
+          return;
+        }
+        views[newName] = buildCalendarView(newName, Object.keys(views).length);
+      } else {
+        // 既存ビュー更新 (Q8: 上書き確認ダイアログ)
+        var confirmed = window.confirm(
+          '既存ビュー「' + target + '」を上書きします。\n\n' +
+          '現在の HTML・設定が「カレンダー用」の内容に置き換わります。\n' +
+          '続行しますか?'
+        );
+        if (!confirmed) {
+          showViewStatus('キャンセルしました', '');
+          elViewApply.disabled = false;
+          return;
+        }
+        views[target] = buildCalendarView(target, views[target].index);
+      }
+
+      // プレビューにビューを反映
+      await kintone.api(
+        kintone.api.url('/k/v1/preview/app/views.json', true),
+        'PUT',
+        {
+          app: kintone.app.getId(),
+          views: views
+        }
+      );
+
+      // アプリをデプロイ
+      await kintone.api(
+        kintone.api.url('/k/v1/preview/app/deploy.json', true),
+        'POST',
+        {
+          apps: [{ app: kintone.app.getId() }]
+        }
+      );
+
+      // 成功メッセージは新規作成/既存更新で分岐
+      var successMsg = (target === '__new__')
+        ? 'ビューを作成しました。アプリを保存・公開してください。未保存の他の設定変更も同時に公開されます。'
+        : 'ビューを更新しました。アプリを保存・公開してください。未保存の他の設定変更も同時に公開されます。';
+      showViewStatus(successMsg, 'success');
+
+      // プルダウンを最新状態に更新
+      await refreshViewSelect();
+
+    } catch (e) {
+      console.error('[KC Plugin Config] ビュー操作失敗:', e);
+      showViewStatus(
+        'ビューの作成 / 更新に失敗しました: ' + (e.message || ''),
+        'error'
+      );
+    } finally {
+      elViewApply.disabled = false;
+    }
   }
 
   /* ====================================================================
@@ -429,6 +614,18 @@
     if (elGuideCopy) {
       elGuideCopy.addEventListener('click', handleGuideCopy);
     }
+
+    // Phase 7: ビュー管理の初期化
+    // ビュー一覧を取得してプルダウンに反映する (失敗しても画面全体は止めない)
+    refreshViewSelect().catch(function (e) {
+      console.error('[KC Plugin Config] ビュー一覧初期化失敗:', e);
+    });
+
+    // 対象ビュー変更時に新規ビュー名フィールドの表示を切り替える
+    elViewTarget.addEventListener('change', updateNewNameFieldVisibility);
+
+    // 「ビューを作成 / 更新」ボタンのクリックハンドラ
+    elViewApply.addEventListener('click', handleViewApply);
   }
 
   // DOM 構築完了後に初期化

@@ -123,16 +123,6 @@
           </p>
 
           <div class="kc-config-field-group">
-            <label for="kc-field-status" class="kc-config-label">
-              ステータスフィールド
-            </label>
-            <select id="kc-field-status" name="fieldStatus" class="kc-config-select">
-              <option value="">-- 未設定 --</option>
-            </select>
-            <p class="kc-config-hint">DROP_DOWN 型のフィールドが表示されます。未設定時はフィルタ機能が無効になります。</p>
-          </div>
-
-          <div class="kc-config-field-group">
             <label for="kc-field-allday" class="kc-config-label">
               終日フィールド
             </label>
@@ -204,24 +194,11 @@
           セクション 4: フィルタ設定
         ==================================================== -->
         <section class="kc-config-section">
-          <h2 class="kc-config-section-title">フィルタ設定</h2>
-
-          <div class="kc-config-field-group">
-            <label for="kc-excluded-statuses" class="kc-config-label">
-              除外ステータス
-            </label>
-            <input
-              type="text"
-              id="kc-excluded-statuses"
-              name="excludedStatuses"
-              class="kc-config-input"
-              placeholder="例: 返却済,削除済"
-            />
-            <p class="kc-config-hint">
-              カレンダーに表示しないステータス値をカンマ区切りで入力します。
-              ステータスフィールドが未設定の場合は無効です。
-            </p>
-          </div>
+          <h2 class="kc-config-section-title">フィルタ</h2>
+          <p class="kc-config-help">
+            表示するレコードの絞り込みは <strong>kintone 一覧の標準フィルタ機能</strong> をご利用ください。
+            レコード一覧画面の絞り込み設定がカレンダー表示にも反映されます。
+          </p>
 
           <div class="kc-config-field-group">
             <label for="kc-allday-label" class="kc-config-label">
@@ -242,7 +219,39 @@
         </section>
 
         <!-- ====================================================
-          セクション 5: セットアップガイド
+          セクション 5: カレンダー用ビュー管理 (Phase 7)
+        ==================================================== -->
+        <section class="kc-config-section" id="kc-view-section">
+          <h2 class="kc-config-section-title">カレンダー用ビュー管理</h2>
+          <p class="kc-config-help">
+            カレンダー表示用のカスタマイズビューを自動で作成・更新します。
+            手動で <code>&lt;div id="kc-root"&gt;&lt;/div&gt;</code> を貼り付ける必要はありません。
+          </p>
+
+          <div class="kc-config-field-group">
+            <label class="kc-config-label" for="kc-view-target">対象ビュー</label>
+            <select id="kc-view-target" class="kc-config-select">
+              <option value="__new__">-- 新規作成 --</option>
+              <!-- 既存ビューはここに動的追加 -->
+            </select>
+          </div>
+
+          <div class="kc-config-field-group" id="kc-view-new-name-field">
+            <label class="kc-config-label" for="kc-view-new-name">新規ビュー名</label>
+            <input id="kc-view-new-name" type="text" class="kc-config-input" value="カレンダー" />
+            <span class="kc-config-help-inline">既定値: カレンダー</span>
+          </div>
+
+          <div class="kc-view-actions">
+            <button type="button" id="kc-view-apply" class="kc-config-btn kc-config-btn-secondary">
+              ビューを作成 / 更新
+            </button>
+            <span id="kc-view-status" class="kc-view-status" aria-live="polite"></span>
+          </div>
+        </section>
+
+        <!-- ====================================================
+          セクション 6: セットアップガイド
         ==================================================== -->
         <section class="kc-config-section kc-config-guide">
           <h2 class="kc-config-section-title">セットアップガイド</h2>

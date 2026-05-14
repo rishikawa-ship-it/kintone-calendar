@@ -341,6 +341,71 @@ body {
 }
 
 /* ====================================================================
+ * ヘルプテキスト (セクション内説明文)
+ * ==================================================================== */
+
+.kc-config-help {
+  font-size: 13px;
+  color: #555;
+  margin: -4px 0 16px;
+  line-height: 1.6;
+}
+
+.kc-config-help code {
+  font-family: 'Consolas', 'Courier New', monospace;
+  background: #f0f4f8;
+  border: 1px solid #c8d8e8;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 12px;
+  color: #0a5a8a;
+}
+
+/* ====================================================================
+ * ビュー管理セクション (Phase 7)
+ * ==================================================================== */
+
+/* セクション内のアクションエリア (左寄せ・フレックス) */
+.kc-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+/* ステータステキスト */
+.kc-view-status {
+  font-size: 13px;
+  color: #4a5568;
+}
+
+.kc-view-status-success {
+  color: #38a169;
+}
+
+.kc-view-status-error {
+  color: #e53e3e;
+}
+
+/* セカンダリボタン */
+.kc-config-btn-secondary {
+  background-color: #e2e8f0;
+  color: #2d3748;
+}
+
+.kc-config-btn-secondary:hover:not(:disabled) {
+  background-color: #cbd5e0;
+}
+
+/* インラインヒント (入力欄の右側に表示) */
+.kc-config-help-inline {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 12px;
+  color: #718096;
+}
+
+/* ====================================================================
  * レスポンシブ
  * ==================================================================== */
 
