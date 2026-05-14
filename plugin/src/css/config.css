@@ -439,6 +439,28 @@ body {
   background-color: #cbd5e0;
 }
 
+/* プライマリボタン (保存して更新) */
+.kc-config-btn-primary {
+  background-color: #3182ce;
+  color: #fff;
+  border: 1px solid #2c5282;
+  min-width: 120px;
+}
+
+.kc-config-btn-primary:hover:not(:disabled) {
+  background-color: #2c5282;
+}
+
+.kc-config-btn-primary:active:not(:disabled) {
+  background-color: #1a365d;
+}
+
+.kc-config-btn-primary:disabled {
+  background-color: #a0aec0;
+  border-color: #a0aec0;
+  cursor: not-allowed;
+}
+
 /* インラインヒント (入力欄の右側に表示) */
 .kc-config-help-inline {
   display: inline-block;

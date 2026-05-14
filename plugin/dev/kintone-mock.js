@@ -100,6 +100,11 @@
         else if (/app\/deploy/.test(url) && method === 'POST') {
           resolve({});
         }
+        // GET /k/v1/preview/app/deploy.json (デプロイ状態ポーリング)
+        // 1 回目の呼び出しで即 SUCCESS を返す (開発モック)
+        else if (/app\/deploy/.test(url) && method === 'GET') {
+          resolve({ apps: [{ app: APP_ID, status: 'SUCCESS' }] });
+        }
         else {
           reject(new Error('[kintone-mock] Unknown API: ' + method + ' ' + url));
         }

@@ -126,6 +126,7 @@
 
   /* --- 操作ボタン --- */
   var elSubmit = document.getElementById('kc-config-submit');
+  var elSubmitDeploy = document.getElementById('kc-config-submit-deploy');
   var elCancel = document.getElementById('kc-config-cancel');
 
   /* ====================================================================
@@ -836,15 +837,15 @@
    * ==================================================================== */
 
   /**
-   * 保存ボタンクリック時のハンドラ (2 階層設計対応)
-   * - collectFieldMapping() で共通設定を更新
-   * - 現在の編集中ビューの個別設定を currentConfig.views に保存
-   * - setConfig 直前に getConfig で最新の views を先読み (タブ間競合回避)
-   * - mergedViews を構築してから orphan フィルタをかけて setConfig で保存
-   * - 成功時は成功メッセージを 1.5 秒表示してから前の画面に戻る
-   * @returns {Promise<void>}
+   * 設定値を保存する共通ロジック。
+   * - collectFieldMapping() で共通設定を currentConfig.fieldMapping に反映
+   * - 現在の編集中ビューの個別設定を currentConfig.views に反映
+   * - orphan 削除 (メモリ内 + mergedViews)
+   * - getConfig 先読みでタブ間競合を回避して mergedViews を構築
+   * - kintone.plugin.app.setConfig で保存
+   * @returns {Promise<boolean>} 保存成功なら true、バリデーション失敗や例外で false
    */
-  async function handleSubmit() {
+  async function saveConfig() {
     clearError();
 
     // 共通設定を収集して currentConfig.fieldMapping を更新
@@ -871,12 +872,8 @@
     var validation = validateConfig(currentConfig.fieldMapping, viewCfg);
     if (!validation.valid) {
       showError(validation.errors.join('\n'));
-      return;
+      return false;
     }
-
-    // ボタンを無効化して二重送信を防止
-    elSubmit.disabled = true;
-    elSubmit.textContent = '保存中...';
 
     try {
       // setConfig 直前に getConfig で最新の views を先読みしてタブ間競合を回避する。
@@ -914,20 +911,114 @@
       };
 
       // setConfig は文字列のみ受付のため JSON.stringify して config キーに格納
-      kintone.plugin.app.setConfig(
-        { config: JSON.stringify(finalConfig) },
-        function () {
-          showSuccess('設定を保存しました');
-          setTimeout(function () {
-            history.back();
-          }, 1500);
+      // コールバック形式を Promise 化して await できるようにする
+      await new Promise(function (resolve, reject) {
+        try {
+          kintone.plugin.app.setConfig(
+            { config: JSON.stringify(finalConfig) },
+            resolve
+          );
+        } catch (setErr) {
+          reject(setErr);
         }
-      );
+      });
+
+      return true;
     } catch (e) {
       console.error('[KC Config] setConfig 失敗:', e);
       showError('設定の保存に失敗しました。時間をおいて再度お試しください。');
+      return false;
+    }
+  }
+
+  /**
+   * 保存ボタンクリック時のハンドラ (2 階層設計対応)
+   * - saveConfig() で設定を保存
+   * - 成功時は成功メッセージを 1.5 秒表示してから前の画面に戻る
+   * @returns {Promise<void>}
+   */
+  async function handleSubmit() {
+    elSubmit.disabled = true;
+    elSubmit.textContent = '保存中...';
+
+    var ok = await saveConfig();
+    if (!ok) {
       elSubmit.disabled = false;
       elSubmit.textContent = '保存';
+      return;
+    }
+
+    showSuccess('設定を保存しました');
+    setTimeout(function () { history.back(); }, 1500);
+  }
+
+  /**
+   * 「保存して更新」ボタンクリック時のハンドラ。
+   * saveConfig() で設定を保存したあと、kintone プレビュー API でデプロイ (本番反映) を実行する。
+   *
+   * 注意: POST deploy.json はアプリの全 preview 変更を本番に反映するため、
+   *       他の未保存変更 (フィールド追加など) も同時に公開される。
+   *       ユーザーには成功メッセージでこのリスクを通知する。
+   *
+   * @returns {Promise<void>}
+   */
+  async function handleSubmitAndDeploy() {
+    elSubmit.disabled = true;
+    elSubmitDeploy.disabled = true;
+    elSubmitDeploy.textContent = '保存中...';
+
+    var ok = await saveConfig();
+    if (!ok) {
+      elSubmit.disabled = false;
+      elSubmitDeploy.disabled = false;
+      elSubmitDeploy.textContent = '保存して更新';
+      return;
+    }
+
+    // 続けてデプロイ (本番反映)
+    elSubmitDeploy.textContent = 'アプリを更新中...';
+
+    var POLL_INTERVAL = 3000;  // ポーリング間隔 (ms)
+    var POLL_TIMEOUT  = 120000; // ポーリングタイムアウト (ms)
+
+    try {
+      await kintone.api(
+        kintone.api.url('/k/v1/preview/app/deploy.json', true),
+        'POST',
+        { apps: [{ app: kintone.app.getId() }] }
+      );
+
+      // デプロイ完了をポーリングで待機 (Phase 7 の handleViewApply と同じ API パターン)
+      var elapsed = 0;
+      while (elapsed < POLL_TIMEOUT) {
+        await new Promise(function (r) { setTimeout(r, POLL_INTERVAL); });
+        elapsed += POLL_INTERVAL;
+
+        var statusResp = await kintone.api(
+          kintone.api.url('/k/v1/preview/app/deploy.json', true),
+          'GET',
+          { apps: [kintone.app.getId()] }
+        );
+        var appStatus = statusResp.apps[0].status;
+
+        if (appStatus === 'SUCCESS') {
+          showSuccess('設定を保存しアプリを更新しました (他の未保存変更も同時に公開されました)');
+          setTimeout(function () { history.back(); }, 2000);
+          return;
+        }
+        if (appStatus === 'FAIL' || appStatus === 'CANCEL') {
+          throw new Error('デプロイ失敗 (status: ' + appStatus + ')');
+        }
+        // PROCESSING の場合は継続
+      }
+      throw new Error('デプロイがタイムアウトしました (' + (POLL_TIMEOUT / 1000) + ' 秒経過)');
+
+    } catch (e) {
+      console.error('[KC Plugin Config] デプロイ失敗:', e);
+      showError('アプリ更新に失敗しました: ' + (e.message || '') + ' (設定値は保存済み)');
+      elSubmit.disabled = false;
+      elSubmitDeploy.disabled = false;
+      elSubmitDeploy.textContent = '保存して更新';
     }
   }
 
@@ -974,6 +1065,7 @@
 
     // ボタンイベントを登録
     elSubmit.addEventListener('click', handleSubmit);
+    elSubmitDeploy.addEventListener('click', handleSubmitAndDeploy);
     elCancel.addEventListener('click', handleCancel);
 
     // Phase 7: ビュー管理
