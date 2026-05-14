@@ -91,7 +91,12 @@
         else if (/app\/views/.test(url) && method === 'PUT') {
           console.log('[kintone-mock] PUT views received:', params.views);
           // 受信した views を MOCK_VIEWS にマージ (次回 GET で確認可能)
+          // 新規ビュー (id なし) には擬似 ID を採番する
           Object.keys(params.views).forEach(function (k) {
+            if (!params.views[k].id) {
+              params.views[k].id = String(Math.floor(Math.random() * 100000));
+              console.log('[kintone-mock] 新規ビュー ID 採番:', k, '->', params.views[k].id);
+            }
             MOCK_VIEWS[k] = params.views[k];
           });
           resolve({ revision: '2' });

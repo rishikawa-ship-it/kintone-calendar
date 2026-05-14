@@ -327,32 +327,8 @@ body {
 }
 
 /* ====================================================================
- * ビュー個別設定セクション (Phase 9)
+ * ビュー個別設定セクション (Phase 9 + 統合)
  * ==================================================================== */
-
-/* 編集中ビューラベル */
-.kc-per-view-label {
-  background: #e8f4fd;
-  border: 1px solid #90cdf4;
-  border-left: 4px solid #3182ce;
-  border-radius: 4px;
-  padding: 8px 14px;
-  margin-bottom: 16px;
-  font-size: 13px;
-  color: #2c5282;
-  font-weight: bold;
-}
-
-/* 未選択ガイダンス */
-.kc-per-view-guide {
-  font-size: 13px;
-  color: #718096;
-  padding: 10px 14px;
-  background: #f7fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  margin: 0 0 4px;
-}
 
 /* ビュー個別設定フォームエリア */
 .kc-per-view-fields {
@@ -404,29 +380,12 @@ body {
 }
 
 /* ====================================================================
- * ビュー管理セクション (Phase 7)
+ * ビュー個別設定セクション内フィールド行 (統合版)
  * ==================================================================== */
 
-/* セクション内のアクションエリア (左寄せ・フレックス) */
-.kc-view-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 8px;
-}
-
-/* ステータステキスト */
-.kc-view-status {
-  font-size: 13px;
-  color: #4a5568;
-}
-
-.kc-view-status-success {
-  color: #38a169;
-}
-
-.kc-view-status-error {
-  color: #e53e3e;
+/* 対象ビュー選択行 (select + インラインスパンを縦積み) */
+.kc-config-field {
+  margin-bottom: 18px;
 }
 
 /* セカンダリボタン */

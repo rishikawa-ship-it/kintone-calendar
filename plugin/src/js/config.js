@@ -1,6 +1,6 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (Phase 9: 2 階層設計対応)
+ * KC Calendar プラグイン設定画面スクリプト (統合版: Phase 7 + Phase 9)
  *
  * 保存形式 (version 2):
  *   {
@@ -12,16 +12,16 @@
  * 起動シーケンス:
  *   1. loadInitialConfig() で既存設定を取得・初期化
  *   2. loadFields() でフィールド一覧を取得し各プルダウンに反映
- *   3. loadViews() (refreshViewSelect + refreshPerViewSelect) でビュー一覧を取得
- *   4. orphan 削除 (kintone 上に存在しない views エントリを削除)
- *   5. applyFieldMapping() で共通設定を反映
- *   6. 先頭ビューを currentViewId に設定して applyViewConfig() で反映
+ *   3. refreshPerViewSelect() でビュー一覧取得 + orphan 削除 + プルダウン構築
+ *   4. applyFieldMapping() で共通設定を反映
+ *   5. 先頭ビュー (or 新規作成) を currentViewId に設定して applyViewConfig() で反映
  *
  * 保存処理:
- *   1. collectFieldMapping() で共通設定を収集
- *   2. collectViewConfig() で現在のビュー個別設定を収集
- *   3. orphan 削除 (最新ビュー一覧と照合)
- *   4. kintone.plugin.app.setConfig({ config: JSON.stringify(currentConfig) }) で保存
+ *   「保存」: saveConfig({ updateViews: false }) — PUT views なし、setConfig のみ
+ *   「保存して更新」: saveConfig({ updateViews: true }) — PUT views + setConfig + デプロイ
+ *
+ *   新規作成モード (currentViewId === null) では「保存」は disabled。
+ *   「保存して更新」でのみ PUT views → ID 取得 → setConfig の順で処理する。
  *
  * setConfig / getConfig のキー規約:
  *   - setConfig({ config: JSON.stringify(currentConfig) }, callback) で保存
@@ -106,23 +106,17 @@
   var elFieldMemo = document.getElementById('kc-field-memo');
   var elAlldayLabel = document.getElementById('kc-allday-label');
 
-  /* --- セクション 2: ビュー個別設定 --- */
+  /* --- セクション 2: ビュー個別設定 (統合版) --- */
   var elPerViewSelect = document.getElementById('kc-per-view-select');
   var elPerViewLabel = document.getElementById('kc-per-view-label');
   var elPerViewFields = document.getElementById('kc-per-view-fields');
-  var elPerViewGuide = document.getElementById('kc-per-view-guide');
+  var elNewViewNameField = document.getElementById('kc-new-view-name-field');
+  var elNewViewName = document.getElementById('kc-new-view-name');
   var elCopySection = document.getElementById('kc-copy-section');
   var elCopySource = document.getElementById('kc-copy-source');
   var elCopyExecute = document.getElementById('kc-copy-execute');
   var elCopyResult = document.getElementById('kc-copy-result');
   var elCalendarTitle = document.getElementById('kc-calendar-title');
-
-  /* --- セクション 3: カレンダー用ビュー管理 (Phase 7) --- */
-  var elViewTarget = document.getElementById('kc-view-target');
-  var elViewNewName = document.getElementById('kc-view-new-name');
-  var elViewNewNameField = document.getElementById('kc-view-new-name-field');
-  var elViewApply = document.getElementById('kc-view-apply');
-  var elViewStatus = document.getElementById('kc-view-status');
 
   /* --- 操作ボタン --- */
   var elSubmit = document.getElementById('kc-config-submit');
@@ -342,16 +336,23 @@
   }
 
   /**
-   * 指定ビューの個別設定を DOM 要素に反映し、編集中ビューラベルを更新する
-   * @param {string} viewId - ビュー ID (文字列)
+   * 指定ビューの個別設定を DOM 要素に反映し、ボタン状態・ラベルを更新する。
+   * viewId が null の場合は新規作成モードとして扱う。
+   * @param {string|null} viewId - ビュー ID (文字列)、新規作成モードは null
    */
   function applyViewConfig(viewId) {
     if (!viewId) {
-      // ビュー未選択: フォームを非活性化しガイダンス表示
-      setPerViewFieldsEnabled(false);
-      elPerViewLabel.style.display = 'none';
-      elPerViewGuide.style.display = '';
+      // 新規作成モード: フォームをデフォルト値で活性化、コピーセクションは非表示
+      elCalendarTitle.value = '';
+      var monthRadio = document.querySelector('input[name="defaultView"][value="month"]');
+      if (monthRadio) { monthRadio.checked = true; }
+      setPerViewFieldsEnabled(true);
+      elPerViewLabel.textContent = '';
+      elNewViewNameField.style.display = 'block';
       elCopySection.style.display = 'none';
+      // 新規作成モード: 「保存」は disabled、「保存して更新」は enabled
+      elSubmit.disabled = true;
+      elSubmitDeploy.disabled = false;
       return;
     }
 
@@ -370,15 +371,19 @@
     // フォームを活性化
     setPerViewFieldsEnabled(true);
 
-    // 編集中ビューラベル更新
+    // 編集中ビューラベル更新 (select の右にインライン表示)
     var viewName = findViewNameById(viewId);
-    var labelText = viewName
-      ? viewName + ' (id: ' + viewId + ') の設定を編集中'
-      : 'ビュー ID: ' + viewId + ' の設定を編集中';
-    elPerViewLabel.textContent = labelText;
-    elPerViewLabel.style.display = '';
-    elPerViewGuide.style.display = 'none';
+    elPerViewLabel.textContent = viewName
+      ? '(' + viewName + ' / id: ' + viewId + ')'
+      : '(id: ' + viewId + ')';
+
+    // 既存ビュー選択時: 新規ビュー名フィールドは非表示
+    elNewViewNameField.style.display = 'none';
     elCopySection.style.display = '';
+
+    // 既存ビュー選択時: 「保存」「保存して更新」両方 enabled
+    elSubmit.disabled = false;
+    elSubmitDeploy.disabled = false;
 
     // コピー元ドロップダウンを再構築 (現在編集中ビュー以外)
     rebuildCopySourceSelect(viewId);
@@ -528,18 +533,8 @@
   }
 
   /* ====================================================================
-   * Phase 7: ビュー管理 (カレンダー用ビュー管理セクション)
+   * ビュー管理ユーティリティ
    * ==================================================================== */
-
-  /**
-   * ステータスメッセージを表示する (XSS 対策: textContent 経由)
-   * @param {string} msg - 表示するメッセージ
-   * @param {string} type - 'success' / 'error' / '' のいずれか
-   */
-  function showViewStatus(msg, type) {
-    elViewStatus.textContent = msg;
-    elViewStatus.className = 'kc-view-status' + (type ? ' kc-view-status-' + type : '');
-  }
 
   /**
    * kintone 本番側のビュー一覧を取得する
@@ -573,70 +568,37 @@
   }
 
   /**
-   * Phase 7 のビュー管理セクションのプルダウンを最新のビュー一覧で再構築する
-   * 「新規作成」を先頭に、既存ビューを index 順で追加する
-   * @returns {Promise<void>}
+   * ビュー一覧から CUSTOM 型のみを抽出して返す
+   * @param {Object} views - loadViews() の戻り値
+   * @returns {Object} CUSTOM 型ビューのみのオブジェクト
    */
-  async function refreshViewSelect() {
-    var views;
-    try {
-      views = await loadViews();
-    } catch (e) {
-      console.error('[KC Config] ビュー一覧取得失敗 (Phase 7):', e);
-      return;
-    }
-
-    var currentValue = elViewTarget.value;
-
-    while (elViewTarget.options.length > 1) {
-      elViewTarget.remove(1);
-    }
-
-    var viewEntries = Object.keys(views).map(function (name) {
-      return { name: name, index: Number(views[name].index) };
-    });
-    viewEntries.sort(function (a, b) { return a.index - b.index; });
-
-    viewEntries.forEach(function (entry) {
-      var opt = document.createElement('option');
-      opt.value = entry.name;
-      opt.textContent = entry.name;
-      elViewTarget.appendChild(opt);
-    });
-
-    if (currentValue && currentValue !== '__new__') {
-      elViewTarget.value = currentValue;
-      if (elViewTarget.value !== currentValue) {
-        elViewTarget.value = '__new__';
+  function filterCustomViews(views) {
+    var result = {};
+    Object.keys(views).forEach(function (name) {
+      if (views[name].type === 'CUSTOM') {
+        result[name] = views[name];
       }
-    }
-
-    updateNewNameFieldVisibility();
+    });
+    return result;
   }
 
   /**
-   * ビュー個別設定セクションの「対象ビュー」プルダウンを
-   * CUSTOM ビュー一覧で再構築し、availableViews を更新する。
-   * orphan エントリも削除する (Q12 確定)
+   * 「対象ビュー」プルダウンを CUSTOM ビュー一覧で再構築し、availableViews を更新する。
+   * 「-- 新規作成 --」を先頭に追加し、以降は CUSTOM ビューを index 順で追加する。
+   * orphan エントリも削除する。
    * @returns {Promise<void>}
    */
   async function refreshPerViewSelect() {
-    var views;
+    var allViews;
     try {
-      views = await loadViews();
+      allViews = await loadViews();
     } catch (e) {
-      console.error('[KC Config] ビュー一覧取得失敗 (Phase 9):', e);
+      console.error('[KC Config] ビュー一覧取得失敗:', e);
       return;
     }
 
     // CUSTOM ビューのみを availableViews に格納
-    availableViews = {};
-    Object.keys(views).forEach(function (name) {
-      var v = views[name];
-      if (v.type === 'CUSTOM') {
-        availableViews[name] = v;
-      }
-    });
+    availableViews = filterCustomViews(allViews);
 
     // orphan 削除: currentConfig.views に存在するが CUSTOM ビュー一覧にない ID を削除
     var validIds = Object.keys(availableViews).map(function (name) {
@@ -654,10 +616,11 @@
       elPerViewSelect.remove(0);
     }
 
-    var emptyOpt = document.createElement('option');
-    emptyOpt.value = '';
-    emptyOpt.textContent = '-- ビューを選択 --';
-    elPerViewSelect.appendChild(emptyOpt);
+    // 「-- 新規作成 --」を先頭 option として追加
+    var newOpt = document.createElement('option');
+    newOpt.value = '__new__';
+    newOpt.textContent = '-- 新規作成 --';
+    elPerViewSelect.appendChild(newOpt);
 
     var entries = Object.keys(availableViews).map(function (name) {
       return availableViews[name];
@@ -673,104 +636,31 @@
       elPerViewSelect.appendChild(opt);
     });
 
-    // 先頭ビューを currentViewId として選択
-    if (entries.length > 0) {
-      var firstId = String(entries[0].id);
-      elPerViewSelect.value = firstId;
-      currentViewId = firstId;
-      applyViewConfig(firstId);
-    } else {
-      currentViewId = null;
-      applyViewConfig(null);
-    }
-  }
-
-  /**
-   * 「新規ビュー名」入力フィールドの表示/非表示を切り替える (Phase 7)
-   */
-  function updateNewNameFieldVisibility() {
-    if (elViewTarget.value === '__new__') {
-      elViewNewNameField.style.display = '';
-    } else {
-      elViewNewNameField.style.display = 'none';
-    }
-  }
-
-  /**
-   * カレンダー用 CUSTOM ビューを作成または更新する (Phase 7)
-   * @returns {Promise<void>}
-   */
-  async function handleViewApply() {
-    var target = elViewTarget.value;
-    showViewStatus('処理中...', '');
-    elViewApply.disabled = true;
-
-    try {
-      var views = await loadViews();
-
-      if (target === '__new__') {
-        var newName = (elViewNewName.value || 'カレンダー').trim();
-        if (!newName) {
-          showViewStatus('ビュー名を入力してください', 'error');
-          elViewApply.disabled = false;
-          return;
+    // currentViewId の選択状態を維持、なければ最初の既存ビューを選択
+    if (currentViewId && currentViewId !== null) {
+      elPerViewSelect.value = currentViewId;
+      // 選択できなかった場合 (削除されたビューなど) は先頭ビューを選択
+      if (elPerViewSelect.value !== currentViewId) {
+        if (entries.length > 0) {
+          currentViewId = String(entries[0].id);
+          elPerViewSelect.value = currentViewId;
+          applyViewConfig(currentViewId);
+        } else {
+          currentViewId = null;
+          elPerViewSelect.value = '__new__';
+          applyViewConfig(null);
         }
-        if (views[newName]) {
-          showViewStatus(
-            '「' + newName + '」は既に存在します。既存ビュー選択から上書きしてください。',
-            'error'
-          );
-          elViewApply.disabled = false;
-          return;
-        }
-        views[newName] = buildCalendarView(newName, Object.keys(views).length);
-      } else {
-        var confirmed = window.confirm(
-          '既存ビュー「' + target + '」を上書きします。\n\n' +
-          '現在の HTML・設定が「カレンダー用」の内容に置き換わります。\n' +
-          '続行しますか?'
-        );
-        if (!confirmed) {
-          showViewStatus('キャンセルしました', '');
-          elViewApply.disabled = false;
-          return;
-        }
-        views[target] = buildCalendarView(target, views[target].index);
       }
-
-      await kintone.api(
-        kintone.api.url('/k/v1/preview/app/views.json', true),
-        'PUT',
-        {
-          app: kintone.app.getId(),
-          views: views
-        }
-      );
-
-      await kintone.api(
-        kintone.api.url('/k/v1/preview/app/deploy.json', true),
-        'POST',
-        {
-          apps: [{ app: kintone.app.getId() }]
-        }
-      );
-
-      var successMsg = (target === '__new__')
-        ? 'ビューを作成しました。アプリを保存・公開してください。未保存の他の設定変更も同時に公開されます。'
-        : 'ビューを更新しました。アプリを保存・公開してください。未保存の他の設定変更も同時に公開されます。';
-      showViewStatus(successMsg, 'success');
-
-      // Phase 7 / Phase 9 両方のビュープルダウンを更新
-      await Promise.all([refreshViewSelect(), refreshPerViewSelect()]);
-
-    } catch (e) {
-      console.error('[KC Config] ビュー操作失敗:', e);
-      showViewStatus(
-        'ビューの作成 / 更新に失敗しました: ' + (e.message || ''),
-        'error'
-      );
-    } finally {
-      elViewApply.disabled = false;
+    } else if (entries.length > 0) {
+      // 初回: 先頭の既存ビューを選択
+      currentViewId = String(entries[0].id);
+      elPerViewSelect.value = currentViewId;
+      applyViewConfig(currentViewId);
+    } else {
+      // 既存 CUSTOM ビューなし: 新規作成モード
+      currentViewId = null;
+      elPerViewSelect.value = '__new__';
+      applyViewConfig(null);
     }
   }
 
@@ -779,20 +669,27 @@
    * ==================================================================== */
 
   /**
-   * 「対象ビュー」ドロップダウン変更時のハンドラ
+   * 「対象ビュー」ドロップダウン変更時のハンドラ。
    * - 現在の編集内容を currentConfig.views[currentViewId] に保存
    * - 新しい currentViewId に切り替えて applyViewConfig を呼び出す
+   * - __new__ 選択時: 新規ビュー名フィールド表示、「保存」disabled
+   * - 既存ビュー選択時: 「保存」「保存して更新」両方 enabled
    */
   function handleViewSelectChange() {
-    var newViewId = elPerViewSelect.value;
+    var selectedValue = elPerViewSelect.value;
 
-    // 現在の編集中ビューの設定を保存
+    // 現在の編集中ビューの設定を一時保存 (切替前)
     if (currentViewId) {
       currentConfig.views[currentViewId] = collectViewConfig();
     }
 
-    currentViewId = newViewId || null;
-    applyViewConfig(currentViewId);
+    if (selectedValue === '__new__') {
+      currentViewId = null;
+      applyViewConfig(null);
+    } else {
+      currentViewId = selectedValue || null;
+      applyViewConfig(currentViewId);
+    }
   }
 
   /**
@@ -840,18 +737,40 @@
    * 設定値を保存する共通ロジック。
    * - collectFieldMapping() で共通設定を currentConfig.fieldMapping に反映
    * - 現在の編集中ビューの個別設定を currentConfig.views に反映
+   * - options.updateViews が true の場合: PUT views.json でビューを作成/上書き
+   *   - 新規作成モード (currentViewId === null): 新規ビューを追加して currentViewId を更新
+   *   - 既存ビュー更新: html を強制上書き (確認ダイアログなし)
    * - orphan 削除 (メモリ内 + mergedViews)
    * - getConfig 先読みでタブ間競合を回避して mergedViews を構築
    * - kintone.plugin.app.setConfig で保存
+   * @param {{ updateViews?: boolean }} [options] - updateViews: PUT views.json を実行するか
    * @returns {Promise<boolean>} 保存成功なら true、バリデーション失敗や例外で false
    */
-  async function saveConfig() {
+  async function saveConfig(options) {
     clearError();
+    var doUpdateViews = options && options.updateViews === true;
+
+    // 新規作成時のビュー名バリデーション
+    var newViewName = null;
+    if (doUpdateViews && currentViewId === null) {
+      newViewName = (elNewViewName.value || 'カレンダー').trim();
+      if (!newViewName) {
+        showError('新規ビュー名を入力してください。');
+        return false;
+      }
+      var sameName = Object.keys(availableViews).some(function (name) {
+        return name === newViewName;
+      });
+      if (sameName) {
+        showError('「' + newViewName + '」は既に存在します。別の名前を入力してください。');
+        return false;
+      }
+    }
 
     // 共通設定を収集して currentConfig.fieldMapping を更新
     currentConfig.fieldMapping = collectFieldMapping();
 
-    // 現在の編集中ビューの個別設定を保存
+    // 現在の編集中ビューの個別設定を保存 (新規作成時は後で ID 確定後に保存)
     if (currentViewId) {
       currentConfig.views[currentViewId] = collectViewConfig();
     }
@@ -876,6 +795,53 @@
     }
 
     try {
+      // PUT views.json: 新規作成または既存ビュー更新
+      if (doUpdateViews) {
+        var allViews = await loadViews();
+
+        if (currentViewId === null) {
+          // 新規作成: ビューを追加
+          var newView = buildCalendarView(newViewName, Object.keys(allViews).length);
+          allViews[newViewName] = newView;
+
+          await kintone.api(
+            kintone.api.url('/k/v1/preview/app/views.json', true),
+            'PUT',
+            { app: kintone.app.getId(), views: allViews }
+          );
+
+          // 作成後のビュー ID を再取得して currentViewId に反映
+          var refreshed = await loadViews();
+          var createdView = refreshed[newViewName];
+          if (createdView && createdView.id) {
+            currentViewId = String(createdView.id);
+            // availableViews を更新して orphan チェックの validIds も更新
+            availableViews[newViewName] = createdView;
+            validIds.push(currentViewId);
+            // 新規ビューの個別設定を currentConfig.views に追加
+            currentConfig.views[currentViewId] = collectViewConfig();
+          } else {
+            console.warn('[KC Config] 新規ビューの ID が取得できませんでした');
+          }
+        } else {
+          // 既存ビュー更新: html を強制上書き (確認なし)
+          var existingKey = Object.keys(allViews).find(function (k) {
+            return String(allViews[k].id) === currentViewId;
+          });
+          if (existingKey) {
+            allViews[existingKey].html = '<div id="kc-root" class="kc-root"></div>';
+            allViews[existingKey].htmlForMobile = '<div id="kc-root" class="kc-root"></div>';
+            await kintone.api(
+              kintone.api.url('/k/v1/preview/app/views.json', true),
+              'PUT',
+              { app: kintone.app.getId(), views: allViews }
+            );
+          } else {
+            console.warn('[KC Config] 更新対象ビューが見つかりませんでした: id =', currentViewId);
+          }
+        }
+      }
+
       // setConfig 直前に getConfig で最新の views を先読みしてタブ間競合を回避する。
       // 取得した最新の views をベースに、編集中のビューのみを上書きする形でマージする。
       var latestViews = {};
@@ -925,23 +891,29 @@
 
       return true;
     } catch (e) {
-      console.error('[KC Config] setConfig 失敗:', e);
+      console.error('[KC Config] saveConfig 失敗:', e);
       showError('設定の保存に失敗しました。時間をおいて再度お試しください。');
       return false;
     }
   }
 
   /**
-   * 保存ボタンクリック時のハンドラ (2 階層設計対応)
-   * - saveConfig() で設定を保存
+   * 保存ボタンクリック時のハンドラ (既存ビュー編集のみ)。
+   * - 新規作成モード (currentViewId === null) の場合はエラーを表示して終了
+   * - saveConfig({ updateViews: false }) で setConfig のみ実行
    * - 成功時は成功メッセージを 1.5 秒表示してから前の画面に戻る
    * @returns {Promise<void>}
    */
   async function handleSubmit() {
+    if (currentViewId === null) {
+      showError('新規作成は「保存して更新」ボタンをご利用ください。');
+      return;
+    }
+
     elSubmit.disabled = true;
     elSubmit.textContent = '保存中...';
 
-    var ok = await saveConfig();
+    var ok = await saveConfig({ updateViews: false });
     if (!ok) {
       elSubmit.disabled = false;
       elSubmit.textContent = '保存';
@@ -954,7 +926,8 @@
 
   /**
    * 「保存して更新」ボタンクリック時のハンドラ。
-   * saveConfig() で設定を保存したあと、kintone プレビュー API でデプロイ (本番反映) を実行する。
+   * saveConfig({ updateViews: true }) でビュー更新 + setConfig を実行したあと、
+   * kintone プレビュー API でデプロイ (本番反映) を実行する。
    *
    * 注意: POST deploy.json はアプリの全 preview 変更を本番に反映するため、
    *       他の未保存変更 (フィールド追加など) も同時に公開される。
@@ -967,7 +940,7 @@
     elSubmitDeploy.disabled = true;
     elSubmitDeploy.textContent = '保存中...';
 
-    var ok = await saveConfig();
+    var ok = await saveConfig({ updateViews: true });
     if (!ok) {
       elSubmit.disabled = false;
       elSubmitDeploy.disabled = false;
@@ -1002,6 +975,8 @@
         var appStatus = statusResp.apps[0].status;
 
         if (appStatus === 'SUCCESS') {
+          // ビュー一覧を再取得してプルダウンを更新 (新規作成後に currentViewId を select に反映)
+          await refreshPerViewSelect();
           showSuccess('設定を保存しアプリを更新しました (他の未保存変更も同時に公開されました)');
           setTimeout(function () { history.back(); }, 2000);
           return;
@@ -1034,14 +1009,17 @@
    * ==================================================================== */
 
   /**
-   * 設定画面の初期化処理 (Phase 9: 2 階層設計)
+   * 設定画面の初期化処理 (統合版: Phase 7 + Phase 9)
    * 1. loadInitialConfig() で既存設定取得・初期化
    * 2. loadFields() でフィールドプルダウン構築
    * 3. applyFieldMapping() で共通設定を反映
    * 4. refreshPerViewSelect() でビュー個別設定プルダウン構築 (orphan 削除も実行)
-   * 5. refreshViewSelect() で Phase 7 のビュー管理プルダウン構築
+   * 5. ボタン初期状態を applyViewConfig の結果に合わせて設定
    */
   async function init() {
+    // 初期状態: 「保存」を disabled にしておく (refreshPerViewSelect 後に確定)
+    elSubmit.disabled = true;
+
     // 1. 既存設定を取得して currentConfig を初期化
     loadInitialConfig();
 
@@ -1056,9 +1034,9 @@
     // 3. 共通設定 (fieldMapping) をフォームに反映
     applyFieldMapping(currentConfig.fieldMapping);
 
-    // 4. ビュー一覧を取得して両プルダウンを構築 (orphan 削除も実行)
+    // 4. ビュー一覧を取得してプルダウンを構築 (orphan 削除も実行)
     try {
-      await Promise.all([refreshPerViewSelect(), refreshViewSelect()]);
+      await refreshPerViewSelect();
     } catch (e) {
       console.error('[KC Config] ビュー一覧初期化失敗:', e);
     }
@@ -1068,11 +1046,7 @@
     elSubmitDeploy.addEventListener('click', handleSubmitAndDeploy);
     elCancel.addEventListener('click', handleCancel);
 
-    // Phase 7: ビュー管理
-    elViewTarget.addEventListener('change', updateNewNameFieldVisibility);
-    elViewApply.addEventListener('click', handleViewApply);
-
-    // Phase 9: ビュー個別設定
+    // ビュー個別設定
     elPerViewSelect.addEventListener('change', handleViewSelectChange);
     elCopyExecute.addEventListener('click', handleCopyFromView);
   }
