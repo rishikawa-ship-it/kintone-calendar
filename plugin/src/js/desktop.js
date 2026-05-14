@@ -485,6 +485,7 @@
     editing: null,
     alldayExpanded: false,   /* レーン展開トグル状態。初期値 false（折りたたみ）*/
     eventFilter: 'all',      /* イベントフィルタ: 'all' | 'mine' | 'others'（localStorage 永続化）*/
+    isAppAdmin: false,        /* アプリ管理権限の有無（_checkAppAdminPermission で更新）*/
     els: {},
 
     /** DOM参照の再取得 */
@@ -4529,6 +4530,61 @@
   KC.Boot = {
     _initialized: false,
 
+    /**
+     * アプリ管理権限の有無を /k/v1/app/settings.json の呼出可否で簡易判定する。
+     * 成功なら KC.State.isAppAdmin = true、失敗なら false（デフォルト維持）。
+     * 403 / その他エラーはユーザーに見せない（console.warn のみ）。
+     */
+    _checkAppAdminPermission: async function () {
+      try {
+        await kintone.api(
+          kintone.api.url('/k/v1/app/settings.json', true),
+          'GET',
+          { app: kintone.app.getId() }
+        );
+        KC.State.isAppAdmin = true;
+      } catch (e) {
+        KC.State.isAppAdmin = false;
+        // 権限なし or エラーはユーザーに見せない
+        console.warn('[KC.Boot] app/settings.json 呼出失敗（管理権限なし）');
+      }
+    },
+
+    /**
+     * カレンダーヘッダー右側（.kc-head-right）に ⚙ プラグイン設定ボタンを挿入する。
+     * KC.State.isAppAdmin が true のときのみ表示状態にする。
+     * ボタンは初回のみ挿入する（_buildDOM のガード相当のチェックを行う）。
+     */
+    _insertSettingsButton: function () {
+      var headRight = document.querySelector('.kc-head-right');
+      if (!headRight) return;
+
+      // 多重挿入防止（init が複数回呼ばれた場合への安全策）
+      if (headRight.querySelector('.kc-settings-btn')) return;
+
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'kc-settings-btn';
+      btn.title = 'プラグイン設定を開く';
+      btn.setAttribute('aria-label', 'プラグイン設定を開く');
+
+      var icon = document.createElement('span');
+      icon.className = 'kc-settings-btn-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = '⚙'; // ⚙
+      btn.appendChild(icon);
+
+      btn.addEventListener('click', function () {
+        window.location.href = '/k/admin/app/' + kintone.app.getId() + '/plugin/';
+      });
+
+      headRight.appendChild(btn);
+
+      if (KC.State.isAppAdmin) {
+        btn.style.display = 'inline-block';
+      }
+    },
+
     /** DOM構築（ヘッダー、グリッド、ドロップダウン） */
     _buildDOM: function () {
       var root = document.getElementById('kc-root');
@@ -4922,6 +4978,12 @@
 
       // 初期表示で全画面
       this._enterExpanded(root);
+
+      // アプリ管理権限を確認し、権限あれば設定ボタンを表示する
+      // 初回描画完了後に非同期で実行するため、権限判定の失敗はカレンダー動作に影響しない
+      this._checkAppAdminPermission().then(function () {
+        bootSelf._insertSettingsButton();
+      });
 
       console.log('[KC.Boot] init complete');
     }

@@ -1051,3 +1051,31 @@ body.kc-dnd-active * {
 /* CSS 変数での条件分岐は不可のため JS で kc-day--day-view クラスを付与する代わりに
    col-count が 1 のときは改行を許可するよう上書きする */
 /* 注: 日ビューでは列幅が広いため既存 CSS のまま問題ない場合が多い（必要に応じて有効化） */
+
+/* ==========================================================================
+ * 20. プラグイン設定ボタン（.kc-settings-btn）
+ * ========================================================================== */
+.kc-settings-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: #4a5568;
+  margin-left: 8px;
+  transition: background-color 0.15s, border-color 0.15s;
+  display: none; /* 初期非表示: KC.State.isAppAdmin 判定で inline-block に切替 */
+}
+.kc-settings-btn:hover {
+  background-color: #f0f4f8;
+  border-color: #cbd5e0;
+}
+.kc-settings-btn:focus {
+  outline: 2px solid #3182ce;
+  outline-offset: 2px;
+}
+.kc-settings-btn-icon {
+  display: inline-block;
+}

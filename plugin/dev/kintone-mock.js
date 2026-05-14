@@ -96,6 +96,10 @@
           });
           resolve({ revision: '2' });
         }
+        // GET /k/v1/app/settings.json（アプリ管理権限チェック用）
+        else if (/app\/settings/.test(url) && method === 'GET') {
+          resolve({ name: 'モックアプリ', description: '' });
+        }
         // POST /k/v1/preview/app/deploy.json
         else if (/app\/deploy/.test(url) && method === 'POST') {
           resolve({});
