@@ -241,6 +241,16 @@ body {
   border-top: 1px solid #ddd;
 }
 
+/* ページトップのボタン群: 上余白なし・下に区切り線 */
+.kc-config-actions-top {
+  margin-top: 0;
+  margin-bottom: 24px;
+  padding-top: 0;
+  padding-bottom: 16px;
+  border-top: none;
+  border-bottom: 1px solid #e2e8f0;
+}
+
 .kc-config-btn {
   padding: 10px 24px;
   font-size: 14px;

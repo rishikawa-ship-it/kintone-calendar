@@ -117,10 +117,10 @@
   var elCopyResult = document.getElementById('kc-copy-result');
   var elCalendarTitle = document.getElementById('kc-calendar-title');
 
-  /* --- 操作ボタン --- */
-  var elSubmit = document.getElementById('kc-config-submit');
-  var elSubmitDeploy = document.getElementById('kc-config-submit-deploy');
-  var elCancel = document.getElementById('kc-config-cancel');
+  /* --- 操作ボタン (上下 2 セット分を NodeList で取得) --- */
+  var elSubmits = document.querySelectorAll('.kc-config-submit');
+  var elSubmitDeploys = document.querySelectorAll('.kc-config-submit-deploy');
+  var elCancels = document.querySelectorAll('.kc-config-cancel');
 
   /* ====================================================================
    * ユーティリティ関数
@@ -227,6 +227,34 @@
     opt.className = 'kc-option-missing';
     selectEl.appendChild(opt);
     selectEl.value = value;
+  }
+
+  /* ====================================================================
+   * ボタン状態制御ヘルパー
+   * ==================================================================== */
+
+  /**
+   * 「保存」ボタン群 (上下 2 セット) の disabled 状態とテキストを一括設定する
+   * @param {boolean} disabled - true: 非活性, false: 活性
+   * @param {string} [text] - ボタンのテキスト (省略時は変更しない)
+   */
+  function setSubmitButtonsState(disabled, text) {
+    elSubmits.forEach(function (btn) {
+      btn.disabled = disabled;
+      if (text !== undefined) { btn.textContent = text; }
+    });
+  }
+
+  /**
+   * 「保存して更新」ボタン群 (上下 2 セット) の disabled 状態とテキストを一括設定する
+   * @param {boolean} disabled - true: 非活性, false: 活性
+   * @param {string} [text] - ボタンのテキスト (省略時は変更しない)
+   */
+  function setSubmitDeployButtonsState(disabled, text) {
+    elSubmitDeploys.forEach(function (btn) {
+      btn.disabled = disabled;
+      if (text !== undefined) { btn.textContent = text; }
+    });
   }
 
   /* ====================================================================
@@ -350,8 +378,8 @@
       elCopySection.style.display = '';
       rebuildCopySourceSelect(null);
       // 新規作成モード: 「保存」は disabled、「保存して更新」は enabled
-      elSubmit.disabled = true;
-      elSubmitDeploy.disabled = false;
+      setSubmitButtonsState(true);
+      setSubmitDeployButtonsState(false);
       return;
     }
 
@@ -381,8 +409,8 @@
     elCopySection.style.display = '';
 
     // 既存ビュー選択時: 「保存」「保存して更新」両方 enabled
-    elSubmit.disabled = false;
-    elSubmitDeploy.disabled = false;
+    setSubmitButtonsState(false);
+    setSubmitDeployButtonsState(false);
 
     // コピー元ドロップダウンを再構築 (現在編集中ビュー以外)
     rebuildCopySourceSelect(viewId);
@@ -910,13 +938,11 @@
       return;
     }
 
-    elSubmit.disabled = true;
-    elSubmit.textContent = '保存中...';
+    setSubmitButtonsState(true, '保存中...');
 
     var ok = await saveConfig({ updateViews: false });
     if (!ok) {
-      elSubmit.disabled = false;
-      elSubmit.textContent = '保存';
+      setSubmitButtonsState(false, '保存');
       return;
     }
 
@@ -936,20 +962,18 @@
    * @returns {Promise<void>}
    */
   async function handleSubmitAndDeploy() {
-    elSubmit.disabled = true;
-    elSubmitDeploy.disabled = true;
-    elSubmitDeploy.textContent = '保存中...';
+    setSubmitButtonsState(true);
+    setSubmitDeployButtonsState(true, '保存中...');
 
     var ok = await saveConfig({ updateViews: true });
     if (!ok) {
-      elSubmit.disabled = false;
-      elSubmitDeploy.disabled = false;
-      elSubmitDeploy.textContent = '保存して更新';
+      setSubmitButtonsState(false);
+      setSubmitDeployButtonsState(false, '保存して更新');
       return;
     }
 
     // 続けてデプロイ (本番反映)
-    elSubmitDeploy.textContent = 'アプリを更新中...';
+    setSubmitDeployButtonsState(true, 'アプリを更新中...');
 
     var POLL_INTERVAL = 3000;  // ポーリング間隔 (ms)
     var POLL_TIMEOUT  = 120000; // ポーリングタイムアウト (ms)
@@ -991,9 +1015,8 @@
     } catch (e) {
       console.error('[KC Plugin Config] デプロイ失敗:', e);
       showError('アプリ更新に失敗しました: ' + (e.message || '') + ' (設定値は保存済み)');
-      elSubmit.disabled = false;
-      elSubmitDeploy.disabled = false;
-      elSubmitDeploy.textContent = '保存して更新';
+      setSubmitButtonsState(false);
+      setSubmitDeployButtonsState(false, '保存して更新');
     }
   }
 
@@ -1018,7 +1041,7 @@
    */
   async function init() {
     // 初期状態: 「保存」を disabled にしておく (refreshPerViewSelect 後に確定)
-    elSubmit.disabled = true;
+    setSubmitButtonsState(true);
 
     // 1. 既存設定を取得して currentConfig を初期化
     loadInitialConfig();
@@ -1041,10 +1064,10 @@
       console.error('[KC Config] ビュー一覧初期化失敗:', e);
     }
 
-    // ボタンイベントを登録
-    elSubmit.addEventListener('click', handleSubmit);
-    elSubmitDeploy.addEventListener('click', handleSubmitAndDeploy);
-    elCancel.addEventListener('click', handleCancel);
+    // ボタンイベントを登録 (上下 2 セット分を forEach で一括登録)
+    elSubmits.forEach(function (btn) { btn.addEventListener('click', handleSubmit); });
+    elSubmitDeploys.forEach(function (btn) { btn.addEventListener('click', handleSubmitAndDeploy); });
+    elCancels.forEach(function (btn) { btn.addEventListener('click', handleCancel); });
 
     // ビュー個別設定
     elPerViewSelect.addEventListener('change', handleViewSelectChange);

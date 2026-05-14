@@ -27,6 +27,19 @@
   <div class="kc-config-container">
     <h1 class="kc-config-title">KC Calendar プラグイン設定</h1>
 
+    <!-- ページトップの操作ボタン群 -->
+    <div class="kc-config-actions kc-config-actions-top">
+      <button type="button" class="kc-config-btn kc-config-btn-cancel kc-config-cancel">
+        キャンセル
+      </button>
+      <button type="button" class="kc-config-btn kc-config-btn-submit kc-config-submit">
+        保存
+      </button>
+      <button type="button" class="kc-config-btn kc-config-btn-primary kc-config-submit-deploy">
+        保存して更新
+      </button>
+    </div>
+
     <!-- バリデーションエラー表示エリア -->
     <div id="kc-config-error" class="kc-config-error" aria-live="polite"></div>
 
@@ -258,16 +271,16 @@
       </section>
 
       <!-- ====================================================
-        操作ボタン
+        操作ボタン (ページ最下部)
       ==================================================== -->
       <div class="kc-config-actions">
-        <button type="button" id="kc-config-cancel" class="kc-config-btn kc-config-btn-cancel">
+        <button type="button" class="kc-config-btn kc-config-btn-cancel kc-config-cancel">
           キャンセル
         </button>
-        <button type="button" id="kc-config-submit" class="kc-config-btn kc-config-btn-submit">
+        <button type="button" class="kc-config-btn kc-config-btn-submit kc-config-submit">
           保存
         </button>
-        <button type="button" id="kc-config-submit-deploy" class="kc-config-btn kc-config-btn-primary">
+        <button type="button" class="kc-config-btn kc-config-btn-primary kc-config-submit-deploy">
           保存して更新
         </button>
       </div>
