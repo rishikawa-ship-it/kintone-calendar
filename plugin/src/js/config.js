@@ -1,13 +1,15 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (統合版: Phase 7 + Phase 9)
+ * KC Calendar プラグイン設定画面スクリプト (統合版: Phase 7 + Phase 9 + 編集権限拡張 縮小版)
  *
- * 保存形式 (version 2):
+ * 保存形式 (version 3):
  *   {
- *     version: 2,
+ *     version: 3,
  *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, ... },
+ *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission }, ... ],
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
+ * 縮小版: 編集権限フィールドは USER_SELECT 型のみ対応（fieldType は常に "USER_SELECT"）
  *
  * 起動シーケンス:
  *   1. loadInitialConfig() で既存設定を取得・初期化
@@ -55,7 +57,7 @@
   /** 場所・氏名・メールとして選択可能な型 */
   var TEXT_FIELD_TYPES = ['SINGLE_LINE_TEXT', 'MULTI_LINE_TEXT', 'RICH_TEXT'];
 
-  /** アカウントフィールドとして選択可能な型 */
+  /** アカウントフィールド（ハイライト用）として選択可能な型 */
   var ACCOUNT_FIELD_TYPES = ['USER_SELECT'];
 
   /** メモフィールドとして選択可能な型 */
@@ -66,14 +68,21 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 2)
-   * @type {{ version: number, fieldMapping: Object, views: Object }}
+   * setConfig で保存する全体設定オブジェクト (version 3)
+   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, views: Object }}
    */
   var currentConfig = {
-    version: 2,
+    version: 3,
     fieldMapping: {},
+    permissionRules: [],
     views: {}
   };
+
+  /**
+   * 権限設定 UI で使用する USER_SELECT フィールド一覧（loadFields 後に設定される）
+   * @type {Array<{code: string, label: string}>}
+   */
+  var permissionFieldOptions = [];
 
   /**
    * ビュー個別設定セクションで編集中のビュー ID (文字列)
@@ -104,6 +113,10 @@
   var elFieldAccount = document.getElementById('kc-field-account');
   var elFieldMemo = document.getElementById('kc-field-memo');
   var elAlldayLabel = document.getElementById('kc-allday-label');
+
+  /* --- 編集権限設定 --- */
+  var elPermissionRows = document.getElementById('kc-permission-rows');
+  var elPermissionAdd  = document.getElementById('kc-permission-add');
 
   /* --- セクション 2: ビュー個別設定 (統合版) --- */
   var elPerViewSelect = document.getElementById('kc-per-view-select');
@@ -323,6 +336,125 @@
     };
   }
 
+  /* ====================================================================
+   * 編集権限設定 UI (REQ_edit-permission-extension §4)
+   * ==================================================================== */
+
+  /**
+   * 権限種別ドロップダウンの選択肢（固定）
+   * @type {Array<{value: string, label: string}>}
+   */
+  var PERMISSION_OPTIONS = [
+    { value: '',       label: '-- 権限を選択 --' },
+    { value: 'view',   label: '閲覧のみ（view）' },
+    { value: 'edit',   label: '編集可（edit）' },
+    { value: 'delete', label: '削除可（delete）' }
+  ];
+
+  /**
+   * 1 行の権限エントリ要素を生成する（USER_SELECT フィールドのみ表示）
+   * @param {Object} [rule] - 既存ルール { fieldCode, permission }（省略時は空行）
+   * @returns {HTMLElement} .kc-permission-row 要素
+   */
+  function buildPermissionRow(rule) {
+    var row = document.createElement('div');
+    row.className = 'kc-permission-row';
+
+    // フィールド選択ドロップダウン（USER_SELECT 型のみ）
+    var fieldSel = document.createElement('select');
+    fieldSel.className = 'kc-config-select kc-permission-field-select';
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- フィールドを選択 --';
+    fieldSel.appendChild(emptyOpt);
+
+    permissionFieldOptions.forEach(function (f) {
+      var opt = document.createElement('option');
+      opt.value = f.code;
+      opt.textContent = f.label + ' (' + f.code + ')';
+      fieldSel.appendChild(opt);
+    });
+
+    // 権限種別ドロップダウン
+    var permSel = document.createElement('select');
+    permSel.className = 'kc-config-select kc-permission-perm-select';
+    PERMISSION_OPTIONS.forEach(function (p) {
+      var opt = document.createElement('option');
+      opt.value = p.value;
+      opt.textContent = p.label;
+      permSel.appendChild(opt);
+    });
+
+    // 削除ボタン
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-config-btn-secondary kc-permission-del-btn';
+    delBtn.textContent = '−';
+    delBtn.addEventListener('click', function () {
+      row.parentNode && row.parentNode.removeChild(row);
+    });
+
+    row.appendChild(fieldSel);
+    row.appendChild(permSel);
+    row.appendChild(delBtn);
+
+    // 既存ルールがある場合は選択状態を設定
+    if (rule && rule.fieldCode) {
+      fieldSel.value = rule.fieldCode;
+      // 選択肢に存在しない場合（フィールド削除等）は末尾に追加して警告表示
+      if (fieldSel.value !== rule.fieldCode) {
+        var missingOpt = document.createElement('option');
+        missingOpt.value = rule.fieldCode;
+        missingOpt.textContent = rule.fieldCode + ' (フィールドが見つかりません)';
+        missingOpt.className = 'kc-option-missing';
+        fieldSel.appendChild(missingOpt);
+        fieldSel.value = rule.fieldCode;
+      }
+    }
+    if (rule && rule.permission) {
+      permSel.value = rule.permission;
+    }
+
+    return row;
+  }
+
+  /**
+   * 権限設定行を DOM から収集して permissionRules 配列を返す
+   * フィールドコードまたは権限が未選択の行はスキップする
+   * fieldType は USER_SELECT 固定（縮小版: §6.1 スキーマ互換のため常にセット）
+   * @returns {Array<{fieldCode: string, fieldType: string, permission: string}>}
+   */
+  function collectPermissionRules() {
+    var rows = elPermissionRows.querySelectorAll('.kc-permission-row');
+    var result = [];
+    rows.forEach(function (row) {
+      var fieldSel = row.querySelector('.kc-permission-field-select');
+      var permSel  = row.querySelector('.kc-permission-perm-select');
+      if (!fieldSel || !permSel) return;
+
+      var fieldCode = fieldSel.value;
+      var permission = permSel.value;
+      if (!fieldCode || !permission) return;
+
+      result.push({ fieldCode: fieldCode, fieldType: 'USER_SELECT', permission: permission });
+    });
+    return result;
+  }
+
+  /**
+   * 保存済み permissionRules をフォームに反映する
+   * @param {Array} rules - permissionRules 配列
+   */
+  function applyPermissionRules(rules) {
+    if (!elPermissionRows) return;
+    elPermissionRows.innerHTML = '';
+    if (!Array.isArray(rules) || rules.length === 0) return;
+    rules.forEach(function (rule) {
+      elPermissionRows.appendChild(buildPermissionRow(rule));
+    });
+  }
+
   /**
    * ビュー個別設定セクションの DOM から { calendarTitle, defaultView } を収集する
    * @returns {{ calendarTitle: string, defaultView: string }}
@@ -511,17 +643,25 @@
       parsed = null;
     }
 
-    // version 2 でない場合は破棄 (Q11 確定: 旧フラット設定は再初期化)
+    // version 2 未満は破棄 (Q11 確定: 旧フラット設定は再初期化)
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
-      console.log('[KC Config] version 2 以外の設定を破棄し再初期化します');
-      currentConfig = { version: 2, fieldMapping: {}, views: {} };
+      console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
+      currentConfig = { version: 3, fieldMapping: {}, permissionRules: [], views: {} };
       return;
     }
 
+    // version 2 からのアップグレード: permissionRules を空配列で初期化
+    // fieldAccount は fieldMapping に残置し自動変換しない（§8.1 参照）
+    var loadedPermRules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
+    if (Number(parsed.version) === 2) {
+      console.log('[KC Config] version 2 → 3 へアップグレード (permissionRules は空配列で初期化)');
+    }
+
     currentConfig = {
-      version: 2,
-      fieldMapping: parsed.fieldMapping || {},
-      views: parsed.views || {}
+      version: 3,
+      fieldMapping:    parsed.fieldMapping    || {},
+      permissionRules: loadedPermRules,
+      views:           parsed.views           || {}
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
   }
@@ -551,6 +691,23 @@
       populateSelect(elFieldUserMail, filterFields(props, TEXT_FIELD_TYPES),    true);
       populateSelect(elFieldAccount,  filterFields(props, ACCOUNT_FIELD_TYPES), true);
       populateSelect(elFieldMemo,     filterFields(props, MEMO_FIELD_TYPES),    true);
+
+      // 編集権限フィールド選択肢を収集する（USER_SELECT 型のみ）
+      permissionFieldOptions = [];
+      Object.keys(props).forEach(function (code) {
+        var field = props[code];
+        if (field.type === 'USER_SELECT') {
+          permissionFieldOptions.push({
+            code:  code,
+            label: field.label || code
+          });
+        }
+      });
+      permissionFieldOptions.sort(function (a, b) {
+        if (a.label < b.label) return -1;
+        if (a.label > b.label) return 1;
+        return 0;
+      });
 
       return props;
     }).catch(function (err) {
@@ -798,6 +955,9 @@
     // 共通設定を収集して currentConfig.fieldMapping を更新
     currentConfig.fieldMapping = collectFieldMapping();
 
+    // 権限設定を収集して currentConfig.permissionRules を更新
+    currentConfig.permissionRules = collectPermissionRules();
+
     // 現在の編集中ビューの個別設定を保存 (新規作成時は後で ID 確定後に保存)
     if (currentViewId) {
       currentConfig.views[currentViewId] = collectViewConfig();
@@ -897,11 +1057,12 @@
         }
       });
 
-      // 最終的な保存オブジェクト
+      // 最終的な保存オブジェクト (version 3 形式: permissionRules を含む)
       var finalConfig = {
-        version: 2,
-        fieldMapping: currentConfig.fieldMapping,
-        views: mergedViews
+        version: 3,
+        fieldMapping:    currentConfig.fieldMapping,
+        permissionRules: currentConfig.permissionRules || [],
+        views:           mergedViews
       };
 
       // setConfig は文字列のみ受付のため JSON.stringify して config キーに格納
@@ -1057,6 +1218,10 @@
     // 3. 共通設定 (fieldMapping) をフォームに反映
     applyFieldMapping(currentConfig.fieldMapping);
 
+    // 3.5. 権限設定 (permissionRules) をフォームに反映
+    // loadFields が完了した後に呼ぶこと（permissionFieldOptions が確定している必要があるため）
+    applyPermissionRules(currentConfig.permissionRules || []);
+
     // 4. ビュー一覧を取得してプルダウンを構築 (orphan 削除も実行)
     try {
       await refreshPerViewSelect();
@@ -1072,6 +1237,13 @@
     // ビュー個別設定
     elPerViewSelect.addEventListener('change', handleViewSelectChange);
     elCopyExecute.addEventListener('click', handleCopyFromView);
+
+    // 編集権限設定 − 行追加ボタン
+    if (elPermissionAdd) {
+      elPermissionAdd.addEventListener('click', function () {
+        elPermissionRows.appendChild(buildPermissionRow(null));
+      });
+    }
   }
 
   document.addEventListener('DOMContentLoaded', function () {

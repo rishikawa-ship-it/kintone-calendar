@@ -137,6 +137,12 @@
 
   // detectAppName 完了前のフォールバック用初期値
   KC.Config.APP_NAME = 'カレンダー';
+  /**
+   * 編集権限ルール配列（非プラグイン版は常に空配列 = 全員 edit 権限フォールバック）
+   * プラグイン版 desktop.js では loadFromPluginConfig で上書きされる
+   * @type {Array}
+   */
+  KC.Config.PERMISSION_RULES = [];
 
   /* ====================================================================
    * KC.Utils — 日付ユーティリティ
@@ -412,18 +418,31 @@
 
       var startVal = self._safeVal(rec, F.start, null);
       var endVal = self._safeVal(rec, F.end, null);
+
+      // 権限対象フィールドの value[].code を収集する（追加 API 呼び出し不要にするため）
+      // permissionRules が空の場合は空オブジェクト（フォールバック: 全員 edit）
+      var permissionFields = {};
+      var rules = KC.Config.PERMISSION_RULES || [];
+      for (var ri = 0; ri < rules.length; ri++) {
+        var fieldCode = rules[ri].fieldCode;
+        if (fieldCode && rec[fieldCode] && Array.isArray(rec[fieldCode].value)) {
+          permissionFields[fieldCode] = rec[fieldCode].value.map(function (v) { return v.code || ''; });
+        }
+      }
+
       var ev = {
-        id:       rec.$id.value,
-        rev:      rec.$revision.value,
-        created:  rec.$created ? rec.$created.value : '',  /* 作成日時 (ISO 8601) — assignLanes のソートキー */
-        title:    self._safeVal(rec, F.title),
-        status:   self._safeVal(rec, F.status),
-        color:    self._safeVal(rec, F.color),
-        place:    self._safeVal(rec, F.place),
-        userName: self._safeVal(rec, F.userName),
-        userMail: self._safeVal(rec, F.userMail),
-        account:  F.account && rec[F.account] ? ((rec[F.account].value || [])[0]?.code || '') : '',
-        memo:     self._safeVal(rec, F.memo)
+        id:               rec.$id.value,
+        rev:              rec.$revision.value,
+        created:          rec.$created ? rec.$created.value : '',  /* 作成日時 (ISO 8601) — assignLanes のソートキー */
+        title:            self._safeVal(rec, F.title),
+        status:           self._safeVal(rec, F.status),
+        color:            self._safeVal(rec, F.color),
+        place:            self._safeVal(rec, F.place),
+        userName:         self._safeVal(rec, F.userName),
+        userMail:         self._safeVal(rec, F.userMail),
+        account:          F.account && rec[F.account] ? ((rec[F.account].value || [])[0]?.code || '') : '',
+        memo:             self._safeVal(rec, F.memo),
+        permissionFields: permissionFields  /* 権限判定用フィールド値（REQ_edit-permission-extension §6.2） */
       };
 
       if (KC.Config.START_FIELD_TYPE === 'DATE') {
@@ -488,6 +507,14 @@
       var fieldList = ['$id', '$revision', '$created'];
       for (var key in F) {
         if (F[key]) fieldList.push(F[key]);
+      }
+      // 権限判定用フィールドを取得対象に追加（重複は除去）
+      var permRules = KC.Config.PERMISSION_RULES || [];
+      for (var pri = 0; pri < permRules.length; pri++) {
+        var pfc = permRules[pri].fieldCode;
+        if (pfc && fieldList.indexOf(pfc) === -1) {
+          fieldList.push(pfc);
+        }
       }
 
       var cursorUrl = kintone.api.url('/k/v1/records/cursor.json', true);
@@ -1988,15 +2015,16 @@
   }());
 
   /* ====================================================================
-   * KC.LoginContext — ログインユーザー情報と isMine 判定ユーティリティ
-   * KC.Boot.init で init() を呼ぶこと。
+   * KC.LoginContext — ログインユーザー情報と権限判定ユーティリティ
+   * KC.Boot.init で init() を呼ぶこと（同期）。
    * ==================================================================== */
   KC.LoginContext = (function () {
     var _user = null;
 
     /**
-     * ログインユーザー情報を取得してキャッシュする
-     * KC.Boot.init の冒頭で呼ぶ
+     * ログインユーザー情報をキャッシュする（同期）
+     * USER_SELECT のみ対応のため API 呼び出しは不要
+     * @returns {void}
      */
     function init() {
       _user = kintone.getLoginUser();
@@ -2011,7 +2039,7 @@
     }
 
     /**
-     * KcEvent が自分の予定かどうかを判定する
+     * KcEvent が自分の予定かどうかを判定する（視覚的ハイライト用）
      * account が空の場合は false（他人扱い）
      * @param {Object} evt - KcEvent
      * @returns {boolean}
@@ -2022,7 +2050,73 @@
       return evt.account === _user.code;
     }
 
-    return { init: init, getUserCode: getUserCode, isMine: isMine };
+    /**
+     * permissionRules の 1 エントリを評価する（USER_SELECT のみ対応）
+     * フィールドの value[].code にログインユーザーコードが含まれるか判定する
+     * @param {Object} rule - { fieldCode, permission }
+     * @param {Object} evt  - KcEvent（permissionFields を含む）
+     * @returns {string|null} マッチした場合は権限文字列、非マッチは null
+     */
+    function _evalEntry(rule, evt) {
+      if (!_user) return null;
+      var codes = evt.permissionFields && evt.permissionFields[rule.fieldCode]
+        ? evt.permissionFields[rule.fieldCode]
+        : [];
+      var matched = codes.indexOf(_user.code) !== -1;
+      return matched ? rule.permission : null;
+    }
+
+    /**
+     * 権限レベルを数値化する
+     * @param {string|null} perm
+     * @returns {number}
+     */
+    function _permLevel(perm) {
+      if (perm === 'delete') return 3;
+      if (perm === 'edit')   return 2;
+      if (perm === 'view')   return 1;
+      return 0;
+    }
+
+    /**
+     * イベントに対するログインユーザーの権限を返す（OR 結合・最高権限採用）
+     * - permissionRules が空配列の場合: edit 相当（フォールバック: 全員編集可）
+     * - permissionRules に 1 件以上あるがどのルールにもマッチしない場合: view 相当
+     *   （_permLevel(null) = 0 < _permLevel('edit') = 2 のため canEdit: false となる）
+     * @param {Object} evt - KcEvent
+     * @returns {{ canEdit: boolean, canDelete: boolean, canOpenDialog: boolean }}
+     */
+    function getPermission(evt) {
+      var rules = KC.Config.PERMISSION_RULES || [];
+
+      // フォールバック: ルールなし = 全員 edit
+      if (!rules || rules.length === 0) {
+        return { canEdit: true, canDelete: false, canOpenDialog: true };
+      }
+
+      // best = null のままループが終わる（全ルール非マッチ）= view 相当
+      // _permLevel(null) = 0 なので canEdit: false, canDelete: false になる
+      var best = null;
+      for (var i = 0; i < rules.length; i++) {
+        var granted = _evalEntry(rules[i], evt);
+        if (_permLevel(granted) > _permLevel(best)) {
+          best = granted;
+        }
+      }
+
+      return {
+        canEdit:        _permLevel(best) >= _permLevel('edit'),
+        canDelete:      _permLevel(best) >= _permLevel('delete'),
+        canOpenDialog:  true
+      };
+    }
+
+    return {
+      init:          init,
+      getUserCode:   getUserCode,
+      isMine:        isMine,
+      getPermission: getPermission
+    };
   }());
 
   /* ====================================================================
@@ -2185,10 +2279,12 @@
       var BAR_GAP = 3;
       var BAR_TOP = 4;
 
-      var mine = KC.LoginContext.isMine(ev);
+      var mine    = KC.LoginContext.isMine(ev);
+      var canEdit = KC.LoginContext.getPermission(ev).canEdit;
       var el = document.createElement('div');
       el.className = mine ? 'kc-ad-event kc-ad-event--mine' : 'kc-ad-event';
-      if (!mine) el.style.cursor = 'pointer';
+      // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
+      if (!canEdit) el.style.cursor = 'pointer';
 
       el.style.left   = ((ev.colStart / colCount) * 100) + '%';
       el.style.width  = ((ev.span    / colCount) * 100) + '%';
@@ -2220,7 +2316,7 @@
       leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
       leftHandle.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
-        if (!KC.LoginContext.isMine(ev)) return;
+        if (!KC.LoginContext.getPermission(ev).canEdit) return;
         mdEvt.stopPropagation();
         KC.DnD.startResizeAllday(ev, 'left', mdEvt, el);
       });
@@ -2229,7 +2325,7 @@
       rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
       rightHandle.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
-        if (!KC.LoginContext.isMine(ev)) return;
+        if (!KC.LoginContext.getPermission(ev).canEdit) return;
         mdEvt.stopPropagation();
         KC.DnD.startResizeAllday(ev, 'right', mdEvt, el);
       });
@@ -2244,7 +2340,7 @@
 
       el.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
-        if (!KC.LoginContext.isMine(ev)) return;
+        if (!KC.LoginContext.getPermission(ev).canEdit) return;
         KC.DnD.startMoveAllday(ev, mdEvt, el);
       });
 
@@ -2592,7 +2688,8 @@
         if (hitDayIndices.length === 0) return;
 
         var isMultiDay = hitDayIndices.length > 1;
-        var evtMine = KC.LoginContext.isMine(evt);  // ループ外で一度だけ評価
+        var evtMine    = KC.LoginContext.isMine(evt);       // 視覚的ハイライト用
+        var evtCanEdit = KC.LoginContext.getPermission(evt).canEdit;  // 編集権限
         // 全セグメントの DOM を収集（DnD の origBars 渡し用）
         var segmentEls = [];
 
@@ -2630,9 +2727,10 @@
           }
 
           var div = document.createElement('div');
-          // 自分の予定は強調クラスを付与、他人の予定はドラッグカーソルを変更
+          // 自分の予定（isMine）は視覚的ハイライト。
+          // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
           div.className = evtMine ? 'kc-event kc-event--mine' : 'kc-event';
-          if (!evtMine) div.style.cursor = 'pointer';
+          if (!evtCanEdit) div.style.cursor = 'pointer';
           div.style.top    = 'calc(' + topPct + '% + 0px)';
           div.style.height = 'calc(' + heightPct + '% - 2px)';
           div.style.pointerEvents = 'auto';
@@ -2704,7 +2802,7 @@
           (function (capturedEvt, startEl, allSegs) {
             startEl.addEventListener('mousedown', function (mdEvt) {
               if (mdEvt.button !== 0) return;
-              if (!KC.LoginContext.isMine(capturedEvt)) return;  // 他人の予定は移動 DnD 不可
+              if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
               KC.DnD.startMove(capturedEvt, mdEvt, startEl, allSegs);
             });
 
@@ -2714,7 +2812,7 @@
             if (tHandle) {
               tHandle.addEventListener('mousedown', function (mdEvt) {
                 if (mdEvt.button !== 0) return;
-                if (!KC.LoginContext.isMine(capturedEvt)) return;  // 他人の予定はリサイズ不可
+                if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
                 mdEvt.stopPropagation();
                 KC.DnD.startResize(capturedEvt, 'top', mdEvt, startEl);
               });
@@ -2722,7 +2820,7 @@
             if (bHandle) {
               bHandle.addEventListener('mousedown', function (mdEvt) {
                 if (mdEvt.button !== 0) return;
-                if (!KC.LoginContext.isMine(capturedEvt)) return;  // 他人の予定はリサイズ不可
+                if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
                 mdEvt.stopPropagation();
                 KC.DnD.startResize(capturedEvt, 'bottom', mdEvt, startEl);
               });
@@ -3063,12 +3161,12 @@
      * @returns {HTMLElement}
      */
     function buildMonthAlldayBar(ev) {
-      var mine = KC.LoginContext.isMine(ev);
+      var mine    = KC.LoginContext.isMine(ev);
+      var canEdit = KC.LoginContext.getPermission(ev).canEdit;
       var el = document.createElement('div');
-      // 自分の予定は強調クラスを付与
       el.className = mine ? 'kc-ad-event kc-ad-event--mine' : 'kc-ad-event';
-      // 他人の予定はドラッグカーソルをポインターに変更
-      if (!mine) el.style.cursor = 'pointer';
+      // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
+      if (!canEdit) el.style.cursor = 'pointer';
 
       // 絶対配置の位置計算
       el.style.left   = ((ev.colStart / 7) * 100) + '%';
@@ -3103,17 +3201,17 @@
       leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
       leftHandle.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
-        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定はリサイズ不可
+        if (!KC.LoginContext.getPermission(ev).canEdit) return;
         mdEvt.stopPropagation();
         KC.DnD.startResizeAlldayMonth(ev, 'left', mdEvt, el);
       });
 
-      // 右端リサイズハンドル（§3.4、他人の予定は DnD 不可）
+      // 右端リサイズハンドル（§3.4）
       var rightHandle = document.createElement('div');
       rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
       rightHandle.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
-        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定はリサイズ不可
+        if (!KC.LoginContext.getPermission(ev).canEdit) return;
         mdEvt.stopPropagation();
         KC.DnD.startResizeAlldayMonth(ev, 'right', mdEvt, el);
       });
@@ -3126,11 +3224,11 @@
         KC.Popup.openEdit(ev.id);
       });
 
-      // mousedown → 月ビュー終日移動 DnD 開始（§3.3、他人の予定は DnD 不可）
+      // mousedown → 月ビュー終日移動 DnD 開始（§3.3）
       // stopPropagation でセル側の click ハンドラ（新規作成ポップアップ）への伝播を防ぐ
       el.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
-        if (!KC.LoginContext.isMine(ev)) return;  // 他人の予定は移動 DnD 不可
+        if (!KC.LoginContext.getPermission(ev).canEdit) return;
         mdEvt.stopPropagation();
         KC.DnD.startMoveAlldayMonth(ev, mdEvt, el);
       });
@@ -3144,13 +3242,13 @@
      * @returns {HTMLElement}
      */
     function buildMonthChip(evt) {
-      var chipMine = KC.LoginContext.isMine(evt);
+      var chipMine    = KC.LoginContext.isMine(evt);
+      var chipCanEdit = KC.LoginContext.getPermission(evt).canEdit;
       var color = evt.color || '#3b82f6';
       var chip = document.createElement('div');
-      // 自分の予定は強調クラスを付与
       chip.className = chipMine ? 'kc-month-chip kc-month-chip--mine' : 'kc-month-chip';
-      // 他人の予定はドラッグカーソルをポインターに変更
-      if (!chipMine) chip.style.cursor = 'pointer';
+      // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
+      if (!chipCanEdit) chip.style.cursor = 'pointer';
       chip.dataset.evId = evt.id;
       chip.style.background = _chipBg(color);
       chip.style.color = '#1f2937';  // 15% 透過背景は薄いため常にダークで可読
@@ -3182,7 +3280,7 @@
       chip.addEventListener('mousedown', (function (capturedEvt, capturedChip) {
         return function (mdEvt) {
           if (mdEvt.button !== 0) return;
-          if (!KC.LoginContext.isMine(capturedEvt)) return;  // 他人の予定は移動 DnD 不可
+          if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
           mdEvt.stopPropagation();
           KC.DnD.startMoveMonthChip(capturedEvt, mdEvt, capturedChip);
         };
@@ -3698,10 +3796,13 @@
           colCell.appendChild(overlay);
         }
 
-        var evtMine = KC.LoginContext.isMine(evt);
+        var evtMine    = KC.LoginContext.isMine(evt);
+        var evtCanEdit = KC.LoginContext.getPermission(evt).canEdit;
         var div = document.createElement('div');
+        // 自分の予定（isMine）は視覚的ハイライト。
+        // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
         div.className = evtMine ? 'kc-event kc-event--mine' : 'kc-event';
-        if (!evtMine) div.style.cursor = 'pointer';
+        if (!evtCanEdit) div.style.cursor = 'pointer';
         div.style.top    = 'calc(' + topPct + '% + 0px)';
         div.style.height = 'calc(' + heightPct + '% - 2px)';
         div.style.pointerEvents = 'auto';
@@ -3745,7 +3846,7 @@
         (function (capturedEvt, el) {
           el.addEventListener('mousedown', function (mdEvt) {
             if (mdEvt.button !== 0) return;
-            if (!KC.LoginContext.isMine(capturedEvt)) return;
+            if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
             KC.DnD.startMove(capturedEvt, mdEvt, el, [el]);
           });
 
@@ -3754,7 +3855,7 @@
           if (tHandle) {
             tHandle.addEventListener('mousedown', function (mdEvt) {
               if (mdEvt.button !== 0) return;
-              if (!KC.LoginContext.isMine(capturedEvt)) return;
+              if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
               mdEvt.stopPropagation();
               KC.DnD.startResize(capturedEvt, 'top', mdEvt, el);
             });
@@ -3762,7 +3863,7 @@
           if (bHandle) {
             bHandle.addEventListener('mousedown', function (mdEvt) {
               if (mdEvt.button !== 0) return;
-              if (!KC.LoginContext.isMine(capturedEvt)) return;
+              if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
               mdEvt.stopPropagation();
               KC.DnD.startResize(capturedEvt, 'bottom', mdEvt, el);
             });
@@ -4631,8 +4732,8 @@
       // フィールド自動検出（KC_プレフィックスのフィールドを探す）
       await KC.Config.detectFields();
 
-      // ログインユーザー情報をキャッシュ（isMine 判定に使用）
-      // detectFields 完了後に呼ぶことで、フィールド定義が確定した状態で初期化される
+      // ログインユーザー情報をキャッシュ（権限判定に使用）
+      // USER_SELECT のみ対応のため同期呼び出しで十分
       KC.LoginContext.init();
 
       // アプリ名を REST API で取得（失敗時もエラーで止まらない設計）
