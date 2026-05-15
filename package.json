@@ -8,7 +8,7 @@
     "deploy": "kintone-customize-uploader customize-manifest.json",
     "dev": "kintone-customize-uploader --watch customize-manifest.json",
     "dev:config": "serve plugin -p 3000 --no-clipboard",
-    "build:plugin": "kintone-plugin-packer plugin --out plugin/dist/plugin.zip",
+    "build:plugin": "kintone-plugin-packer plugin --ppk plugin/keys/kintone-calendar.ppk --out plugin/dist/plugin.zip",
     "upload:plugin": "kintone-plugin-uploader plugin/dist/plugin.zip",
     "upload:plugin:watch": "kintone-plugin-uploader plugin/dist/plugin.zip --watch",
     "setup:test-app": "node scripts/setup-test-app/index.js",

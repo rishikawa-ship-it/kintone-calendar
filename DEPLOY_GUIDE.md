@@ -111,3 +111,47 @@ npx cli-kintone customize apply \
   --input customize-manifest.json \
   --app APP_ID --yes
 ```
+
+---
+
+## プラグインビルドと Plugin ID 固定化
+
+### 概要
+
+`npm run build:plugin` は `plugin/keys/kintone-calendar.ppk` を固定鍵として使用し、
+毎回同じ Plugin ID でプラグインをパッケージングする。
+
+### 鍵ファイルの所在
+
+```
+plugin/keys/kintone-calendar.ppk
+```
+
+この鍵は **git 管理対象外**（public リポジトリのため）。`.gitignore` の `plugin/keys/` および `*.ppk` パターンで除外済み。
+
+### Plugin ID の確認方法
+
+鍵ファイル名（拡張子を除いた部分）が Plugin ID に対応する。
+現在の固定鍵 `meffobaoegjochdnnlndalghgfppgpbf.ppk` から生成された Plugin ID: `meffobaoegjochdnnlndalghgfppgpbf`
+
+### 鍵の引き継ぎ手順
+
+環境構築時や担当者交代時は、以下の手順で鍵を共有する:
+
+1. 鍵ファイル `plugin/keys/kintone-calendar.ppk` を社内ファイル共有（Google Drive 等）で引き継ぎ先に渡す
+2. 引き継ぎ先は `plugin/keys/` ディレクトリを作成し、受け取ったファイルを `kintone-calendar.ppk` として配置する
+3. `npm run build:plugin` を実行し、同じ Plugin ID で plugin.zip が生成されることを確認する
+
+### 鍵を紛失した場合の復元
+
+`plugin/dist/` 配下に過去ビルドの `.ppk` が保存されている（gitignore 対象のため git 履歴には残らないが、ローカルに残存している場合がある）。
+最新のビルドに使用した鍵は `plugin/dist/meffobaoegjochdnnlndalghgfppgpbf.ppk`。
+これを `plugin/keys/kintone-calendar.ppk` にコピーすることで復元可能。
+
+### kintone へのアップロード
+
+SAML 認証環境（bushiroad-group.cybozu.com）のため、プラグインのアップロードは手動で行う:
+
+1. `npm run build:plugin` で `plugin/dist/plugin.zip` を生成
+2. kintone 管理者画面 > プラグイン管理 から `plugin.zip` を手動アップロード
+3. 対象アプリの設定 > プラグイン から追加して有効化
