@@ -32,4 +32,7 @@ plugin.zip
 # プラグイン署名秘密鍵 (npm run build:plugin 実行時に生成される場合がある)
 *.ppk
 
+# プラグイン固定鍵ディレクトリ (public リポジトリのため git 管理外)
+plugin/keys/
+
 # .env.example はコミット対象に含める (ルートおよびサブディレクトリ共通)
