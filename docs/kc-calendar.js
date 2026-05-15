@@ -140,7 +140,7 @@
   /**
    * 編集権限ルール配列（非プラグイン版は常に空配列 = 全員 edit 権限フォールバック）
    * プラグイン版 desktop.js では loadFromPluginConfig で上書きされる
-   * @type {Array}
+   * @type {Array<{fieldCode: string, fieldType: string, permission: string, color: string}>}
    */
   KC.Config.PERMISSION_RULES = [];
 
@@ -2039,21 +2039,9 @@
     }
 
     /**
-     * KcEvent が自分の予定かどうかを判定する（視覚的ハイライト用）
-     * account が空の場合は false（他人扱い）
-     * @param {Object} evt - KcEvent
-     * @returns {boolean}
-     */
-    function isMine(evt) {
-      if (!_user || !evt) return false;
-      if (!evt.account) return false;
-      return evt.account === _user.code;
-    }
-
-    /**
      * permissionRules の 1 エントリを評価する（USER_SELECT のみ対応）
      * フィールドの value[].code にログインユーザーコードが含まれるか判定する
-     * @param {Object} rule - { fieldCode, permission }
+     * @param {Object} rule - { fieldCode, permission, color }
      * @param {Object} evt  - KcEvent（permissionFields を含む）
      * @returns {string|null} マッチした場合は権限文字列、非マッチは null
      */
@@ -2067,7 +2055,7 @@
     }
 
     /**
-     * 権限レベルを数値化する
+     * 権限レベルを数値化して比較に使う（高いほど強い権限）
      * @param {string|null} perm
      * @returns {number}
      */
@@ -2079,23 +2067,36 @@
     }
 
     /**
-     * イベントに対するログインユーザーの権限を返す（OR 結合・最高権限採用）
-     * - permissionRules が空配列の場合: edit 相当（フォールバック: 全員編集可）
-     * - permissionRules に 1 件以上あるがどのルールにもマッチしない場合: view 相当
-     *   （_permLevel(null) = 0 < _permLevel('edit') = 2 のため canEdit: false となる）
-     * @param {Object} evt - KcEvent
-     * @returns {{ canEdit: boolean, canDelete: boolean, canOpenDialog: boolean }}
+     * 色決定ロジック: permissionRules を上から走査し最初にマッチした行の color を返す（§5.8）
+     * @param {Array} rules - PERMISSION_RULES
+     * @param {Object} evt  - KcEvent（permissionFields を含む）
+     * @returns {string|null} #RRGGBB 文字列、またはマッチなし・ルール空の場合 null
+     */
+    function _resolveColor(rules, evt) {
+      if (!rules || rules.length === 0) return null;
+      for (var i = 0; i < rules.length; i++) {
+        var granted = _evalEntry(rules[i], evt);
+        if (granted !== null) { return rules[i].color || null; }
+      }
+      return null;
+    }
+
+    /**
+     * イベントに対するログインユーザーの権限と表示色を返す（OR 結合・最高権限採用）
+     * - permissionRules が空配列の場合: edit 相当（フォールバック: 全員編集可）・color: null
+     * - permissionRules に 1 件以上あるがどのルールにもマッチしない場合: view 相当・color: null
+     * @param {Object} evt - KcEvent（permissionFields を含む）
+     * @returns {{ canEdit: boolean, canDelete: boolean, canOpenDialog: boolean, color: string|null }}
      */
     function getPermission(evt) {
       var rules = KC.Config.PERMISSION_RULES || [];
 
-      // フォールバック: ルールなし = 全員 edit
+      // フォールバック: ルールなし = 全員 edit、色なし
       if (!rules || rules.length === 0) {
-        return { canEdit: true, canDelete: false, canOpenDialog: true };
+        return { canEdit: true, canDelete: false, canOpenDialog: true, color: null };
       }
 
-      // best = null のままループが終わる（全ルール非マッチ）= view 相当
-      // _permLevel(null) = 0 なので canEdit: false, canDelete: false になる
+      // 権限: OR 結合・最高権限採用（§5.3）
       var best = null;
       for (var i = 0; i < rules.length; i++) {
         var granted = _evalEntry(rules[i], evt);
@@ -2104,17 +2105,20 @@
         }
       }
 
+      // 色: 上から最初にマッチした行を採用（§5.8）
+      var color = _resolveColor(rules, evt);
+
       return {
-        canEdit:        _permLevel(best) >= _permLevel('edit'),
-        canDelete:      _permLevel(best) >= _permLevel('delete'),
-        canOpenDialog:  true
+        canEdit:       _permLevel(best) >= _permLevel('edit'),
+        canDelete:     _permLevel(best) >= _permLevel('delete'),
+        canOpenDialog: true,
+        color:         color
       };
     }
 
     return {
       init:          init,
       getUserCode:   getUserCode,
-      isMine:        isMine,
       getPermission: getPermission
     };
   }());
@@ -2199,17 +2203,17 @@
 
     /**
      * 週イベント配列にレーン番号を付与する（破壊的変更）
-     * ソート規則: isMine 降順（自分の予定が先）→ 期間（end - start）降順 → created 昇順 → id 昇順
-     * 自分の予定を最上位レーンに配置し、期間の長い予定を優先する。
+     * ソート規則: 自分の予定（color あり）降順 → 期間（end - start）降順 → created 昇順 → id 昇順
+     * 色付き予定を最上位レーンに配置し、期間の長い予定を優先する。
      * @param {Array} weekEvents - { colStart, span, start, end, created, id } を含む配列
      * @returns {Array} lane プロパティが付与された配列
      */
     function assignLanes(weekEvents) {
-      // isMine 降順 → 期間降順 → 作成日時昇順 → ID 昇順でソート
+      // 色あり降順 → 期間降順 → 作成日時昇順 → ID 昇順でソート
       weekEvents.sort(function (a, b) {
-        var aIsMine = KC.LoginContext.isMine(a) ? 0 : 1;
-        var bIsMine = KC.LoginContext.isMine(b) ? 0 : 1;
-        if (aIsMine !== bIsMine) return aIsMine - bIsMine;
+        var aHasColor = KC.LoginContext.getPermission(a).color ? 0 : 1;
+        var bHasColor = KC.LoginContext.getPermission(b).color ? 0 : 1;
+        if (aHasColor !== bHasColor) return aHasColor - bHasColor;
         var aDur = new Date(a.end).getTime() - new Date(a.start).getTime();
         var bDur = new Date(b.end).getTime() - new Date(b.start).getTime();
         if (bDur !== aDur) return bDur - aDur;
@@ -2279,10 +2283,10 @@
       var BAR_GAP = 3;
       var BAR_TOP = 4;
 
-      var mine    = KC.LoginContext.isMine(ev);
-      var canEdit = KC.LoginContext.getPermission(ev).canEdit;
+      var perm    = KC.LoginContext.getPermission(ev);
+      var canEdit = perm.canEdit;
       var el = document.createElement('div');
-      el.className = mine ? 'kc-ad-event kc-ad-event--mine' : 'kc-ad-event';
+      el.className = 'kc-ad-event';
       // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
       if (!canEdit) el.style.cursor = 'pointer';
 
@@ -2291,18 +2295,20 @@
       el.style.top    = (BAR_TOP + ev.lane * (BAR_H + BAR_GAP)) + 'px';
       el.style.height = BAR_H + 'px';
 
-      if (ev.color) {
-        el.style.background  = ev.color;
-        el.style.borderColor = ev.color;
-        el.style.color = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
+      var displayColor = perm.color || ev.color || null;
+      if (displayColor) {
+        el.style.backgroundColor = displayColor;
+        el.style.borderColor     = displayColor;
+        el.style.color = KC.Lanes.isLightColor(displayColor) ? '#1f2937' : '#ffffff';
       }
 
       el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
       var dot = document.createElement('span');
       dot.className = 'dot';
-      if (ev.color) {
-        dot.style.background = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      if (displayColor) {
+        dot.style.background = KC.Lanes.isLightColor(displayColor) ? '#1f2937' : '#ffffff';
       }
 
       var titleSpan = document.createElement('span');
@@ -2688,8 +2694,9 @@
         if (hitDayIndices.length === 0) return;
 
         var isMultiDay = hitDayIndices.length > 1;
-        var evtMine    = KC.LoginContext.isMine(evt);       // 視覚的ハイライト用
-        var evtCanEdit = KC.LoginContext.getPermission(evt).canEdit;  // 編集権限
+        var evtPerm    = KC.LoginContext.getPermission(evt);
+        var evtCanEdit = evtPerm.canEdit;
+        var evtColor   = evtPerm.color || evt.color || null;
         // 全セグメントの DOM を収集（DnD の origBars 渡し用）
         var segmentEls = [];
 
@@ -2727,9 +2734,8 @@
           }
 
           var div = document.createElement('div');
-          // 自分の予定（isMine）は視覚的ハイライト。
           // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
-          div.className = evtMine ? 'kc-event kc-event--mine' : 'kc-event';
+          div.className = 'kc-event';
           if (!evtCanEdit) div.style.cursor = 'pointer';
           div.style.top    = 'calc(' + topPct + '% + 0px)';
           div.style.height = 'calc(' + heightPct + '% - 2px)';
@@ -2744,10 +2750,11 @@
             else if (!isFirst && !isLast)  div.classList.add('kc-event--span-middle');
           }
 
-          if (evt.color) {
-            div.style.background  = evt.color;
-            div.style.borderColor = evt.color;
-            div.style.color = KC.Lanes.isLightColor(evt.color) ? '#1f2937' : '#ffffff';
+          // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
+          if (evtColor) {
+            div.style.backgroundColor = evtColor;
+            div.style.borderColor     = evtColor;
+            div.style.color = KC.Lanes.isLightColor(evtColor) ? '#1f2937' : '#ffffff';
           }
 
           // XSS 安全: textContent 使用
@@ -2758,8 +2765,8 @@
           var metaDiv = document.createElement('div');
           metaDiv.className = 'kc-evt-meta';
           metaDiv.textContent = fullTimeStr;
-          if (evt.color) {
-            metaDiv.style.color = KC.Lanes.isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
+          if (evtColor) {
+            metaDiv.style.color = KC.Lanes.isLightColor(evtColor) ? '#6b7280' : 'rgba(255,255,255,0.8)';
           }
 
           // NG#6 修正: リサイズハンドルは開始セグメント（dayIdx === hitDayIndices[0]）のみに追加する
@@ -3161,10 +3168,10 @@
      * @returns {HTMLElement}
      */
     function buildMonthAlldayBar(ev) {
-      var mine    = KC.LoginContext.isMine(ev);
-      var canEdit = KC.LoginContext.getPermission(ev).canEdit;
+      var perm    = KC.LoginContext.getPermission(ev);
+      var canEdit = perm.canEdit;
       var el = document.createElement('div');
-      el.className = mine ? 'kc-ad-event kc-ad-event--mine' : 'kc-ad-event';
+      el.className = 'kc-ad-event';
       // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
       if (!canEdit) el.style.cursor = 'pointer';
 
@@ -3175,18 +3182,20 @@
       el.style.height = BAR_H + 'px';
       el.style.pointerEvents = 'auto';
 
-      if (ev.color) {
-        el.style.background  = ev.color;
-        el.style.borderColor = ev.color;
-        el.style.color = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
+      var displayColor = perm.color || ev.color || null;
+      if (displayColor) {
+        el.style.backgroundColor = displayColor;
+        el.style.borderColor     = displayColor;
+        el.style.color = KC.Lanes.isLightColor(displayColor) ? '#1f2937' : '#ffffff';
       }
 
       el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
       var dot = document.createElement('span');
       dot.className = 'dot';
-      if (ev.color) {
-        dot.style.background = KC.Lanes.isLightColor(ev.color) ? '#1f2937' : '#ffffff';
+      if (displayColor) {
+        dot.style.background = KC.Lanes.isLightColor(displayColor) ? '#1f2937' : '#ffffff';
       }
 
       var titleSpan = document.createElement('span');
@@ -3242,11 +3251,12 @@
      * @returns {HTMLElement}
      */
     function buildMonthChip(evt) {
-      var chipMine    = KC.LoginContext.isMine(evt);
-      var chipCanEdit = KC.LoginContext.getPermission(evt).canEdit;
-      var color = evt.color || '#3b82f6';
+      var chipPerm    = KC.LoginContext.getPermission(evt);
+      var chipCanEdit = chipPerm.canEdit;
+      // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
+      var color = chipPerm.color || evt.color || '#3b82f6';
       var chip = document.createElement('div');
-      chip.className = chipMine ? 'kc-month-chip kc-month-chip--mine' : 'kc-month-chip';
+      chip.className = 'kc-month-chip';
       // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
       if (!chipCanEdit) chip.style.cursor = 'pointer';
       chip.dataset.evId = evt.id;
@@ -3796,21 +3806,22 @@
           colCell.appendChild(overlay);
         }
 
-        var evtMine    = KC.LoginContext.isMine(evt);
-        var evtCanEdit = KC.LoginContext.getPermission(evt).canEdit;
+        var evtPerm    = KC.LoginContext.getPermission(evt);
+        var evtCanEdit = evtPerm.canEdit;
+        var evtColor   = evtPerm.color || evt.color || null;
         var div = document.createElement('div');
-        // 自分の予定（isMine）は視覚的ハイライト。
         // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
-        div.className = evtMine ? 'kc-event kc-event--mine' : 'kc-event';
+        div.className = 'kc-event';
         if (!evtCanEdit) div.style.cursor = 'pointer';
         div.style.top    = 'calc(' + topPct + '% + 0px)';
         div.style.height = 'calc(' + heightPct + '% - 2px)';
         div.style.pointerEvents = 'auto';
 
-        if (evt.color) {
-          div.style.background  = evt.color;
-          div.style.borderColor = evt.color;
-          div.style.color = KC.Lanes.isLightColor(evt.color) ? '#1f2937' : '#ffffff';
+        // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
+        if (evtColor) {
+          div.style.backgroundColor = evtColor;
+          div.style.borderColor     = evtColor;
+          div.style.color = KC.Lanes.isLightColor(evtColor) ? '#1f2937' : '#ffffff';
         }
 
         var titleDiv = document.createElement('div');
@@ -3820,8 +3831,8 @@
         var metaDiv = document.createElement('div');
         metaDiv.className = 'kc-evt-meta';
         metaDiv.textContent = fullTimeStr;
-        if (evt.color) {
-          metaDiv.style.color = KC.Lanes.isLightColor(evt.color) ? '#6b7280' : 'rgba(255,255,255,0.8)';
+        if (evtColor) {
+          metaDiv.style.color = KC.Lanes.isLightColor(evtColor) ? '#6b7280' : 'rgba(255,255,255,0.8)';
         }
 
         var topHandle = document.createElement('div');
@@ -4263,11 +4274,12 @@
     apply: function (events) {
       var filter = KC.State.eventFilter || 'all';
       if (filter === 'mine') {
-        return events.filter(function (e) { return KC.LoginContext.isMine(e); });
+        // color が null でない（いずれかのルールにマッチ）= 自分の予定として扱う
+        return events.filter(function (e) { return KC.LoginContext.getPermission(e).color !== null; });
       }
       if (filter === 'others') {
-        // account が空のレコードは「他人扱い」として表示
-        return events.filter(function (e) { return !KC.LoginContext.isMine(e); });
+        // color が null の予定（マッチなし）を「他人扱い」として表示
+        return events.filter(function (e) { return KC.LoginContext.getPermission(e).color === null; });
       }
       return events;  // 'all': フィルタなし
     }
@@ -4282,8 +4294,9 @@
     STORAGE_KEY: 'kc-event-filter',
 
     /**
-     * localStorage からフィルタ値を読み込み KC.State.eventFilter を初期化する
-     * DOM 構築前に呼ぶこと
+     * localStorage からフィルタ値を読み込み KC.State.eventFilter を初期化する。
+     * DOM 構築前に呼ぶこと。
+     * permissionRules の空否チェックは buildDOM で行うため、ここでは値を復元するだけでよい。
      */
     loadFilter: function () {
       try {
@@ -4324,11 +4337,14 @@
     },
 
     /**
-     * フィルタドロップダウン DOM を生成して headRight に追加する
+     * フィルタドロップダウン DOM を生成して headRight に追加する。
+     * permissionRules が空の場合は 'mine'/'others' オプションを DOM に追加しない（FR-7 §5.9）。
      * @param {HTMLElement} headRight - .kc-head-right 要素
      */
     buildDOM: function (headRight) {
       var self = this;
+      var hasRules = (KC.Config.PERMISSION_RULES || []).length > 0;
+
       var wrap = document.createElement('div');
       wrap.className = 'kc-dropdown';
       wrap.id = 'kc-filter';
@@ -4349,11 +4365,21 @@
       menuUl.setAttribute('role', 'listbox');
       menuUl.setAttribute('aria-label', 'フィルタ切替');
 
-      var options = [
-        { value: 'all',    label: 'すべて' },
-        { value: 'mine',   label: '自分のみ' },
-        { value: 'others', label: '他人のみ' }
-      ];
+      // permissionRules が空の場合: 'mine'/'others' は機能しないため 'all' にリセットする
+      if (!hasRules && KC.State.eventFilter !== 'all') {
+        KC.State.eventFilter = 'all';
+      }
+
+      // permissionRules が 1 件以上ある場合のみ 'mine'/'others' を表示する（FR-7 §5.9）
+      var options = hasRules
+        ? [
+            { value: 'all',    label: 'すべて' },
+            { value: 'mine',   label: '自分のみ' },
+            { value: 'others', label: '他人のみ' }
+          ]
+        : [
+            { value: 'all',    label: 'すべて' }
+          ];
 
       options.forEach(function (opt) {
         var li = document.createElement('li');

@@ -124,25 +124,12 @@
             </select>
           </div>
 
-          <div class="kc-config-field-group">
-            <label for="kc-field-account" class="kc-config-label">
-              アカウントフィールド（ハイライト用）
-            </label>
-            <select id="kc-field-account" name="fieldAccount" class="kc-config-select">
-              <option value="">-- 未設定 --</option>
-            </select>
-            <p class="kc-config-hint">
-              自分の予定を強調表示（色付け）するためのフィールドです。
-              USER_SELECT 型のフィールドが表示されます。編集権限の制御は下の「編集権限設定」で行います。
-            </p>
-          </div>
-
           <!-- ====================================================
-            編集権限設定 (REQ_edit-permission-extension §4)
+            編集権限設定 (REQ_edit-permission-extension v4 §4)
           ==================================================== -->
           <h3 class="kc-config-subsection-title">編集権限設定</h3>
           <p class="kc-config-section-desc">
-            DnD 移動・リサイズを許可するユーザーをフィールド単位で設定します。
+            予定の表示色と編集権限を管理するユーザーをフィールド単位で設定します。
             0 件の場合は全員が編集可能です（既存挙動との後方互換）。
           </p>
 

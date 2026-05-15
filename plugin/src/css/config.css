@@ -471,7 +471,7 @@ body {
   margin-bottom: 8px;
 }
 
-/* 1 行のエントリ（フィールド選択 / 権限選択 / 削除ボタン） */
+/* 1 行のエントリ（フィールド選択 / 権限選択 / 色 / 削除ボタン） */
 .kc-permission-row {
   display: flex;
   align-items: center;
@@ -490,6 +490,18 @@ body {
   flex: 1;
   min-width: 0;
   max-width: none;
+}
+
+/* カラーピッカー（固定幅） */
+.kc-permission-color {
+  flex-shrink: 0;
+  width: 44px;
+  height: 36px;
+  padding: 2px 4px;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
 }
 
 /* 削除ボタン */

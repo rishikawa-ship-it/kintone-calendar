@@ -1,15 +1,18 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (統合版: Phase 7 + Phase 9 + 編集権限拡張 縮小版)
+ * KC Calendar プラグイン設定画面スクリプト (v4: アカウントフィールド廃止・color 統合)
  *
- * 保存形式 (version 3):
+ * 保存形式 (version 4):
  *   {
- *     version: 3,
- *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, ... },
- *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission }, ... ],
+ *     version: 4,
+ *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ... },
+ *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, color }, ... ],
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
- * 縮小版: 編集権限フィールドは USER_SELECT 型のみ対応（fieldType は常に "USER_SELECT"）
+ * v4 変更点:
+ *   - fieldMapping.fieldAccount を廃止
+ *   - permissionRules 各エントリに color (#RRGGBB) プロパティを追加
+ *   - v3→v4 / v2→v4 マイグレーション処理を追加
  *
  * 起動シーケンス:
  *   1. loadInitialConfig() で既存設定を取得・初期化
@@ -57,9 +60,6 @@
   /** 場所・氏名・メールとして選択可能な型 */
   var TEXT_FIELD_TYPES = ['SINGLE_LINE_TEXT', 'MULTI_LINE_TEXT', 'RICH_TEXT'];
 
-  /** アカウントフィールド（ハイライト用）として選択可能な型 */
-  var ACCOUNT_FIELD_TYPES = ['USER_SELECT'];
-
   /** メモフィールドとして選択可能な型 */
   var MEMO_FIELD_TYPES = ['MULTI_LINE_TEXT', 'RICH_TEXT', 'SINGLE_LINE_TEXT'];
 
@@ -68,11 +68,11 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 3)
+   * setConfig で保存する全体設定オブジェクト (version 4)
    * @type {{ version: number, fieldMapping: Object, permissionRules: Array, views: Object }}
    */
   var currentConfig = {
-    version: 3,
+    version: 4,
     fieldMapping: {},
     permissionRules: [],
     views: {}
@@ -110,7 +110,6 @@
   var elFieldColor = document.getElementById('kc-field-color');
   var elFieldPlace = document.getElementById('kc-field-place');
   var elFieldUserMail = document.getElementById('kc-field-usermail');
-  var elFieldAccount = document.getElementById('kc-field-account');
   var elFieldMemo = document.getElementById('kc-field-memo');
   var elAlldayLabel = document.getElementById('kc-allday-label');
 
@@ -330,7 +329,6 @@
       fieldColor:    elFieldColor.value,
       fieldPlace:    elFieldPlace.value,
       fieldUserMail: elFieldUserMail.value,
-      fieldAccount:  elFieldAccount.value,
       fieldMemo:     elFieldMemo.value,
       alldayLabel:   elAlldayLabel.value.trim()
     };
@@ -353,7 +351,7 @@
 
   /**
    * 1 行の権限エントリ要素を生成する（USER_SELECT フィールドのみ表示）
-   * @param {Object} [rule] - 既存ルール { fieldCode, permission }（省略時は空行）
+   * @param {Object} [rule] - 既存ルール { fieldCode, permission, color }（省略時は空行）
    * @returns {HTMLElement} .kc-permission-row 要素
    */
   function buildPermissionRow(rule) {
@@ -386,6 +384,12 @@
       permSel.appendChild(opt);
     });
 
+    // カラーピッカー（デフォルト色: #1976d2）
+    var colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.className = 'kc-permission-color';
+    colorInput.value = (rule && rule.color) ? rule.color : '#1976d2';
+
     // 削除ボタン
     var delBtn = document.createElement('button');
     delBtn.type = 'button';
@@ -397,6 +401,7 @@
 
     row.appendChild(fieldSel);
     row.appendChild(permSel);
+    row.appendChild(colorInput);
     row.appendChild(delBtn);
 
     // 既存ルールがある場合は選択状態を設定
@@ -422,22 +427,30 @@
   /**
    * 権限設定行を DOM から収集して permissionRules 配列を返す
    * フィールドコードまたは権限が未選択の行はスキップする
-   * fieldType は USER_SELECT 固定（縮小版: §6.1 スキーマ互換のため常にセット）
-   * @returns {Array<{fieldCode: string, fieldType: string, permission: string}>}
+   * fieldType は USER_SELECT 固定（§6.1 スキーマ互換のため常にセット）
+   * color は HTML5 カラーピッカーの値 (#RRGGBB)
+   * @returns {Array<{fieldCode: string, fieldType: string, permission: string, color: string}>}
    */
   function collectPermissionRules() {
     var rows = elPermissionRows.querySelectorAll('.kc-permission-row');
     var result = [];
     rows.forEach(function (row) {
-      var fieldSel = row.querySelector('.kc-permission-field-select');
-      var permSel  = row.querySelector('.kc-permission-perm-select');
+      var fieldSel   = row.querySelector('.kc-permission-field-select');
+      var permSel    = row.querySelector('.kc-permission-perm-select');
+      var colorInput = row.querySelector('.kc-permission-color');
       if (!fieldSel || !permSel) return;
 
-      var fieldCode = fieldSel.value;
+      var fieldCode  = fieldSel.value;
       var permission = permSel.value;
       if (!fieldCode || !permission) return;
 
-      result.push({ fieldCode: fieldCode, fieldType: 'USER_SELECT', permission: permission });
+      var color = colorInput ? colorInput.value : '#1976d2';
+      result.push({
+        fieldCode:  fieldCode,
+        fieldType:  'USER_SELECT',
+        permission: permission,
+        color:      color
+      });
     });
     return result;
   }
@@ -488,7 +501,6 @@
     selectValue(elFieldColor,    fieldMapping.fieldColor    || '');
     selectValue(elFieldPlace,    fieldMapping.fieldPlace    || '');
     selectValue(elFieldUserMail, fieldMapping.fieldUserMail || '');
-    selectValue(elFieldAccount,  fieldMapping.fieldAccount  || '');
     selectValue(elFieldMemo,     fieldMapping.fieldMemo     || '');
   }
 
@@ -620,8 +632,58 @@
    * ==================================================================== */
 
   /**
+   * v3 → v4 マイグレーションを実行する（メモリ内のみ、保存は「保存」ボタン押下時）
+   * - fieldMapping.fieldAccount を permissionRules 先頭行に変換 (permission: edit, color: #1976d2)
+   * - 既存 permissionRules の各エントリに color がなければ #1976d2 を補完
+   * - fieldAccount を fieldMapping から削除
+   * @param {Object} config - パース済み設定オブジェクト
+   * @returns {Object} version 4 形式に変換した設定オブジェクト
+   */
+  function migrateToV4(config) {
+    var newRules = [];
+    var fm = config.fieldMapping || {};
+
+    // 旧 fieldAccount を先頭エントリとして追加（値がある場合のみ）
+    if (fm.fieldAccount) {
+      newRules.push({
+        fieldCode:  fm.fieldAccount,
+        fieldType:  'USER_SELECT',
+        permission: 'edit',
+        color:      '#1976d2'
+      });
+    }
+
+    // 既存 permissionRules を後続に追加し color を補完
+    var existingRules = Array.isArray(config.permissionRules) ? config.permissionRules : [];
+    existingRules.forEach(function (rule) {
+      newRules.push({
+        fieldCode:  rule.fieldCode,
+        fieldType:  rule.fieldType || 'USER_SELECT',
+        permission: rule.permission,
+        color:      rule.color || '#1976d2'
+      });
+    });
+
+    // fieldAccount を削除した fieldMapping を構築
+    var newFm = {};
+    Object.keys(fm).forEach(function (key) {
+      if (key !== 'fieldAccount') {
+        newFm[key] = fm[key];
+      }
+    });
+
+    return {
+      version:        4,
+      fieldMapping:   newFm,
+      permissionRules: newRules,
+      views:          config.views || {}
+    };
+  }
+
+  /**
    * kintone.plugin.app.getConfig で設定を取得し currentConfig を初期化する。
    * - 旧フラット設定 (version 2 未満) は破棄して再初期化 (Q11 確定)
+   * - version 2 / 3 は v4 マイグレーションを実行（§8 参照）
    * - getConfig の返り値は { config: "<JSON文字列>" } 形式を前提とする
    * @returns {void}
    */
@@ -635,7 +697,6 @@
         parsed = JSON.parse(rawConfig.config);
       } else if (rawConfig && Object.keys(rawConfig).length > 0) {
         // 互換: rawConfig 全体が JSON.stringify されている可能性を試みる
-        // (旧フラット設定の場合は version チェックで破棄される)
         parsed = rawConfig;
       }
     } catch (e) {
@@ -646,21 +707,28 @@
     // version 2 未満は破棄 (Q11 確定: 旧フラット設定は再初期化)
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
-      currentConfig = { version: 3, fieldMapping: {}, permissionRules: [], views: {} };
+      currentConfig = { version: 4, fieldMapping: {}, permissionRules: [], views: {} };
       return;
     }
 
-    // version 2 からのアップグレード: permissionRules を空配列で初期化
-    // fieldAccount は fieldMapping に残置し自動変換しない（§8.1 参照）
-    var loadedPermRules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
-    if (Number(parsed.version) === 2) {
-      console.log('[KC Config] version 2 → 3 へアップグレード (permissionRules は空配列で初期化)');
+    var ver = Number(parsed.version);
+
+    // version 2 / 3 → 4 マイグレーション（§8.1, §8.2）
+    if (ver < 4) {
+      console.log('[KC Config] version ' + ver + ' → 4 へマイグレーション実行');
+      parsed = migrateToV4(parsed);
     }
 
+    // color が欠落したエントリを補完（version 4 でも念のため）
+    var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
+    rules.forEach(function (rule) {
+      if (!rule.color) { rule.color = '#1976d2'; }
+    });
+
     currentConfig = {
-      version: 3,
+      version:         4,
       fieldMapping:    parsed.fieldMapping    || {},
-      permissionRules: loadedPermRules,
+      permissionRules: rules,
       views:           parsed.views           || {}
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
@@ -686,11 +754,10 @@
       populateSelect(elFieldStart,    filterFields(props, DATE_FIELD_TYPES),    false);
       populateSelect(elFieldEnd,      filterFields(props, DATE_FIELD_TYPES),    false);
       populateSelect(elFieldAllday,   filterFields(props, ALLDAY_FIELD_TYPES),  true);
-      populateSelect(elFieldColor,    filterFields(props, COLOR_FIELD_TYPES),   true);
-      populateSelect(elFieldPlace,    filterFields(props, TEXT_FIELD_TYPES),    true);
-      populateSelect(elFieldUserMail, filterFields(props, TEXT_FIELD_TYPES),    true);
-      populateSelect(elFieldAccount,  filterFields(props, ACCOUNT_FIELD_TYPES), true);
-      populateSelect(elFieldMemo,     filterFields(props, MEMO_FIELD_TYPES),    true);
+      populateSelect(elFieldColor,    filterFields(props, COLOR_FIELD_TYPES),  true);
+      populateSelect(elFieldPlace,    filterFields(props, TEXT_FIELD_TYPES),   true);
+      populateSelect(elFieldUserMail, filterFields(props, TEXT_FIELD_TYPES),   true);
+      populateSelect(elFieldMemo,     filterFields(props, MEMO_FIELD_TYPES),   true);
 
       // 編集権限フィールド選択肢を収集する（USER_SELECT 型のみ）
       permissionFieldOptions = [];
@@ -1057,9 +1124,9 @@
         }
       });
 
-      // 最終的な保存オブジェクト (version 3 形式: permissionRules を含む)
+      // 最終的な保存オブジェクト (version 4 形式: permissionRules + color を含む)
       var finalConfig = {
-        version: 3,
+        version: 4,
         fieldMapping:    currentConfig.fieldMapping,
         permissionRules: currentConfig.permissionRules || [],
         views:           mergedViews
