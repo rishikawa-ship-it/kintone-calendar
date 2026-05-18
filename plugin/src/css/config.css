@@ -299,27 +299,6 @@ body {
 }
 
 /* ====================================================================
- * ヘルプテキスト (セクション内説明文)
- * ==================================================================== */
-
-.kc-config-help {
-  font-size: 13px;
-  color: #555;
-  margin: -4px 0 16px;
-  line-height: 1.6;
-}
-
-.kc-config-help code {
-  font-family: 'Consolas', 'Courier New', monospace;
-  background: #f0f4f8;
-  border: 1px solid #c8d8e8;
-  border-radius: 3px;
-  padding: 1px 4px;
-  font-size: 12px;
-  color: #0a5a8a;
-}
-
-/* ====================================================================
  * サブセクション見出し (Phase 9: セクション 1 内の小見出し)
  * ==================================================================== */
 
@@ -463,40 +442,108 @@ body {
  * 編集権限設定 UI (REQ_edit-permission-extension §4)
  * ==================================================================== */
 
+/* セクション全体をカード風に囲む */
+.kc-permission-section {
+  background: #f5f7fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 14px 16px 16px;
+  margin-bottom: 18px;
+}
+
+/* セクション内の小見出し: 上余白を詰める */
+.kc-permission-section .kc-config-subsection-title {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+/* 説明文 */
+.kc-permission-section .kc-config-section-desc {
+  margin: 0 0 12px;
+}
+
+/* テーブル全体のラッパー */
+.kc-permission-table {
+  border: 1px solid #d8dce4;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+/* カラムヘッダー行 */
+.kc-permission-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 44px 40px;
+  gap: 8px;
+  align-items: center;
+  background: #e8ecf1;
+  border-bottom: 1px solid #d0d5df;
+  padding: 6px 8px;
+}
+
+.kc-permission-header-col {
+  font-size: 12px;
+  font-weight: bold;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 色・操作カラムは中央揃え */
+.kc-permission-col-color,
+.kc-permission-col-action {
+  text-align: center;
+}
+
 /* 権限エントリ行コンテナ */
 .kc-permission-rows {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 8px;
+  background: #fff;
 }
 
 /* 1 行のエントリ（フィールド選択 / 権限選択 / 色 / 削除ボタン） */
 .kc-permission-row {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 2fr 1fr 44px 40px;
   gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eaecf0;
+  transition: background 0.1s;
 }
 
-/* フィールド選択ドロップダウン（幅 50%） */
-.kc-permission-field-select {
-  flex: 2;
+.kc-permission-row:last-child {
+  border-bottom: none;
+}
+
+.kc-permission-row:hover {
+  background: #f0f4f8;
+}
+
+/* 各セル wrapper */
+.kc-permission-cell {
   min-width: 0;
+}
+
+/* フィールド選択ドロップダウン */
+.kc-permission-field-select {
+  width: 100%;
   max-width: none;
 }
 
-/* 権限種別ドロップダウン（幅 30%） */
+/* 権限種別ドロップダウン */
 .kc-permission-perm-select {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
   max-width: none;
 }
 
 /* カラーピッカー（固定幅） */
 .kc-permission-color {
-  flex-shrink: 0;
+  display: block;
   width: 44px;
-  height: 36px;
+  height: 34px;
   padding: 2px 4px;
   border: 1px solid #bbb;
   border-radius: 4px;
@@ -504,16 +551,38 @@ body {
   background: none;
 }
 
-/* 削除ボタン */
+/* 削除ボタン（赤いマイナスアイコン） */
 .kc-permission-del-btn {
-  flex-shrink: 0;
-  padding: 4px 10px;
-  min-width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin: 0 auto;
+  font-size: 18px;
+  font-weight: bold;
+  line-height: 1;
+  color: #fff;
+  background-color: #d93025;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+
+.kc-permission-del-btn:hover {
+  background-color: #b3261e;
+  box-shadow: 0 2px 6px rgba(211, 48, 37, 0.4);
+}
+
+.kc-permission-del-btn:active {
+  background-color: #8c1c16;
 }
 
 /* 行追加ボタンエリア */
 .kc-permission-add-row {
-  margin-top: 4px;
+  margin-top: 0;
 }
 
 /* ====================================================================

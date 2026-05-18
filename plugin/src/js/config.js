@@ -339,18 +339,25 @@
    * ==================================================================== */
 
   /**
-   * 権限種別ドロップダウンの選択肢（固定）
+   * 権限種別ドロップダウンの既定選択肢（管理者は当面非表示のため除外）
+   * 強い権限順 (編集者 → 閲覧者) で並べる。
+   * 内部値 ('edit'/'view'/'delete') は変更しない。
    * @type {Array<{value: string, label: string}>}
    */
-  var PERMISSION_OPTIONS = [
-    { value: '',       label: '-- 権限を選択 --' },
-    { value: 'view',   label: '閲覧のみ（view）' },
-    { value: 'edit',   label: '編集可（edit）' },
-    { value: 'delete', label: '削除可（delete）' }
+  var PERMISSION_OPTIONS_DEFAULT = [
+    { value: 'edit', label: '編集者' },
+    { value: 'view', label: '閲覧者' }
   ];
 
   /**
    * 1 行の権限エントリ要素を生成する（USER_SELECT フィールドのみ表示）
+   *
+   * 権限種別ドロップダウンの選択肢について:
+   * - 通常は「編集者 / 閲覧者」のみ表示（管理者は新規追加不可）
+   * - rule.permission が 'delete' の場合は先頭に「管理者」を動的追加し、
+   *   既存設定の降格を防ぐ
+   * - 新規行 (rule が null または permission が 'delete' 以外) では 'delete' を含めない
+   *
    * @param {Object} [rule] - 既存ルール { fieldCode, permission, color }（省略時は空行）
    * @returns {HTMLElement} .kc-permission-row 要素
    */
@@ -375,9 +382,16 @@
     });
 
     // 権限種別ドロップダウン
+    // 既存ルールが 'delete' の場合のみ先頭に「管理者」を追加して値を保持する
     var permSel = document.createElement('select');
     permSel.className = 'kc-config-select kc-permission-perm-select';
-    PERMISSION_OPTIONS.forEach(function (p) {
+
+    var permOptions = PERMISSION_OPTIONS_DEFAULT.slice();
+    if (rule && rule.permission === 'delete') {
+      permOptions.unshift({ value: 'delete', label: '管理者' });
+    }
+
+    permOptions.forEach(function (p) {
       var opt = document.createElement('option');
       opt.value = p.value;
       opt.textContent = p.label;
@@ -399,10 +413,27 @@
       row.parentNode && row.parentNode.removeChild(row);
     });
 
-    row.appendChild(fieldSel);
-    row.appendChild(permSel);
-    row.appendChild(colorInput);
-    row.appendChild(delBtn);
+    // 各カラムを wrapper div で包んでヘッダーと grid 位置を揃える
+    var cellField = document.createElement('div');
+    cellField.className = 'kc-permission-cell';
+    cellField.appendChild(fieldSel);
+
+    var cellPerm = document.createElement('div');
+    cellPerm.className = 'kc-permission-cell';
+    cellPerm.appendChild(permSel);
+
+    var cellColor = document.createElement('div');
+    cellColor.className = 'kc-permission-cell';
+    cellColor.appendChild(colorInput);
+
+    var cellAction = document.createElement('div');
+    cellAction.className = 'kc-permission-cell';
+    cellAction.appendChild(delBtn);
+
+    row.appendChild(cellField);
+    row.appendChild(cellPerm);
+    row.appendChild(cellColor);
+    row.appendChild(cellAction);
 
     // 既存ルールがある場合は選択状態を設定
     if (rule && rule.fieldCode) {
@@ -419,6 +450,9 @@
     }
     if (rule && rule.permission) {
       permSel.value = rule.permission;
+    } else {
+      // 新規行のデフォルトは「編集者」
+      permSel.value = 'edit';
     }
 
     return row;
@@ -456,13 +490,19 @@
   }
 
   /**
-   * 保存済み permissionRules をフォームに反映する
+   * 保存済み permissionRules をフォームに反映する。
+   * rules が空配列の場合は空の入力行を 1 つ表示する（UX 向上のため）。
+   * 空行の保存時フィルタは collectPermissionRules() が担う（fieldCode 未入力行は除外）。
    * @param {Array} rules - permissionRules 配列
    */
   function applyPermissionRules(rules) {
     if (!elPermissionRows) return;
     elPermissionRows.innerHTML = '';
-    if (!Array.isArray(rules) || rules.length === 0) return;
+    if (!Array.isArray(rules) || rules.length === 0) {
+      // 初期表示: 空行を 1 つ追加してユーザーに入力を促す
+      elPermissionRows.appendChild(buildPermissionRow(null));
+      return;
+    }
     rules.forEach(function (rule) {
       elPermissionRows.appendChild(buildPermissionRow(rule));
     });
