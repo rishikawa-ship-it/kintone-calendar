@@ -1,18 +1,18 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (v4: アカウントフィールド廃止・color 統合)
+ * KC Calendar プラグイン設定画面スクリプト (v5: bgColor / textColor 分離)
  *
- * 保存形式 (version 4):
+ * 保存形式 (version 5):
  *   {
- *     version: 4,
+ *     version: 5,
  *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ... },
- *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, color }, ... ],
+ *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, bgColor, textColor }, ... ],
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
- * v4 変更点:
- *   - fieldMapping.fieldAccount を廃止
- *   - permissionRules 各エントリに color (#RRGGBB) プロパティを追加
- *   - v3→v4 / v2→v4 マイグレーション処理を追加
+ * v5 変更点:
+ *   - permissionRules 各エントリの color を bgColor + textColor に分離
+ *   - v4→v5 マイグレーション: color → bgColor に流用・textColor を WCAG 輝度から自動判定
+ *   - v2/v3→v5 直接マイグレーションも対応
  *
  * 起動シーケンス:
  *   1. loadInitialConfig() で既存設定を取得・初期化
@@ -68,11 +68,11 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 4)
+   * setConfig で保存する全体設定オブジェクト (version 5)
    * @type {{ version: number, fieldMapping: Object, permissionRules: Array, views: Object }}
    */
   var currentConfig = {
-    version: 4,
+    version: 5,
     fieldMapping: {},
     permissionRules: [],
     views: {}
@@ -345,6 +345,31 @@
    * ==================================================================== */
 
   /**
+   * WCAG 相対輝度を計算する (§8.7)
+   * @param {string} hex - '#RRGGBB' 形式の色
+   * @returns {number} 0〜1 の輝度値
+   */
+  function getRelativeLuminance(hex) {
+    var r = parseInt(hex.slice(1, 3), 16) / 255;
+    var g = parseInt(hex.slice(3, 5), 16) / 255;
+    var b = parseInt(hex.slice(5, 7), 16) / 255;
+    var linearize = function (c) {
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b);
+  }
+
+  /**
+   * 背景色から適切な文字色（黒 or 白）を返す (§8.7)
+   * 輝度 > 0.5 → 黒文字、輝度 ≤ 0.5 → 白文字
+   * @param {string} bgHex - '#RRGGBB' 形式の背景色
+   * @returns {string} '#000000' または '#ffffff'
+   */
+  function pickTextColorByBg(bgHex) {
+    return getRelativeLuminance(bgHex) > 0.5 ? '#000000' : '#ffffff';
+  }
+
+  /**
    * テーマカラーパレット (REQ_color-picker-ui v2 §2.1.4)
    * 列優先定義: [色相名, [標準, 明+1, 明+2, 暗-1, 暗-2]]
    * Material Design Color System の各階調を参考に静的定義。
@@ -467,19 +492,20 @@
   /**
    * カラーピッカーウィジェットを生成する (REQ_color-picker-ui §5.1)
    * プレビューボタン + プリセットパレットポップオーバー + 非表示ネイティブ input を含む wrapper を返す。
-   * collectPermissionRules() は .kc-permission-color クラスの value を参照するため、
-   * ネイティブ input に同クラスを付与して互換性を維持する。
+   * extraClass に 'kc-permission-bgcolor' または 'kc-permission-textcolor' を渡すことで
+   * collectPermissionRules() がネイティブ input の値をクラス名で収集できる。
    * @param {string} initialColor - 初期色 ('#RRGGBB')
+   * @param {string} [extraClass] - ネイティブ input に追加する CSS クラス名
    * @returns {HTMLElement} .kc-color-picker-wrapper 要素
    */
-  function buildColorPickerWidget(initialColor) {
+  function buildColorPickerWidget(initialColor, extraClass) {
     var color = initialColor || '#1976d2';
     var wrapper = document.createElement('div');
     wrapper.className = 'kc-color-picker-wrapper';
 
     // nativeInput を先に生成して palette(customArea) 内に格納する (REQ §5.1)
     var previewBtn = buildColorPreviewBtn(color);
-    var nativeInput = buildColorNativeInput(color);
+    var nativeInput = buildColorNativeInput(color, extraClass);
     var paletteEl = buildColorPalette(color, nativeInput);
 
     wrapper.appendChild(previewBtn);
@@ -644,14 +670,15 @@
    * 非表示のネイティブ <input type="color"> を生成する。
    * 「カスタム...」ボタンクリック時に .click() でブラウザネイティブカラーピッカーを起動する。
    * 未検証: kintone iframe 環境での動作（CSS の opacity:0 + click() 方式）。
-   * collectPermissionRules() との互換性のため .kc-permission-color クラスを付与する。
+   * extraClass に収集用クラス（kc-permission-bgcolor / kc-permission-textcolor）を渡す。
    * @param {string} color - 初期色
+   * @param {string} [extraClass] - 追加 CSS クラス名（省略時はなし）
    * @returns {HTMLInputElement}
    */
-  function buildColorNativeInput(color) {
+  function buildColorNativeInput(color, extraClass) {
     var input = document.createElement('input');
     input.type = 'color';
-    input.className = 'kc-color-native-input kc-permission-color';
+    input.className = 'kc-color-native-input' + (extraClass ? ' ' + extraClass : '');
     input.setAttribute('aria-hidden', 'true');
     input.setAttribute('tabindex', '-1');
     input.value = color;
@@ -762,7 +789,7 @@
    *   既存設定の降格を防ぐ
    * - 新規行 (rule が null または permission が 'delete' 以外) では 'delete' を含めない
    *
-   * @param {Object} [rule] - 既存ルール { fieldCode, permission, color }（省略時は空行）
+   * @param {Object} [rule] - 既存ルール { fieldCode, permission, bgColor, textColor }（省略時は空行）
    * @returns {HTMLElement} .kc-permission-row 要素
    */
   function buildPermissionRow(rule) {
@@ -770,40 +797,18 @@
     row.className = 'kc-permission-row';
 
     // フィールド選択ドロップダウン（USER_SELECT 型のみ）
-    var fieldSel = document.createElement('select');
-    fieldSel.className = 'kc-config-select kc-permission-field-select';
-
-    var emptyOpt = document.createElement('option');
-    emptyOpt.value = '';
-    emptyOpt.textContent = '-- フィールドを選択 --';
-    fieldSel.appendChild(emptyOpt);
-
-    permissionFieldOptions.forEach(function (f) {
-      var opt = document.createElement('option');
-      opt.value = f.code;
-      opt.textContent = f.label + ' (' + f.code + ')';
-      fieldSel.appendChild(opt);
-    });
+    var fieldSel = buildPermissionFieldSelect(rule);
 
     // 権限種別ドロップダウン
-    // 既存ルールが 'delete' の場合のみ先頭に「管理者」を追加して値を保持する
-    var permSel = document.createElement('select');
-    permSel.className = 'kc-config-select kc-permission-perm-select';
+    var permSel = buildPermissionPermSelect(rule);
 
-    var permOptions = PERMISSION_OPTIONS_DEFAULT.slice();
-    if (rule && rule.permission === 'delete') {
-      permOptions.unshift({ value: 'delete', label: '管理者' });
-    }
+    // 背景色ピッカー
+    var bgColor = (rule && rule.bgColor) ? rule.bgColor : '#1976d2';
+    var bgWidget = buildColorPickerWidget(bgColor, 'kc-permission-bgcolor');
 
-    permOptions.forEach(function (p) {
-      var opt = document.createElement('option');
-      opt.value = p.value;
-      opt.textContent = p.label;
-      permSel.appendChild(opt);
-    });
-
-    // カラーピッカーウィジェット（プリセットパレット + カスタムボタン方式）
-    var colorWidget = buildColorPickerWidget((rule && rule.color) ? rule.color : '#1976d2');
+    // 文字色ピッカー
+    var textColor = (rule && rule.textColor) ? rule.textColor : '#ffffff';
+    var textWidget = buildColorPickerWidget(textColor, 'kc-permission-textcolor');
 
     // 削除ボタン
     var delBtn = document.createElement('button');
@@ -823,9 +828,13 @@
     cellPerm.className = 'kc-permission-cell';
     cellPerm.appendChild(permSel);
 
-    var cellColor = document.createElement('div');
-    cellColor.className = 'kc-permission-cell';
-    cellColor.appendChild(colorWidget);
+    var cellBgColor = document.createElement('div');
+    cellBgColor.className = 'kc-permission-cell kc-permission-col-bgcolor';
+    cellBgColor.appendChild(bgWidget);
+
+    var cellTextColor = document.createElement('div');
+    cellTextColor.className = 'kc-permission-cell kc-permission-col-textcolor';
+    cellTextColor.appendChild(textWidget);
 
     var cellAction = document.createElement('div');
     cellAction.className = 'kc-permission-cell';
@@ -833,13 +842,36 @@
 
     row.appendChild(cellField);
     row.appendChild(cellPerm);
-    row.appendChild(cellColor);
+    row.appendChild(cellBgColor);
+    row.appendChild(cellTextColor);
     row.appendChild(cellAction);
 
-    // 既存ルールがある場合は選択状態を設定
+    return row;
+  }
+
+  /**
+   * フィールド選択ドロップダウンを生成して既存ルールを反映する
+   * @param {Object|null} rule
+   * @returns {HTMLSelectElement}
+   */
+  function buildPermissionFieldSelect(rule) {
+    var fieldSel = document.createElement('select');
+    fieldSel.className = 'kc-config-select kc-permission-field-select';
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- フィールドを選択 --';
+    fieldSel.appendChild(emptyOpt);
+
+    permissionFieldOptions.forEach(function (f) {
+      var opt = document.createElement('option');
+      opt.value = f.code;
+      opt.textContent = f.label + ' (' + f.code + ')';
+      fieldSel.appendChild(opt);
+    });
+
     if (rule && rule.fieldCode) {
       fieldSel.value = rule.fieldCode;
-      // 選択肢に存在しない場合（フィールド削除等）は末尾に追加して警告表示
       if (fieldSel.value !== rule.fieldCode) {
         var missingOpt = document.createElement('option');
         missingOpt.value = rule.fieldCode;
@@ -849,42 +881,65 @@
         fieldSel.value = rule.fieldCode;
       }
     }
+    return fieldSel;
+  }
+
+  /**
+   * 権限種別ドロップダウンを生成して既存ルールを反映する
+   * @param {Object|null} rule
+   * @returns {HTMLSelectElement}
+   */
+  function buildPermissionPermSelect(rule) {
+    var permSel = document.createElement('select');
+    permSel.className = 'kc-config-select kc-permission-perm-select';
+
+    var permOptions = PERMISSION_OPTIONS_DEFAULT.slice();
+    if (rule && rule.permission === 'delete') {
+      permOptions.unshift({ value: 'delete', label: '管理者' });
+    }
+
+    permOptions.forEach(function (p) {
+      var opt = document.createElement('option');
+      opt.value = p.value;
+      opt.textContent = p.label;
+      permSel.appendChild(opt);
+    });
+
     if (rule && rule.permission) {
       permSel.value = rule.permission;
     } else {
-      // 新規行のデフォルトは「編集者」
       permSel.value = 'edit';
     }
-
-    return row;
+    return permSel;
   }
 
   /**
    * 権限設定行を DOM から収集して permissionRules 配列を返す
    * フィールドコードまたは権限が未選択の行はスキップする
    * fieldType は USER_SELECT 固定（§6.1 スキーマ互換のため常にセット）
-   * color は HTML5 カラーピッカーの値 (#RRGGBB)
-   * @returns {Array<{fieldCode: string, fieldType: string, permission: string, color: string}>}
+   * bgColor / textColor は HTML5 カラーピッカーの値 (#RRGGBB)
+   * @returns {Array<{fieldCode: string, fieldType: string, permission: string, bgColor: string, textColor: string}>}
    */
   function collectPermissionRules() {
     var rows = elPermissionRows.querySelectorAll('.kc-permission-row');
     var result = [];
     rows.forEach(function (row) {
-      var fieldSel   = row.querySelector('.kc-permission-field-select');
-      var permSel    = row.querySelector('.kc-permission-perm-select');
-      var colorInput = row.querySelector('.kc-permission-color');
+      var fieldSel     = row.querySelector('.kc-permission-field-select');
+      var permSel      = row.querySelector('.kc-permission-perm-select');
+      var bgInput      = row.querySelector('.kc-permission-bgcolor');
+      var textInput    = row.querySelector('.kc-permission-textcolor');
       if (!fieldSel || !permSel) return;
 
       var fieldCode  = fieldSel.value;
       var permission = permSel.value;
       if (!fieldCode || !permission) return;
 
-      var color = colorInput ? colorInput.value : '#1976d2';
       result.push({
         fieldCode:  fieldCode,
         fieldType:  'USER_SELECT',
         permission: permission,
-        color:      color
+        bgColor:    bgInput   ? bgInput.value   : '#1976d2',
+        textColor:  textInput ? textInput.value : '#ffffff'
       });
     });
     return result;
@@ -1081,58 +1136,70 @@
    * ==================================================================== */
 
   /**
-   * v3 → v4 マイグレーションを実行する（メモリ内のみ、保存は「保存」ボタン押下時）
-   * - fieldMapping.fieldAccount を permissionRules 先頭行に変換 (permission: edit, color: #1976d2)
-   * - 既存 permissionRules の各エントリに color がなければ #1976d2 を補完
-   * - fieldAccount を fieldMapping から削除
-   * @param {Object} config - パース済み設定オブジェクト
-   * @returns {Object} version 4 形式に変換した設定オブジェクト
+   * v4 の color → bgColor / textColor に変換する（§8.7）
+   * @param {Object} rule - v4 形式のルール { fieldCode, fieldType, permission, color }
+   * @returns {Object} v5 形式のルール { fieldCode, fieldType, permission, bgColor, textColor }
    */
-  function migrateToV4(config) {
+  function migrateRuleV4toV5(rule) {
+    var bgColor = rule.color || '#1976d2';
+    return {
+      fieldCode:  rule.fieldCode,
+      fieldType:  rule.fieldType || 'USER_SELECT',
+      permission: rule.permission,
+      bgColor:    bgColor,
+      textColor:  pickTextColorByBg(bgColor)
+    };
+  }
+
+  /**
+   * v2/v3 → v5 マイグレーション（§8.1, §8.2, §8.7）
+   * 1. fieldAccount を先頭 permissionRules に変換（値がある場合のみ）
+   * 2. 既存 permissionRules の color → bgColor/textColor に変換
+   * 3. color のないエントリは bgColor: #1976d2 / textColor: WCAG 自動判定
+   * 4. fieldAccount を fieldMapping から削除
+   * @param {Object} config - パース済み設定オブジェクト
+   * @returns {Object} version 5 形式に変換した設定オブジェクト
+   */
+  function migrateToV5(config) {
     var newRules = [];
     var fm = config.fieldMapping || {};
 
     // 旧 fieldAccount を先頭エントリとして追加（値がある場合のみ）
     if (fm.fieldAccount) {
+      var defaultBg = '#1976d2';
       newRules.push({
         fieldCode:  fm.fieldAccount,
         fieldType:  'USER_SELECT',
         permission: 'edit',
-        color:      '#1976d2'
+        bgColor:    defaultBg,
+        textColor:  pickTextColorByBg(defaultBg)
       });
     }
 
-    // 既存 permissionRules を後続に追加し color を補完
+    // 既存 permissionRules を後続に追加し color → bgColor/textColor に変換
     var existingRules = Array.isArray(config.permissionRules) ? config.permissionRules : [];
     existingRules.forEach(function (rule) {
-      newRules.push({
-        fieldCode:  rule.fieldCode,
-        fieldType:  rule.fieldType || 'USER_SELECT',
-        permission: rule.permission,
-        color:      rule.color || '#1976d2'
-      });
+      newRules.push(migrateRuleV4toV5(rule));
     });
 
     // fieldAccount を削除した fieldMapping を構築
     var newFm = {};
     Object.keys(fm).forEach(function (key) {
-      if (key !== 'fieldAccount') {
-        newFm[key] = fm[key];
-      }
+      if (key !== 'fieldAccount') { newFm[key] = fm[key]; }
     });
 
     return {
-      version:        4,
-      fieldMapping:   newFm,
+      version:         5,
+      fieldMapping:    newFm,
       permissionRules: newRules,
-      views:          config.views || {}
+      views:           config.views || {}
     };
   }
 
   /**
    * kintone.plugin.app.getConfig で設定を取得し currentConfig を初期化する。
    * - 旧フラット設定 (version 2 未満) は破棄して再初期化 (Q11 確定)
-   * - version 2 / 3 は v4 マイグレーションを実行（§8 参照）
+   * - version 2 / 3 / 4 は v5 マイグレーションを実行（§8 参照）
    * - getConfig の返り値は { config: "<JSON文字列>" } 形式を前提とする
    * @returns {void}
    */
@@ -1156,26 +1223,27 @@
     // version 2 未満は破棄 (Q11 確定: 旧フラット設定は再初期化)
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
-      currentConfig = { version: 4, fieldMapping: {}, permissionRules: [], views: {} };
+      currentConfig = { version: 5, fieldMapping: {}, permissionRules: [], views: {} };
       return;
     }
 
     var ver = Number(parsed.version);
 
-    // version 2 / 3 → 4 マイグレーション（§8.1, §8.2）
-    if (ver < 4) {
-      console.log('[KC Config] version ' + ver + ' → 4 へマイグレーション実行');
-      parsed = migrateToV4(parsed);
+    // version 2 / 3 / 4 → 5 マイグレーション（§8.1, §8.2, §8.7）
+    if (ver < 5) {
+      console.log('[KC Config] version ' + ver + ' → 5 へマイグレーション実行');
+      parsed = migrateToV5(parsed);
     }
 
-    // color が欠落したエントリを補完（version 4 でも念のため）
+    // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
-      if (!rule.color) { rule.color = '#1976d2'; }
+      if (!rule.bgColor) { rule.bgColor = '#1976d2'; }
+      if (!rule.textColor) { rule.textColor = pickTextColorByBg(rule.bgColor); }
     });
 
     currentConfig = {
-      version:         4,
+      version:         5,
       fieldMapping:    parsed.fieldMapping    || {},
       permissionRules: rules,
       views:           parsed.views           || {}
@@ -1628,9 +1696,9 @@
         }
       });
 
-      // 最終的な保存オブジェクト (version 4 形式: permissionRules + color を含む)
+      // 最終的な保存オブジェクト (version 5 形式: permissionRules + bgColor/textColor を含む)
       var finalConfig = {
-        version: 4,
+        version: 5,
         fieldMapping:    currentConfig.fieldMapping,
         permissionRules: currentConfig.permissionRules || [],
         views:           mergedViews

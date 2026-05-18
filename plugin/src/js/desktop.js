@@ -143,12 +143,12 @@
      * プラグイン設定が存在しない / version 2 未満の場合はハードコード値を維持する（フォールバック）。
      * KC.Boot.init の冒頭で呼び出すこと。
      *
-     * 保存形式 (version 4):
+     * 保存形式 (version 5):
      *   getConfig 返り値の .config キーを JSON.parse した 2 階層オブジェクトを使用する
      *   {
-     *     version: 4,
+     *     version: 5,
      *     fieldMapping: { ... },
-     *     permissionRules: [{ fieldCode, fieldType, permission, color }, ...],
+     *     permissionRules: [{ fieldCode, fieldType, permission, bgColor, textColor }, ...],
      *     views: { "<viewId>": { calendarTitle, defaultView } }
      *   }
      *
@@ -247,11 +247,21 @@
       }
 
       // 権限ルール (version 2 以降) を適用
-      // v2/v3 の設定は permissionRules なし → 空配列でフォールバック（全員 edit 扱い）
-      // color が欠落したエントリも許容する（desktop.js 側では保存時の補完は行わない）
-      KC.Config.PERMISSION_RULES = Array.isArray(config.permissionRules)
-        ? config.permissionRules
-        : [];
+      // v2/v3/v4 の設定は permissionRules なし / color プロパティのみ → 空配列 or フォールバック
+      // bgColor/textColor が欠落したエントリは desktop.js 側で補完する（v4→v5 後方互換）
+      var rawRules = Array.isArray(config.permissionRules) ? config.permissionRules : [];
+      KC.Config.PERMISSION_RULES = rawRules.map(function (rule) {
+        if (rule.bgColor) { return rule; }
+        // v4 形式（color プロパティのみ）の後方互換処理
+        var bgColor = rule.color || '#1976d2';
+        return {
+          fieldCode:  rule.fieldCode,
+          fieldType:  rule.fieldType || 'USER_SELECT',
+          permission: rule.permission,
+          bgColor:    bgColor,
+          textColor:  rule.textColor || pickTextColorByBg(bgColor)
+        };
+      });
 
       console.log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD,
         'PERMISSION_RULES:', KC.Config.PERMISSION_RULES);
@@ -263,11 +273,41 @@
   // calendarTitle 設定済みフラグ用プロパティ（空文字 = 未設定 = detectAppName を実行）
   KC.Config.CALENDAR_TITLE = '';
   /**
-   * 編集権限ルール配列 (REQ_edit-permission-extension v4 §6.1)
+   * 編集権限ルール配列 (REQ_edit-permission-extension v5 §6.1)
    * loadFromPluginConfig で上書きされる。初期値は空配列 = 全員 edit 権限（フォールバック）
-   * @type {Array<{fieldCode: string, fieldType: string, permission: string, color: string}>}
+   * @type {Array<{fieldCode: string, fieldType: string, permission: string, bgColor: string, textColor: string}>}
    */
   KC.Config.PERMISSION_RULES = [];
+
+  /* ====================================================================
+   * WCAG 輝度ユーティリティ (REQ §8.7)
+   * config.js の同名関数と整合させる。
+   * ==================================================================== */
+  /**
+   * WCAG 相対輝度を計算する (§8.7)
+   * @param {string} hex - '#RRGGBB' 形式の色
+   * @returns {number} 0〜1 の輝度値
+   */
+  function getRelativeLuminance(hex) {
+    if (!hex || typeof hex !== 'string') return 0;
+    var r = parseInt(hex.slice(1, 3), 16) / 255;
+    var g = parseInt(hex.slice(3, 5), 16) / 255;
+    var b = parseInt(hex.slice(5, 7), 16) / 255;
+    var linearize = function (c) {
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b);
+  }
+
+  /**
+   * 背景色から適切な文字色（黒 or 白）を返す (§8.7)
+   * 輝度 > 0.5 → 黒文字、輝度 ≤ 0.5 → 白文字
+   * @param {string} bgHex - '#RRGGBB' 形式の背景色
+   * @returns {string} '#000000' または '#ffffff'
+   */
+  function pickTextColorByBg(bgHex) {
+    return getRelativeLuminance(bgHex) > 0.5 ? '#000000' : '#ffffff';
+  }
 
   /* ====================================================================
    * KC.Utils — 日付ユーティリティ
@@ -2204,33 +2244,38 @@
     }
 
     /**
-     * 色決定ロジック: permissionRules を上から走査し最初にマッチした行の color を返す（§5.8）
+     * 色決定ロジック: permissionRules を上から走査し最初にマッチした行の bgColor/textColor を返す（§5.8）
      * @param {Array} rules - PERMISSION_RULES
      * @param {Object} evt  - KcEvent（permissionFields を含む）
-     * @returns {string|null} #RRGGBB 文字列、またはマッチなし・ルール空の場合 null
+     * @returns {{ bgColor: string|null, textColor: string|null }}
      */
-    function _resolveColor(rules, evt) {
-      if (!rules || rules.length === 0) return null;
+    function _resolveColors(rules, evt) {
+      if (!rules || rules.length === 0) return { bgColor: null, textColor: null };
       for (var i = 0; i < rules.length; i++) {
         var granted = _evalEntry(rules[i], evt);
-        if (granted !== null) { return rules[i].color || null; }
+        if (granted !== null) {
+          return {
+            bgColor:   rules[i].bgColor   || null,
+            textColor: rules[i].textColor || null
+          };
+        }
       }
-      return null;
+      return { bgColor: null, textColor: null };
     }
 
     /**
      * イベントに対するログインユーザーの権限と表示色を返す（OR 結合・最高権限採用）
-     * - permissionRules が空配列の場合: edit 相当（フォールバック: 全員編集可）・color: null
-     * - permissionRules に 1 件以上あるがどのルールにもマッチしない場合: view 相当・color: null
+     * - permissionRules が空配列の場合: edit 相当（フォールバック: 全員編集可）・bgColor/textColor: null
+     * - permissionRules に 1 件以上あるがどのルールにもマッチしない場合: view 相当・色: null
      * @param {Object} evt - KcEvent（permissionFields を含む）
-     * @returns {{ canEdit: boolean, canDelete: boolean, canOpenDialog: boolean, color: string|null }}
+     * @returns {{ canEdit: boolean, canDelete: boolean, canOpenDialog: boolean, bgColor: string|null, textColor: string|null }}
      */
     function getPermission(evt) {
       var rules = KC.Config.PERMISSION_RULES || [];
 
       // フォールバック: ルールなし = 全員 edit、色なし
       if (!rules || rules.length === 0) {
-        return { canEdit: true, canDelete: false, canOpenDialog: true, color: null };
+        return { canEdit: true, canDelete: false, canOpenDialog: true, bgColor: null, textColor: null };
       }
 
       // 権限: OR 結合・最高権限採用（§5.3）
@@ -2242,14 +2287,15 @@
         }
       }
 
-      // 色: 上から最初にマッチした行を採用（§5.8）
-      var color = _resolveColor(rules, evt);
+      // 色: 上から最初にマッチした行の bgColor/textColor を採用（§5.8）
+      var colors = _resolveColors(rules, evt);
 
       return {
         canEdit:       _permLevel(best) >= _permLevel('edit'),
         canDelete:     _permLevel(best) >= _permLevel('delete'),
         canOpenDialog: true,
-        color:         color
+        bgColor:       colors.bgColor,
+        textColor:     colors.textColor
       };
     }
 
@@ -2348,8 +2394,8 @@
     function assignLanes(weekEvents) {
       // 色あり降順 → 期間降順 → 作成日時昇順 → ID 昇順でソート
       weekEvents.sort(function (a, b) {
-        var aHasColor = KC.LoginContext.getPermission(a).color ? 0 : 1;
-        var bHasColor = KC.LoginContext.getPermission(b).color ? 0 : 1;
+        var aHasColor = KC.LoginContext.getPermission(a).bgColor ? 0 : 1;
+        var bHasColor = KC.LoginContext.getPermission(b).bgColor ? 0 : 1;
         if (aHasColor !== bHasColor) return aHasColor - bHasColor;
         var aDur = new Date(a.end).getTime() - new Date(a.start).getTime();
         var bDur = new Date(b.end).getTime() - new Date(b.start).getTime();
@@ -2432,20 +2478,21 @@
       el.style.top    = (BAR_TOP + ev.lane * (BAR_H + BAR_GAP)) + 'px';
       el.style.height = BAR_H + 'px';
 
-      // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
-      var displayColor = perm.color || ev.color || null;
-      if (displayColor) {
-        el.style.backgroundColor = displayColor;
-        el.style.borderColor     = displayColor;
-        el.style.color = KC.Lanes.isLightColor(displayColor) ? '#1f2937' : '#ffffff';
+      // 権限ルールにマッチした bgColor を優先し、なければイベント自体の色フィールドを使用
+      var displayBgColor = perm.bgColor || ev.color || null;
+      if (displayBgColor) {
+        el.style.backgroundColor = displayBgColor;
+        el.style.borderColor     = displayBgColor;
+        el.style.color = perm.textColor || (KC.Lanes.isLightColor(displayBgColor) ? '#1f2937' : '#ffffff');
       }
 
       el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
       var dot = document.createElement('span');
       dot.className = 'dot';
-      if (displayColor) {
-        dot.style.background = KC.Lanes.isLightColor(displayColor) ? '#1f2937' : '#ffffff';
+      if (displayBgColor) {
+        var dotColor = perm.textColor || (KC.Lanes.isLightColor(displayBgColor) ? '#1f2937' : '#ffffff');
+        dot.style.background = dotColor;
       }
 
       var titleSpan = document.createElement('span');
@@ -2833,7 +2880,7 @@
         var isMultiDay = hitDayIndices.length > 1;
         var evtPerm    = KC.LoginContext.getPermission(evt);
         var evtCanEdit = evtPerm.canEdit;
-        var evtColor   = evtPerm.color || evt.color || null;
+        var evtBgColor = evtPerm.bgColor || evt.color || null;
         // 全セグメントの DOM を収集（DnD の origBars 渡し用）
         var segmentEls = [];
 
@@ -2887,11 +2934,11 @@
             else if (!isFirst && !isLast)  div.classList.add('kc-event--span-middle');
           }
 
-          // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
-          if (evtColor) {
-            div.style.backgroundColor = evtColor;
-            div.style.borderColor     = evtColor;
-            div.style.color = KC.Lanes.isLightColor(evtColor) ? '#1f2937' : '#ffffff';
+          // 権限ルールにマッチした bgColor を優先し、なければイベント自体の色フィールドを使用
+          if (evtBgColor) {
+            div.style.backgroundColor = evtBgColor;
+            div.style.borderColor     = evtBgColor;
+            div.style.color = evtPerm.textColor || (KC.Lanes.isLightColor(evtBgColor) ? '#1f2937' : '#ffffff');
           }
 
           // XSS 安全: textContent 使用
@@ -2902,8 +2949,11 @@
           var metaDiv = document.createElement('div');
           metaDiv.className = 'kc-evt-meta';
           metaDiv.textContent = fullTimeStr;
-          if (evtColor) {
-            metaDiv.style.color = KC.Lanes.isLightColor(evtColor) ? '#6b7280' : 'rgba(255,255,255,0.8)';
+          if (evtBgColor) {
+            var metaTc = evtPerm.textColor
+              ? (evtPerm.textColor === '#ffffff' ? 'rgba(255,255,255,0.8)' : '#6b7280')
+              : (KC.Lanes.isLightColor(evtBgColor) ? '#6b7280' : 'rgba(255,255,255,0.8)');
+            metaDiv.style.color = metaTc;
           }
 
           // NG#6 修正: リサイズハンドルは開始セグメント（dayIdx === hitDayIndices[0]）のみに追加する
@@ -3319,20 +3369,21 @@
       el.style.height = BAR_H + 'px';
       el.style.pointerEvents = 'auto';
 
-      // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
-      var displayColor = perm.color || ev.color || null;
-      if (displayColor) {
-        el.style.backgroundColor = displayColor;
-        el.style.borderColor     = displayColor;
-        el.style.color = KC.Lanes.isLightColor(displayColor) ? '#1f2937' : '#ffffff';
+      // 権限ルールにマッチした bgColor を優先し、なければイベント自体の色フィールドを使用
+      var displayBgColor = perm.bgColor || ev.color || null;
+      if (displayBgColor) {
+        el.style.backgroundColor = displayBgColor;
+        el.style.borderColor     = displayBgColor;
+        el.style.color = perm.textColor || (KC.Lanes.isLightColor(displayBgColor) ? '#1f2937' : '#ffffff');
       }
 
       el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
       var dot = document.createElement('span');
       dot.className = 'dot';
-      if (displayColor) {
-        dot.style.background = KC.Lanes.isLightColor(displayColor) ? '#1f2937' : '#ffffff';
+      if (displayBgColor) {
+        var dotColor = perm.textColor || (KC.Lanes.isLightColor(displayBgColor) ? '#1f2937' : '#ffffff');
+        dot.style.background = dotColor;
       }
 
       var titleSpan = document.createElement('span');
@@ -3390,19 +3441,23 @@
     function buildMonthChip(evt) {
       var chipPerm    = KC.LoginContext.getPermission(evt);
       var chipCanEdit = chipPerm.canEdit;
-      // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
-      var color = chipPerm.color || evt.color || '#3b82f6';
+      // 権限ルールにマッチした bgColor を優先し、なければイベント自体の色フィールドを使用
+      var bgColor = chipPerm.bgColor || evt.color || '#3b82f6';
       var chip = document.createElement('div');
       chip.className = 'kc-month-chip';
       // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
       if (!chipCanEdit) chip.style.cursor = 'pointer';
       chip.dataset.evId = evt.id;
-      chip.style.background = _chipBg(color);
-      chip.style.color = '#1f2937';  // 15% 透過背景は薄いため常にダークで可読
+      chip.style.background = _chipBg(bgColor);
+      // 未検証: 月ビュー chip は背景を 15% 透過するため、textColor が白系でも視認性が
+      // 確保されるかは実機確認が必要。問題があれば透過背景の不採用 or textColor の
+      // 暗色フォールバックを検討。
+      // textColor が指定されていればそちらを優先（15% 透過背景が薄い場合はダーク維持）
+      chip.style.color = chipPerm.textColor || '#1f2937';
 
       var dot = document.createElement('span');
       dot.className = 'kc-month-chip-dot';
-      dot.style.background = color;
+      dot.style.background = bgColor;
 
       var evStart = new Date(evt.start);
       var timeSpan = document.createElement('span');
@@ -3945,7 +4000,7 @@
 
         var evtPerm    = KC.LoginContext.getPermission(evt);
         var evtCanEdit = evtPerm.canEdit;
-        var evtColor   = evtPerm.color || evt.color || null;
+        var evtBgColor = evtPerm.bgColor || evt.color || null;
         var div = document.createElement('div');
         // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
         div.className = 'kc-event';
@@ -3954,11 +4009,11 @@
         div.style.height = 'calc(' + heightPct + '% - 2px)';
         div.style.pointerEvents = 'auto';
 
-        // 権限ルールにマッチした色を優先し、なければイベント自体の色フィールドを使用
-        if (evtColor) {
-          div.style.backgroundColor = evtColor;
-          div.style.borderColor     = evtColor;
-          div.style.color = KC.Lanes.isLightColor(evtColor) ? '#1f2937' : '#ffffff';
+        // 権限ルールにマッチした bgColor を優先し、なければイベント自体の色フィールドを使用
+        if (evtBgColor) {
+          div.style.backgroundColor = evtBgColor;
+          div.style.borderColor     = evtBgColor;
+          div.style.color = evtPerm.textColor || (KC.Lanes.isLightColor(evtBgColor) ? '#1f2937' : '#ffffff');
         }
 
         var titleDiv = document.createElement('div');
@@ -3968,8 +4023,11 @@
         var metaDiv = document.createElement('div');
         metaDiv.className = 'kc-evt-meta';
         metaDiv.textContent = fullTimeStr;
-        if (evtColor) {
-          metaDiv.style.color = KC.Lanes.isLightColor(evtColor) ? '#6b7280' : 'rgba(255,255,255,0.8)';
+        if (evtBgColor) {
+          var mTc = evtPerm.textColor
+            ? (evtPerm.textColor === '#ffffff' ? 'rgba(255,255,255,0.8)' : '#6b7280')
+            : (KC.Lanes.isLightColor(evtBgColor) ? '#6b7280' : 'rgba(255,255,255,0.8)');
+          metaDiv.style.color = mTc;
         }
 
         var topHandle = document.createElement('div');
@@ -4411,12 +4469,12 @@
     apply: function (events) {
       var filter = KC.State.eventFilter || 'all';
       if (filter === 'mine') {
-        // color が null でない（いずれかのルールにマッチ）= 自分の予定として扱う
-        return events.filter(function (e) { return KC.LoginContext.getPermission(e).color !== null; });
+        // bgColor が null でない（いずれかのルールにマッチ）= 自分の予定として扱う（§5.9）
+        return events.filter(function (e) { return KC.LoginContext.getPermission(e).bgColor !== null; });
       }
       if (filter === 'others') {
-        // color が null の予定（マッチなし）を「他人扱い」として表示
-        return events.filter(function (e) { return KC.LoginContext.getPermission(e).color === null; });
+        // bgColor が null の予定（マッチなし）を「他人扱い」として表示（§5.9）
+        return events.filter(function (e) { return KC.LoginContext.getPermission(e).bgColor === null; });
       }
       return events;  // 'all': フィルタなし
     }

@@ -474,7 +474,7 @@ body {
 /* カラムヘッダー行 */
 .kc-permission-header {
   display: grid;
-  grid-template-columns: 2fr 1fr 44px 40px;
+  grid-template-columns: 2fr 1fr 44px 44px 40px;
   gap: 8px;
   align-items: center;
   background: #e8ecf1;
@@ -496,8 +496,15 @@ body {
   text-align: center;
 }
 
-/* 色カラム: flex で垂直・水平中央配置 */
-.kc-permission-col-color {
+/* 背景色カラム: flex で垂直・水平中央配置 */
+.kc-permission-col-bgcolor {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 文字色カラム: flex で垂直・水平中央配置 */
+.kc-permission-col-textcolor {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -510,10 +517,10 @@ body {
   background: #fff;
 }
 
-/* 1 行のエントリ（フィールド選択 / 権限選択 / 色 / 削除ボタン） */
+/* 1 行のエントリ（フィールド選択 / 権限選択 / 背景色 / 文字色 / 削除ボタン） */
 .kc-permission-row {
   display: grid;
-  grid-template-columns: 2fr 1fr 44px 40px;
+  grid-template-columns: 2fr 1fr 44px 44px 40px;
   gap: 8px;
   align-items: center;
   padding: 6px 8px;
