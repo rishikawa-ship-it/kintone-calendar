@@ -345,6 +345,314 @@
    * ==================================================================== */
 
   /**
+   * 編集権限設定で使用するプリセットカラーパレット (REQ_color-picker-ui §2.1.2)
+   * Google Calendar 系統 + Material Design の 20 色。
+   * @type {Array<{name: string, hex: string}>}
+   */
+  var PRESET_COLORS = [
+    { name: 'トマト',         hex: '#d50000' },
+    { name: 'フラミンゴ',     hex: '#e67c73' },
+    { name: 'タンジェリン',   hex: '#f4511e' },
+    { name: 'バナナ',         hex: '#f6bf26' },
+    { name: 'セージ',         hex: '#33b679' },
+    { name: 'バジル',         hex: '#0b8043' },
+    { name: 'ピーコック',     hex: '#039be5' },
+    { name: 'ブルーベリー',   hex: '#3f51b5' },
+    { name: 'ラベンダー',     hex: '#7986cb' },
+    { name: 'グレープ',       hex: '#8e24aa' },
+    { name: 'グラファイト',   hex: '#616161' },
+    { name: 'ライトブルー',   hex: '#1976d2' },
+    { name: 'シアン',         hex: '#0097a7' },
+    { name: 'ティール',       hex: '#00796b' },
+    { name: 'ライム',         hex: '#8bc34a' },
+    { name: 'アンバー',       hex: '#ff8f00' },
+    { name: 'ディープオレンジ', hex: '#e64a19' },
+    { name: 'ブラウン',       hex: '#6d4c41' },
+    { name: 'ブルーグレー',   hex: '#546e7a' },
+    { name: 'ピンク',         hex: '#e91e63' }
+  ];
+
+  /**
+   * 指定した HEX 値に対応するプリセット色の名前を返す
+   * 該当なしの場合は HEX 値をそのまま返す
+   * @param {string} hex - '#RRGGBB' 形式の色
+   * @returns {string} 色名 または HEX 値
+   */
+  function findPresetColorName(hex) {
+    var lower = (hex || '').toLowerCase();
+    for (var i = 0; i < PRESET_COLORS.length; i++) {
+      if (PRESET_COLORS[i].hex.toLowerCase() === lower) {
+        return PRESET_COLORS[i].name;
+      }
+    }
+    return hex;
+  }
+
+  /**
+   * カラーパレットポップオーバーを閉じる
+   * 表示中のすべてのポップオーバーを閉じる（複数行が同時に開くのを防ぐ）
+   */
+  function closeAllColorPopovers() {
+    var popovers = document.querySelectorAll('.kc-color-palette:not([hidden])');
+    popovers.forEach(function (el) {
+      el.setAttribute('hidden', '');
+    });
+    var btns = document.querySelectorAll('.kc-color-preview-btn[aria-expanded="true"]');
+    btns.forEach(function (btn) {
+      btn.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  /**
+   * カラーパレットポップオーバーを開く
+   * 他のポップオーバーを閉じてから対象を開く
+   * @param {HTMLElement} paletteEl - .kc-color-palette 要素
+   * @param {HTMLElement} previewBtn - .kc-color-preview-btn 要素
+   */
+  function openColorPopover(paletteEl, previewBtn) {
+    closeAllColorPopovers();
+    paletteEl.removeAttribute('hidden');
+    previewBtn.setAttribute('aria-expanded', 'true');
+    // 最初のタイルにフォーカスを移す
+    var firstTile = paletteEl.querySelector('.kc-color-tile');
+    if (firstTile) { firstTile.focus(); }
+  }
+
+  /**
+   * カラープレビューボタンとポップオーバーの色表示を同期する
+   * @param {HTMLElement} previewBtn - .kc-color-preview-btn 要素
+   * @param {HTMLElement} paletteEl - .kc-color-palette 要素
+   * @param {string} hex - '#RRGGBB' 形式の色
+   */
+  function syncColorDisplay(previewBtn, paletteEl, hex) {
+    previewBtn.style.backgroundColor = hex;
+    var colorName = findPresetColorName(hex);
+    previewBtn.setAttribute('aria-label', '色を選択: ' + colorName);
+
+    // タイルの選択状態を更新
+    var tiles = paletteEl.querySelectorAll('.kc-color-tile');
+    tiles.forEach(function (tile) {
+      var isSelected = tile.dataset.color.toLowerCase() === hex.toLowerCase();
+      tile.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+    });
+  }
+
+  /**
+   * カラーピッカーウィジェットを生成する (REQ_color-picker-ui §5.1)
+   * プレビューボタン + プリセットパレットポップオーバー + 非表示ネイティブ input を含む wrapper を返す。
+   * collectPermissionRules() は .kc-permission-color クラスの value を参照するため、
+   * ネイティブ input に同クラスを付与して互換性を維持する。
+   * @param {string} initialColor - 初期色 ('#RRGGBB')
+   * @returns {HTMLElement} .kc-color-picker-wrapper 要素
+   */
+  function buildColorPickerWidget(initialColor) {
+    var color = initialColor || '#1976d2';
+    var wrapper = document.createElement('div');
+    wrapper.className = 'kc-color-picker-wrapper';
+
+    // nativeInput を先に生成して palette(customArea) 内に格納する (REQ §5.1)
+    var previewBtn = buildColorPreviewBtn(color);
+    var nativeInput = buildColorNativeInput(color);
+    var paletteEl = buildColorPalette(color, nativeInput);
+
+    wrapper.appendChild(previewBtn);
+    wrapper.appendChild(paletteEl);
+
+    bindColorPickerEvents(previewBtn, paletteEl, nativeInput);
+
+    return wrapper;
+  }
+
+  /**
+   * 色プレビューボタンを生成する
+   * @param {string} color - 初期色
+   * @returns {HTMLButtonElement}
+   */
+  function buildColorPreviewBtn(color) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'kc-color-preview-btn';
+    btn.style.backgroundColor = color;
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('aria-haspopup', 'true');
+    btn.setAttribute('aria-label', '色を選択: ' + findPresetColorName(color));
+    return btn;
+  }
+
+  /**
+   * カラーパレットポップオーバー要素を生成する。
+   * REQ §5.1 の構造に従い、palette > grid + customArea(nativeInput) の階層にまとめる。
+   * @param {string} initialColor - 初期選択色
+   * @param {HTMLInputElement} nativeInput - buildColorNativeInput() で生成した hidden input
+   * @returns {HTMLElement}
+   */
+  function buildColorPalette(initialColor, nativeInput) {
+    var palette = document.createElement('div');
+    palette.className = 'kc-color-palette';
+    palette.setAttribute('role', 'dialog');
+    palette.setAttribute('aria-label', 'カラーパレット');
+    palette.setAttribute('hidden', '');
+
+    var grid = buildColorTileGrid(initialColor);
+    var customArea = buildColorCustomArea(nativeInput);
+
+    palette.appendChild(grid);
+    palette.appendChild(customArea);
+
+    return palette;
+  }
+
+  /**
+   * プリセットカラータイルのグリッドを生成する
+   * @param {string} initialColor - 初期選択色
+   * @returns {HTMLElement}
+   */
+  function buildColorTileGrid(initialColor) {
+    var grid = document.createElement('div');
+    grid.className = 'kc-color-palette-grid';
+    grid.setAttribute('role', 'listbox');
+    grid.setAttribute('aria-label', 'プリセットカラー');
+
+    PRESET_COLORS.forEach(function (preset) {
+      var tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'kc-color-tile';
+      tile.setAttribute('role', 'option');
+      tile.setAttribute('aria-label', preset.name);
+      tile.setAttribute('data-color', preset.hex);
+      tile.style.backgroundColor = preset.hex;
+      var isSelected = preset.hex.toLowerCase() === (initialColor || '').toLowerCase();
+      tile.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      grid.appendChild(tile);
+    });
+
+    return grid;
+  }
+
+  /**
+   * 「カスタム...」ボタンエリアを生成する。
+   * REQ §5.1 の構造に従い、ネイティブ input を area 内に格納する。
+   * @param {HTMLInputElement} nativeInput - buildColorNativeInput() で生成した hidden input
+   * @returns {HTMLElement}
+   */
+  function buildColorCustomArea(nativeInput) {
+    var area = document.createElement('div');
+    area.className = 'kc-color-palette-custom';
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'kc-color-custom-btn';
+    btn.setAttribute('aria-label', 'カスタムカラーを選択');
+    btn.textContent = 'カスタム...';
+
+    area.appendChild(btn);
+    area.appendChild(nativeInput);
+    return area;
+  }
+
+  /**
+   * 非表示のネイティブ <input type="color"> を生成する。
+   * 「カスタム...」ボタンクリック時に .click() でブラウザネイティブカラーピッカーを起動する。
+   * 未検証: kintone iframe 環境での動作（CSS の opacity:0 + click() 方式）。
+   * collectPermissionRules() との互換性のため .kc-permission-color クラスを付与する。
+   * @param {string} color - 初期色
+   * @returns {HTMLInputElement}
+   */
+  function buildColorNativeInput(color) {
+    var input = document.createElement('input');
+    input.type = 'color';
+    input.className = 'kc-color-native-input kc-permission-color';
+    input.setAttribute('aria-hidden', 'true');
+    input.setAttribute('tabindex', '-1');
+    input.value = color;
+    return input;
+  }
+
+  /**
+   * プレビューボタンのクリックイベント（ポップオーバーの開閉）を登録する
+   * @param {HTMLElement} previewBtn
+   * @param {HTMLElement} paletteEl
+   */
+  function bindPreviewBtnEvents(previewBtn, paletteEl) {
+    previewBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var isOpen = paletteEl.getAttribute('hidden') === null;
+      if (isOpen) {
+        closeAllColorPopovers();
+      } else {
+        openColorPopover(paletteEl, previewBtn);
+      }
+    });
+  }
+
+  /**
+   * パレット内タイルクリックおよびキーボード操作のイベントを登録する
+   * @param {HTMLElement} previewBtn
+   * @param {HTMLElement} paletteEl
+   * @param {HTMLInputElement} nativeInput
+   */
+  function bindPaletteEvents(previewBtn, paletteEl, nativeInput) {
+    // タイルクリック: 色を確定してポップオーバーを閉じる
+    // stopPropagation は外側クリック判定との競合を避けるため先頭で呼ぶ
+    paletteEl.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var tile = e.target.closest('.kc-color-tile');
+      if (!tile) { return; }
+      var hex = tile.dataset.color;
+      nativeInput.value = hex;
+      syncColorDisplay(previewBtn, paletteEl, hex);
+      closeAllColorPopovers();
+      previewBtn.focus();
+    });
+
+    // ESC キーでポップオーバーを閉じる
+    paletteEl.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        closeAllColorPopovers();
+        previewBtn.focus();
+      }
+    });
+  }
+
+  /**
+   * ネイティブカラーピッカーおよびカスタムボタンのイベントを登録する
+   * @param {HTMLElement} previewBtn
+   * @param {HTMLElement} paletteEl
+   * @param {HTMLInputElement} nativeInput
+   */
+  function bindNativeInputEvents(previewBtn, paletteEl, nativeInput) {
+    // カスタムボタン: ネイティブピッカーを開く
+    var customBtn = paletteEl.querySelector('.kc-color-custom-btn');
+    if (customBtn) {
+      customBtn.addEventListener('click', function () {
+        nativeInput.click();
+      });
+    }
+
+    // ネイティブピッカーで色が変わったときにプレビューを同期する
+    nativeInput.addEventListener('input', function () {
+      syncColorDisplay(previewBtn, paletteEl, nativeInput.value);
+    });
+    nativeInput.addEventListener('change', function () {
+      syncColorDisplay(previewBtn, paletteEl, nativeInput.value);
+      closeAllColorPopovers();
+      previewBtn.focus();
+    });
+  }
+
+  /**
+   * カラーピッカーウィジェットの全イベントをまとめて登録する
+   * @param {HTMLElement} previewBtn - .kc-color-preview-btn
+   * @param {HTMLElement} paletteEl - .kc-color-palette
+   * @param {HTMLInputElement} nativeInput - .kc-color-native-input
+   */
+  function bindColorPickerEvents(previewBtn, paletteEl, nativeInput) {
+    bindPreviewBtnEvents(previewBtn, paletteEl);
+    bindPaletteEvents(previewBtn, paletteEl, nativeInput);
+    bindNativeInputEvents(previewBtn, paletteEl, nativeInput);
+  }
+
+  /**
    * 権限種別ドロップダウンの既定選択肢（管理者は当面非表示のため除外）
    * 強い権限順 (編集者 → 閲覧者) で並べる。
    * 内部値 ('edit'/'view'/'delete') は変更しない。
@@ -404,11 +712,8 @@
       permSel.appendChild(opt);
     });
 
-    // カラーピッカー（デフォルト色: #1976d2）
-    var colorInput = document.createElement('input');
-    colorInput.type = 'color';
-    colorInput.className = 'kc-permission-color';
-    colorInput.value = (rule && rule.color) ? rule.color : '#1976d2';
+    // カラーピッカーウィジェット（プリセットパレット + カスタムボタン方式）
+    var colorWidget = buildColorPickerWidget((rule && rule.color) ? rule.color : '#1976d2');
 
     // 削除ボタン
     var delBtn = document.createElement('button');
@@ -430,7 +735,7 @@
 
     var cellColor = document.createElement('div');
     cellColor.className = 'kc-permission-cell';
-    cellColor.appendChild(colorInput);
+    cellColor.appendChild(colorWidget);
 
     var cellAction = document.createElement('div');
     cellAction.className = 'kc-permission-cell';
@@ -1446,6 +1751,13 @@
         elPermissionRows.appendChild(buildPermissionRow(null));
       });
     }
+
+    // カラーパレット − ポップオーバー外クリックで閉じる
+    document.addEventListener('mousedown', function (e) {
+      if (!e.target.closest('.kc-color-picker-wrapper')) {
+        closeAllColorPopovers();
+      }
+    });
   }
 
   document.addEventListener('DOMContentLoaded', function () {
