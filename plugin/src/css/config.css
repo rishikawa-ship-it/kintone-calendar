@@ -463,10 +463,11 @@ body {
 }
 
 /* テーブル全体のラッパー */
+/* overflow: visible にしてカラーピッカーポップオーバーが親に切られないようにする */
 .kc-permission-table {
   border: 1px solid #d8dce4;
   border-radius: 4px;
-  overflow: hidden;
+  overflow: visible;
   margin-bottom: 10px;
 }
 
@@ -490,10 +491,16 @@ body {
   text-overflow: ellipsis;
 }
 
-/* 色・操作カラムは中央揃え */
-.kc-permission-col-color,
+/* 操作カラムは中央揃え */
 .kc-permission-col-action {
   text-align: center;
+}
+
+/* 色カラム: flex で垂直・水平中央配置 */
+.kc-permission-col-color {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* 権限エントリ行コンテナ */
@@ -544,9 +551,14 @@ body {
  * ==================================================================== */
 
 /* ウィジェット全体のラッパー: ポップオーバーの基準位置 */
+/* position: relative は .kc-color-palette (position: absolute) の基準として必須 */
 .kc-color-picker-wrapper {
   position: relative;
-  display: inline-block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
 }
 
 /* 色プレビューボタン（現在選択色を正方形で表示） */
@@ -581,7 +593,9 @@ body {
   border: 1px solid #d0d0d0;
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  padding: 8px;
+  padding: 12px;
+  width: auto;
+  min-width: 240px;
 }
 
 /* hidden 属性が付いている場合は確実に非表示 */
@@ -589,18 +603,45 @@ body {
   display: none;
 }
 
-/* タイルグリッド（5列 × 4行） */
-.kc-color-palette-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 28px);
-  gap: 4px;
+/* テーマの色・標準の色 セクション */
+.kc-color-section {
+  margin-bottom: 8px;
 }
 
-/* 色タイル */
+/* セクション間の区切り線 */
+.kc-color-section + .kc-color-section {
+  margin-top: 0;
+  padding-top: 8px;
+  border-top: 1px solid #e8e8e8;
+}
+
+/* セクションタイトル */
+.kc-color-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+/* テーマの色グリッド（10列 × 5行） */
+.kc-color-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 22px);
+  gap: 3px;
+}
+
+/* 標準の色グリッド（10列 × 1行） */
+.kc-color-standard-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 24px);
+  gap: 3px;
+}
+
+/* 色タイル（共通） */
 .kc-color-tile {
-  width: 28px;
-  height: 28px;
-  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
   border: 2px solid transparent;
   cursor: pointer;
   padding: 0;
@@ -608,8 +649,14 @@ body {
   position: relative;
 }
 
+/* 標準の色タイル（やや大きめ） */
+.kc-color-tile--standard {
+  width: 24px;
+  height: 24px;
+}
+
 .kc-color-tile:hover {
-  transform: scale(1.15);
+  transform: scale(1.2);
   border-color: rgba(0, 0, 0, 0.3);
 }
 
@@ -628,7 +675,7 @@ body {
 .kc-color-tile[aria-selected="true"]::after {
   content: '\2713'; /* ✓ */
   color: #fff;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: bold;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
   position: absolute;

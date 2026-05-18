@@ -345,46 +345,73 @@
    * ==================================================================== */
 
   /**
-   * 編集権限設定で使用するプリセットカラーパレット (REQ_color-picker-ui §2.1.2)
-   * Google Calendar 系統 + Material Design の 20 色。
+   * テーマカラーパレット (REQ_color-picker-ui v2 §2.1.4)
+   * 列優先定義: [色相名, [標準, 明+1, 明+2, 暗-1, 暗-2]]
+   * Material Design Color System の各階調を参考に静的定義。
+   * @type {Array<[string, string[]]>}
+   */
+  var THEME_COLORS = [
+    ['グレー',   ['#757575', '#bdbdbd', '#f5f5f5', '#424242', '#212121']],
+    ['赤',       ['#d50000', '#ef9a9a', '#ffebee', '#b71c1c', '#7f0000']],
+    ['オレンジ', ['#f4511e', '#ffab91', '#fbe9e7', '#bf360c', '#6d1f0a']],
+    ['アンバー', ['#ff8f00', '#ffcc80', '#fff8e1', '#e65100', '#7c3700']],
+    ['黄',       ['#f6bf26', '#fff176', '#fffde7', '#f57f17', '#7c5c00']],
+    ['緑',       ['#0b8043', '#81c784', '#e8f5e9', '#1b5e20', '#0a3010']],
+    ['ティール', ['#00796b', '#80cbc4', '#e0f2f1', '#004d40', '#00251a']],
+    ['青',       ['#1976d2', '#90caf9', '#e3f2fd', '#0d47a1', '#072356']],
+    ['紫',       ['#8e24aa', '#ce93d8', '#f3e5f5', '#6a1b9a', '#3b0a52']],
+    ['ピンク',   ['#e91e63', '#f48fb1', '#fce4ec', '#880e4f', '#4a0526']]
+  ];
+
+  /** 行ラベル（明度段階）: THEME_COLORS の各列の [0]〜[4] に対応 */
+  var THEME_ROW_LABELS = ['(標準)', '(明+1)', '(明+2)', '(暗-1)', '(暗-2)'];
+
+  /**
+   * 標準カラーパレット (REQ_color-picker-ui v2 §2.1.5)
+   * 彩度を重視した 10 色。
    * @type {Array<{name: string, hex: string}>}
    */
-  var PRESET_COLORS = [
-    { name: 'トマト',         hex: '#d50000' },
-    { name: 'フラミンゴ',     hex: '#e67c73' },
-    { name: 'タンジェリン',   hex: '#f4511e' },
-    { name: 'バナナ',         hex: '#f6bf26' },
-    { name: 'セージ',         hex: '#33b679' },
-    { name: 'バジル',         hex: '#0b8043' },
-    { name: 'ピーコック',     hex: '#039be5' },
-    { name: 'ブルーベリー',   hex: '#3f51b5' },
-    { name: 'ラベンダー',     hex: '#7986cb' },
-    { name: 'グレープ',       hex: '#8e24aa' },
-    { name: 'グラファイト',   hex: '#616161' },
-    { name: 'ライトブルー',   hex: '#1976d2' },
-    { name: 'シアン',         hex: '#0097a7' },
-    { name: 'ティール',       hex: '#00796b' },
-    { name: 'ライム',         hex: '#8bc34a' },
-    { name: 'アンバー',       hex: '#ff8f00' },
-    { name: 'ディープオレンジ', hex: '#e64a19' },
-    { name: 'ブラウン',       hex: '#6d4c41' },
-    { name: 'ブルーグレー',   hex: '#546e7a' },
-    { name: 'ピンク',         hex: '#e91e63' }
+  var STANDARD_COLORS = [
+    { name: '純赤',           hex: '#ff0000' },
+    { name: '鮮やかオレンジ', hex: '#ff6600' },
+    { name: '鮮やか黄',       hex: '#ffcc00' },
+    { name: '鮮やか緑',       hex: '#33cc00' },
+    { name: '鮮やかシアン',   hex: '#00cccc' },
+    { name: '鮮やか青',       hex: '#0066ff' },
+    { name: '鮮やか紫',       hex: '#6600cc' },
+    { name: '鮮やかピンク',   hex: '#ff0099' },
+    { name: '黒',             hex: '#000000' },
+    { name: '白',             hex: '#ffffff' }
   ];
 
   /**
-   * 指定した HEX 値に対応するプリセット色の名前を返す
-   * 該当なしの場合は HEX 値をそのまま返す
+   * 指定した HEX 値に対応するプリセット色の名前を返す。
+   * THEME_COLORS（50色）と STANDARD_COLORS（10色）の両方を検索する。
+   * 該当なしの場合は HEX 値をそのまま返す。
    * @param {string} hex - '#RRGGBB' 形式の色
    * @returns {string} 色名 または HEX 値
    */
   function findPresetColorName(hex) {
     var lower = (hex || '').toLowerCase();
-    for (var i = 0; i < PRESET_COLORS.length; i++) {
-      if (PRESET_COLORS[i].hex.toLowerCase() === lower) {
-        return PRESET_COLORS[i].name;
+
+    // THEME_COLORS を検索（列優先定義を走査）
+    for (var col = 0; col < THEME_COLORS.length; col++) {
+      var colName = THEME_COLORS[col][0];
+      var shades = THEME_COLORS[col][1];
+      for (var row = 0; row < shades.length; row++) {
+        if (shades[row].toLowerCase() === lower) {
+          return colName + THEME_ROW_LABELS[row];
+        }
       }
     }
+
+    // STANDARD_COLORS を検索
+    for (var i = 0; i < STANDARD_COLORS.length; i++) {
+      if (STANDARD_COLORS[i].hex.toLowerCase() === lower) {
+        return STANDARD_COLORS[i].name;
+      }
+    }
+
     return hex;
   }
 
@@ -481,7 +508,8 @@
 
   /**
    * カラーパレットポップオーバー要素を生成する。
-   * REQ §5.1 の構造に従い、palette > grid + customArea(nativeInput) の階層にまとめる。
+   * REQ v2 §5.1 の構造に従い:
+   *   palette > テーマセクション + 標準セクション + customArea(nativeInput)
    * @param {string} initialColor - 初期選択色
    * @param {HTMLInputElement} nativeInput - buildColorNativeInput() で生成した hidden input
    * @returns {HTMLElement}
@@ -493,40 +521,102 @@
     palette.setAttribute('aria-label', 'カラーパレット');
     palette.setAttribute('hidden', '');
 
-    var grid = buildColorTileGrid(initialColor);
+    var themeSection = buildColorThemeSection(initialColor);
+    var standardSection = buildColorStandardSection(initialColor);
     var customArea = buildColorCustomArea(nativeInput);
 
-    palette.appendChild(grid);
+    palette.appendChild(themeSection);
+    palette.appendChild(standardSection);
     palette.appendChild(customArea);
 
     return palette;
   }
 
   /**
-   * プリセットカラータイルのグリッドを生成する
-   * @param {string} initialColor - 初期選択色
-   * @returns {HTMLElement}
+   * 1つの色タイルボタンを生成する共通ヘルパー
+   * @param {string} hex - 色の HEX 値
+   * @param {string} name - aria-label 用の色名
+   * @param {string} initialColor - 現在選択中の色（選択状態の初期化に使用）
+   * @param {string} [extraClass] - 追加 CSS クラス名（省略可）
+   * @returns {HTMLButtonElement}
    */
-  function buildColorTileGrid(initialColor) {
-    var grid = document.createElement('div');
-    grid.className = 'kc-color-palette-grid';
-    grid.setAttribute('role', 'listbox');
-    grid.setAttribute('aria-label', 'プリセットカラー');
+  function buildColorTile(hex, name, initialColor, extraClass) {
+    var tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'kc-color-tile' + (extraClass ? ' ' + extraClass : '');
+    tile.setAttribute('role', 'option');
+    tile.setAttribute('aria-label', name);
+    tile.setAttribute('data-color', hex);
+    tile.style.backgroundColor = hex;
+    var isSelected = hex.toLowerCase() === (initialColor || '').toLowerCase();
+    tile.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+    return tile;
+  }
 
-    PRESET_COLORS.forEach(function (preset) {
-      var tile = document.createElement('button');
-      tile.type = 'button';
-      tile.className = 'kc-color-tile';
-      tile.setAttribute('role', 'option');
-      tile.setAttribute('aria-label', preset.name);
-      tile.setAttribute('data-color', preset.hex);
-      tile.style.backgroundColor = preset.hex;
-      var isSelected = preset.hex.toLowerCase() === (initialColor || '').toLowerCase();
-      tile.setAttribute('aria-selected', isSelected ? 'true' : 'false');
-      grid.appendChild(tile);
+  /**
+   * テーマの色セクションを生成する（10列 × 5行 = 50色）
+   * THEME_COLORS は列優先定義のため、行優先に変換してグリッドに追加する。
+   * 行優先変換: row=0〜4, col=0〜9 の順で THEME_COLORS[col][1][row] を取得する。
+   * @param {string} initialColor - 初期選択色
+   * @returns {HTMLElement} .kc-color-section 要素
+   */
+  function buildColorThemeSection(initialColor) {
+    var section = document.createElement('div');
+    section.className = 'kc-color-section';
+    section.setAttribute('role', 'group');
+    section.setAttribute('aria-label', 'テーマの色');
+
+    var title = document.createElement('div');
+    title.className = 'kc-color-section-title';
+    title.textContent = 'テーマの色';
+
+    var grid = document.createElement('div');
+    grid.className = 'kc-color-theme-grid';
+    grid.setAttribute('role', 'listbox');
+    grid.setAttribute('aria-label', 'テーマカラー');
+
+    // 行優先で展開: row 0=標準, 1=明+1, 2=明+2, 3=暗-1, 4=暗-2
+    for (var row = 0; row < 5; row++) {
+      for (var col = 0; col < THEME_COLORS.length; col++) {
+        var colName = THEME_COLORS[col][0];
+        var hex = THEME_COLORS[col][1][row];
+        var name = colName + THEME_ROW_LABELS[row];
+        grid.appendChild(buildColorTile(hex, name, initialColor));
+      }
+    }
+
+    section.appendChild(title);
+    section.appendChild(grid);
+    return section;
+  }
+
+  /**
+   * 標準の色セクションを生成する（1行 × 10色）
+   * @param {string} initialColor - 初期選択色
+   * @returns {HTMLElement} .kc-color-section 要素
+   */
+  function buildColorStandardSection(initialColor) {
+    var section = document.createElement('div');
+    section.className = 'kc-color-section';
+    section.setAttribute('role', 'group');
+    section.setAttribute('aria-label', '標準の色');
+
+    var title = document.createElement('div');
+    title.className = 'kc-color-section-title';
+    title.textContent = '標準の色';
+
+    var grid = document.createElement('div');
+    grid.className = 'kc-color-standard-grid';
+    grid.setAttribute('role', 'listbox');
+    grid.setAttribute('aria-label', '標準カラー');
+
+    STANDARD_COLORS.forEach(function (preset) {
+      grid.appendChild(buildColorTile(preset.hex, preset.name, initialColor, 'kc-color-tile--standard'));
     });
 
-    return grid;
+    section.appendChild(title);
+    section.appendChild(grid);
+    return section;
   }
 
   /**
@@ -543,7 +633,7 @@
     btn.type = 'button';
     btn.className = 'kc-color-custom-btn';
     btn.setAttribute('aria-label', 'カスタムカラーを選択');
-    btn.textContent = 'カスタム...';
+    btn.textContent = 'その他の色...';
 
     area.appendChild(btn);
     area.appendChild(nativeInput);
