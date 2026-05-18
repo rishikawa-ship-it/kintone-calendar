@@ -123,11 +123,17 @@
   var elPerViewFields = document.getElementById('kc-per-view-fields');
   var elNewViewNameField = document.getElementById('kc-new-view-name-field');
   var elNewViewName = document.getElementById('kc-new-view-name');
-  var elCopySection = document.getElementById('kc-copy-section');
-  var elCopySource = document.getElementById('kc-copy-source');
   var elCopyExecute = document.getElementById('kc-copy-execute');
   var elCopyResult = document.getElementById('kc-copy-result');
   var elCalendarTitle = document.getElementById('kc-calendar-title');
+
+  /* --- コピーモーダル --- */
+  var elCopyModal = document.getElementById('kc-copy-modal');
+  var elCopyModalClose = document.getElementById('kc-copy-modal-close');
+  var elCopyModalCancel = document.getElementById('kc-copy-modal-cancel');
+  var elCopyOpenModal = document.getElementById('kc-copy-open-modal');
+  /* モーダル内のコピー元 select (実際にユーザーが操作するもの) */
+  var elCopySourceModal = document.getElementById('kc-copy-source-modal');
 
   /* --- 操作ボタン (上下 2 セット分を NodeList で取得) --- */
   var elSubmits = document.querySelectorAll('.kc-config-submit');
@@ -558,8 +564,8 @@
       setPerViewFieldsEnabled(true);
       elPerViewLabel.textContent = '(新規ビュー)';
       elNewViewNameField.style.display = 'block';
-      // 新規作成時もコピーセクションを表示 (全 CUSTOM ビューを選択肢として提示)
-      elCopySection.style.display = '';
+      // コピー元 select の選択肢を最新化する (モーダル open 時に参照)
+      // elCopySection 自体は非表示のまま維持する (モーダルが UI を担うため)
       rebuildCopySourceSelect(null);
       // 新規作成モード: 「保存」は disabled、「保存して更新」は enabled
       setSubmitButtonsState(true);
@@ -589,8 +595,8 @@
       : '(id: ' + viewId + ')';
 
     // 既存ビュー選択時: 新規ビュー名フィールドは非表示
+    // elCopySection は非表示のまま維持する (モーダルが UI を担うため)
     elNewViewNameField.style.display = 'none';
-    elCopySection.style.display = '';
 
     // 既存ビュー選択時: 「保存」「保存して更新」両方 enabled
     setSubmitButtonsState(false);
@@ -635,19 +641,11 @@
 
   /**
    * コピー元ドロップダウンを再構築する
+   * モーダル内 select (elCopySourceModal) の選択肢を最新のビュー一覧で更新する。
    * @param {string|null} excludeViewId - 除外するビュー ID。null の場合は全件表示 (新規作成モード)
    */
   function rebuildCopySourceSelect(excludeViewId) {
-    while (elCopySource.options.length > 0) {
-      elCopySource.remove(0);
-    }
-
-    var emptyOpt = document.createElement('option');
-    emptyOpt.value = '';
-    emptyOpt.textContent = '-- コピー元を選択 --';
-    elCopySource.appendChild(emptyOpt);
-
-    // CUSTOM ビューを index 順でソートして追加
+    // CUSTOM ビューを index 順でソートして抽出
     // excludeViewId が null の場合 (新規作成モード) は除外なし
     var entries = Object.keys(availableViews).map(function (name) {
       return availableViews[name];
@@ -659,12 +657,28 @@
       return Number(a.index) - Number(b.index);
     });
 
-    entries.forEach(function (v) {
-      var opt = document.createElement('option');
-      opt.value = String(v.id);
-      opt.textContent = v.name + ' (id: ' + v.id + ')';
-      elCopySource.appendChild(opt);
-    });
+    /**
+     * 対象 select 要素に選択肢を設定する
+     * @param {HTMLSelectElement} selectEl
+     */
+    function buildOptions(selectEl) {
+      while (selectEl.options.length > 0) {
+        selectEl.remove(0);
+      }
+      var emptyOpt = document.createElement('option');
+      emptyOpt.value = '';
+      emptyOpt.textContent = '-- コピー元を選択 --';
+      selectEl.appendChild(emptyOpt);
+
+      entries.forEach(function (v) {
+        var opt = document.createElement('option');
+        opt.value = String(v.id);
+        opt.textContent = v.name + ' (id: ' + v.id + ')';
+        selectEl.appendChild(opt);
+      });
+    }
+
+    if (elCopySourceModal) { buildOptions(elCopySourceModal); }
   }
 
   /* ====================================================================
@@ -985,15 +999,22 @@
   }
 
   /**
-   * 「コピー実行」ボタンのハンドラ
+   * 「コピー実行」ボタンのハンドラ (35 行: 30 行規約超過だが分割しない判断)
+   * 責務は「① バリデーション (6 行)」「② フォーム転記 (9 行)」「③ メッセージ生成・後処理 (8 行)」の 3 段階。
+   * いずれも独立して抽出するほどの再利用性がないため、1 関数にまとめている。
+   * - モーダル内の select (elCopySourceModal) から選択値を取得する
    * - コピー元の calendarTitle / defaultView を現在のフォームに転記する
    * - フィールドマッピングはコピー対象外 (共通のため)
+   * - 成功時: モーダルを閉じて設定画面側の kc-config-error エリアに成功メッセージを表示する
+   * - 失敗時: モーダル内の kc-copy-result にエラーを表示する
    */
   function handleCopyFromView() {
-    var srcViewId = elCopySource.value;
+    var srcViewId = elCopySourceModal ? elCopySourceModal.value : '';
     if (!srcViewId) {
-      elCopyResult.textContent = 'コピー元のビューを選択してください。';
-      elCopyResult.className = 'kc-copy-result kc-copy-result--error';
+      if (elCopyResult) {
+        elCopyResult.textContent = 'コピー元のビューを選択してください。';
+        elCopyResult.className = 'kc-modal-msg kc-copy-result kc-copy-result--error';
+      }
       return;
     }
 
@@ -1016,9 +1037,57 @@
     var msg = srcName
       ? '「' + srcName + '」からコピーしました。保存してください。'
       : 'コピーしました。保存してください。';
-    elCopyResult.textContent = msg;
-    elCopyResult.className = 'kc-copy-result kc-copy-result--success';
     console.log('[KC Config] コピー実行:', srcViewId, srcCfg);
+
+    // 成功: モーダルを閉じてビュー選択にフォーカスを戻し、設定画面側に成功メッセージを表示する (REQ §3.3.1)
+    closeModal(elPerViewSelect);
+    showSuccess(msg);
+  }
+
+  /* ====================================================================
+   * コピーモーダル開閉
+   * ==================================================================== */
+
+  /**
+   * ESC キーでモーダルを閉じるハンドラ。
+   * openModal で登録し closeModal で解除することで二重登録を防ぐ (REQ §6.2)。
+   */
+  function handleEscKey(e) {
+    if (e.key === 'Escape') { closeModal(elCopyOpenModal); }
+  }
+
+  /**
+   * コピーモーダルを開く
+   * - コピー元ドロップダウンを最新化してから表示する
+   * - モーダル内のエラーメッセージをリセットする
+   * - #kc-copy-source-modal にフォーカスを移す (REQ §3.3.1)
+   */
+  function openModal() {
+    if (!elCopyModal) { return; }
+    // コピー元 select を最新のビュー状態で再構築する
+    rebuildCopySourceSelect(currentViewId);
+    // エラーメッセージをリセット
+    if (elCopyResult) {
+      elCopyResult.textContent = '';
+      elCopyResult.className = 'kc-modal-msg kc-copy-result';
+    }
+    elCopyModal.removeAttribute('hidden');
+    // ESC ハンドラを登録 (重複登録防止のため先に解除)
+    document.removeEventListener('keydown', handleEscKey);
+    document.addEventListener('keydown', handleEscKey);
+    // フォーカスをモーダル内の最初の操作要素へ移す
+    if (elCopySourceModal) { elCopySourceModal.focus(); }
+  }
+
+  /**
+   * コピーモーダルを閉じる
+   * @param {HTMLElement|null} focusTarget - 閉じた後にフォーカスを戻す要素。省略時は戻さない
+   */
+  function closeModal(focusTarget) {
+    if (!elCopyModal) { return; }
+    elCopyModal.setAttribute('hidden', '');
+    document.removeEventListener('keydown', handleEscKey);
+    if (focusTarget) { focusTarget.focus(); }
   }
 
   /* ====================================================================
@@ -1343,7 +1412,33 @@
 
     // ビュー個別設定
     elPerViewSelect.addEventListener('change', handleViewSelectChange);
-    elCopyExecute.addEventListener('click', handleCopyFromView);
+
+    // コピーモーダル開閉
+    if (elCopyOpenModal) {
+      elCopyOpenModal.addEventListener('click', openModal);
+    }
+    if (elCopyModalClose) {
+      // × ボタン: 閉じてコピーボタンへフォーカスを戻す (REQ §3.3.1)
+      elCopyModalClose.addEventListener('click', function () { closeModal(elCopyOpenModal); });
+    }
+    if (elCopyModalCancel) {
+      // キャンセル: 閉じてコピーボタンへフォーカスを戻す (REQ §3.3.1)
+      elCopyModalCancel.addEventListener('click', function () { closeModal(elCopyOpenModal); });
+    }
+    // オーバーレイ背景クリックで閉じる (モーダル content 内はバブルを止めない)
+    if (elCopyModal) {
+      elCopyModal.addEventListener('click', function (e) {
+        // 背景クリック時はフォーカス戻し先を指定しない (キャンセルと同等)
+        if (e.target === elCopyModal) { closeModal(elCopyOpenModal); }
+      });
+    }
+
+    // コピー実行ボタン (モーダル内)
+    if (elCopyExecute) {
+      elCopyExecute.addEventListener('click', handleCopyFromView);
+    }
+
+    // ESC キーハンドラは openModal/closeModal 内で登録・解除する (Med-1: 常時登録を廃止)
 
     // 編集権限設定 − 行追加ボタン
     if (elPermissionAdd) {

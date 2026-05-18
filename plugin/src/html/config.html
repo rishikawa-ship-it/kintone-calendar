@@ -174,14 +174,21 @@
             カレンダービューの作成・更新と、ビューごとの表示設定を行います。
           </p>
 
-          <!-- 対象ビュー選択 -->
-          <div class="kc-config-field">
-            <label class="kc-config-label" for="kc-per-view-select">対象ビュー</label>
-            <select id="kc-per-view-select" class="kc-config-select">
-              <option value="__new__">-- 新規作成 --</option>
-              <!-- CUSTOM ビューを動的追加 -->
-            </select>
-            <span id="kc-per-view-label" class="kc-config-help-inline" aria-live="polite"></span>
+          <!-- ビュー選択 + コピーボタン 横並び行 -->
+          <div class="kc-view-control-row">
+            <div class="kc-view-control-row__select-wrap">
+              <label class="kc-config-label" for="kc-per-view-select">設定を編集するビュー</label>
+              <div class="kc-view-control-row__inputs">
+                <select id="kc-per-view-select" class="kc-config-select kc-view-control-row__select">
+                  <option value="__new__">-- 新規作成 --</option>
+                  <!-- CUSTOM ビューを動的追加 -->
+                </select>
+                <button type="button" id="kc-copy-open-modal" class="kc-config-btn kc-config-btn-secondary">
+                  ほかビューからコピー
+                </button>
+              </div>
+              <span id="kc-per-view-label" class="kc-config-help-inline" aria-live="polite"></span>
+            </div>
           </div>
 
           <!-- 新規ビュー名入力 (新規選択時のみ表示) -->
@@ -189,23 +196,6 @@
             <label class="kc-config-label" for="kc-new-view-name">新規ビュー名</label>
             <input id="kc-new-view-name" type="text" class="kc-config-input" value="カレンダー" />
             <span class="kc-config-help-inline">既定値: カレンダー</span>
-          </div>
-
-          <!-- 他ビューからコピー -->
-          <div class="kc-config-field-group kc-copy-section" id="kc-copy-section">
-            <label class="kc-config-label">他のビューからコピー</label>
-            <div class="kc-copy-row">
-              <select id="kc-copy-source" class="kc-config-select kc-copy-source-select">
-                <option value="">-- コピー元を選択 --</option>
-              </select>
-              <button type="button" id="kc-copy-execute" class="kc-config-btn kc-config-btn-secondary">
-                コピー実行
-              </button>
-            </div>
-            <p id="kc-copy-result" class="kc-copy-result" aria-live="polite"></p>
-            <p class="kc-config-hint">
-              コピー対象はカレンダータイトルと初期ビューのみです。フィールドマッピングはコピーされません。
-            </p>
           </div>
 
           <!-- ビュー個別設定フォーム -->
@@ -283,6 +273,30 @@
         </div>
 
       </form>
+    </div>
+
+    <!-- ほかビューからのコピー モーダル (初期は hidden) -->
+    <div class="kc-modal-overlay" id="kc-copy-modal" hidden aria-modal="true" role="dialog" aria-labelledby="kc-copy-modal-title">
+      <div class="kc-modal-content">
+        <div class="kc-modal-header">
+          <h3 class="kc-modal-title" id="kc-copy-modal-title">ほかビューからの設定コピー</h3>
+          <button type="button" class="kc-modal-close" id="kc-copy-modal-close" aria-label="閉じる">×</button>
+        </div>
+        <div class="kc-modal-body">
+          <label for="kc-copy-source-modal" class="kc-config-label">コピー元ビュー</label>
+          <select id="kc-copy-source-modal" class="kc-config-select">
+            <option value="">-- コピー元を選択 --</option>
+          </select>
+          <p id="kc-copy-result" class="kc-modal-msg kc-copy-result" aria-live="polite"></p>
+          <p class="kc-config-hint">
+            コピー対象はカレンダータイトルと初期ビューのみです。フィールドマッピングはコピーされません。
+          </p>
+        </div>
+        <div class="kc-modal-footer">
+          <button type="button" id="kc-copy-execute" class="kc-config-btn kc-config-btn-primary">コピー実行</button>
+          <button type="button" id="kc-copy-modal-cancel" class="kc-config-btn kc-config-btn-secondary">キャンセル</button>
+        </div>
+      </div>
     </div>
 
     <script src="../js/config.js"></script>

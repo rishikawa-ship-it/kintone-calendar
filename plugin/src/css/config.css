@@ -586,6 +586,134 @@ body {
 }
 
 /* ====================================================================
+ * ビュー選択 + コピーボタン 横並び行
+ * ==================================================================== */
+
+.kc-view-control-row {
+  margin-bottom: 18px;
+}
+
+.kc-view-control-row__select-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+/* select とボタンを横並びにする行 */
+.kc-view-control-row__inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* コピーボタンは収縮させない (REQ §3.1.3) */
+#kc-copy-open-modal {
+  flex-shrink: 0;
+}
+
+.kc-view-control-row__select {
+  flex: 1;
+  min-width: 200px;
+  max-width: 360px;
+}
+
+/* ====================================================================
+ * コピーモーダル
+ * ==================================================================== */
+
+/* オーバーレイ: 全面固定。hidden 属性で非表示を保証する */
+.kc-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+/* HTML5 hidden 属性が付いている場合は非表示を確実に上書きする */
+.kc-modal-overlay[hidden] {
+  display: none;
+}
+
+/* モーダル本体 */
+.kc-modal-content {
+  background: #fff;
+  padding: 24px;
+  border-radius: 8px;
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  position: relative;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* モーダルヘッダー: タイトルと × ボタンを横並びにする */
+.kc-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+/* タイトル */
+.kc-modal-title {
+  font-size: 15px;
+  font-weight: bold;
+  color: #333;
+  margin: 0;
+}
+
+/* 右端 × 閉じるボタン */
+.kc-modal-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: #666;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.kc-modal-close:hover {
+  color: #333;
+}
+
+/* ポップアップ内メッセージ (エラー・情報) */
+.kc-modal-msg {
+  min-height: 1.4em;
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+/* モーダル本文エリア */
+.kc-modal-body {
+  margin-bottom: 20px;
+}
+
+.kc-modal-body .kc-config-label {
+  margin-bottom: 6px;
+}
+
+.kc-modal-body .kc-config-select {
+  max-width: 100%;
+  width: 100%;
+}
+
+.kc-modal-body .kc-config-hint {
+  margin-top: 8px;
+}
+
+/* モーダルフッター (ボタン行) */
+.kc-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* ====================================================================
  * レスポンシブ
  * ==================================================================== */
 
