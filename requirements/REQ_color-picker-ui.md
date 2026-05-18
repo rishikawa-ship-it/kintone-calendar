@@ -4,8 +4,17 @@
 **作成日**: 2026-05-18
 **最終更新日**: 2026-05-18
 **作成者**: designer (サブエージェント)
-**ステータス**: 初版・推奨案提示済み
+**ステータス**: v2・推奨案提示済み
 **関連文書**: REQ_edit-permission-extension.md, plugin/src/js/config.js, plugin/src/html/config.html, plugin/src/css/config.css
+
+---
+
+## バージョン履歴
+
+| バージョン | 更新日 | 概要 |
+|---|---|---|
+| v1 | 2026-05-18 | 初版作成。フラット 20 色プリセット（Google Calendar / Material Design 系）+ 案 A/B/C の比較表 |
+| v2 | 2026-05-18 | フラット 20 色プリセットを廃止し、Office 風の系統化パレット（テーマの色 10×5 + 標準の色 1×10 + カスタム）に変更。色相×明度のマトリクス構造でユーザーが色を見つけやすくする。 |
 
 ---
 
@@ -28,9 +37,13 @@ HTML5 ネイティブカラーピッカーには以下の制約がある。
 3. （高度な機能・後追い可）RGB 数値入力での精密指定
 4. （高度な機能・後追い可）色相・彩度グラデーション上でのドラッグ指定
 
+#### v2 追加要望（2026-05-18）
+
+- **「色の系統ごとにまとまった UI にしたい」** — フラットなプリセットでなく、色相 × 明度のマトリクス構造（Microsoft Office 風）に変更する
+
 ### 1.3 目的
 
-- カレンダーに適したプリセット色をタイルとして提示し、1 クリックで色を選択できるようにする
+- カレンダーに適したプリセット色を **系統化されたマトリクス構造** のタイルとして提示し、1 クリックで色を選択できるようにする
 - 上記プリセットに加えて、高度な色指定手段（スポイト/RGB/ドラッグ）を段階的に追加できる設計とする
 - プラグイン設定画面の UI 一貫性を維持する
 
@@ -40,48 +53,86 @@ HTML5 ネイティブカラーピッカーには以下の制約がある。
 
 ### 2.1 プリセットパレット（最優先）
 
-#### 2.1.1 タイル仕様
+#### 2.1.1 パレット構成（v2: Office 風マトリクス）
 
-- タイル数: **20 色**（4 列 × 5 行 または 5 列 × 4 行で実装側が調整してよい）
-- グリッドレイアウト: `display: grid; grid-template-columns: repeat(5, 1fr);` を基本とする
-- タイルサイズ: 28px × 28px（ホバー時は 32px × 32px へ拡大、transition: 0.1s）
-- タイル間隔: 4px（gap）
-- タイル形状: 角丸 4px（border-radius）
+パレットは 3 つのセクションで構成する。
 
-#### 2.1.2 推奨プリセット色一覧
-
-Google Calendar 系統 + Material Design + 補色系を組み合わせた 20 色。
-
-| # | 名称 | HEX | 出典系統 |
+| セクション | 構成 | 色数 | 説明 |
 |---|---|---|---|
-| 1 | トマト | `#d50000` | Google Calendar |
-| 2 | フラミンゴ | `#e67c73` | Google Calendar |
-| 3 | タンジェリン | `#f4511e` | Google Calendar |
-| 4 | バナナ | `#f6bf26` | Google Calendar |
-| 5 | セージ | `#33b679` | Google Calendar |
-| 6 | バジル | `#0b8043` | Google Calendar |
-| 7 | ピーコック | `#039be5` | Google Calendar |
-| 8 | ブルーベリー | `#3f51b5` | Google Calendar |
-| 9 | ラベンダー | `#7986cb` | Google Calendar |
-| 10 | グレープ | `#8e24aa` | Google Calendar |
-| 11 | グラファイト | `#616161` | Google Calendar |
-| 12 | ライトブルー | `#1976d2` | Material Design Blue 700（現デフォルト色） |
-| 13 | シアン | `#0097a7` | Material Design Cyan 700 |
-| 14 | ティール | `#00796b` | Material Design Teal 700 |
-| 15 | ライム | `#8bc34a` | Material Design Light Green 500 |
-| 16 | アンバー | `#ff8f00` | Material Design Amber 800 |
-| 17 | ディープオレンジ | `#e64a19` | Material Design Deep Orange 700 |
-| 18 | ブラウン | `#6d4c41` | Material Design Brown 600 |
-| 19 | ブルーグレー | `#546e7a` | Material Design Blue Grey 600 |
-| 20 | ピンク | `#e91e63` | Material Design Pink 500 |
+| テーマの色 | 10 列 × 5 行 | 50 色 | 色相別（10 列）× 明度別（5 行）のマトリクス |
+| 標準の色 | 1 行 × 10 列 | 10 色 | 彩度を重視した鮮やかな色 |
+| カスタム色… | ボタン | - | ネイティブ `<input type="color">` を呼び出す |
 
-#### 2.1.3 アクティブ表示
+合計プリセット: **60 色**（タイル）+ カスタム
+
+#### 2.1.2 テーマの色: 列構成（色相 10 列）
+
+| 列 | 色相系統 | 基準色（行 1）|
+|---|---|---|
+| 1 | グレー | `#757575` |
+| 2 | 赤 | `#d50000` |
+| 3 | オレンジ | `#f4511e` |
+| 4 | アンバー | `#ff8f00` |
+| 5 | 黄 | `#f6bf26` |
+| 6 | 緑 | `#0b8043` |
+| 7 | ティール | `#00796b` |
+| 8 | 青 | `#1976d2` |
+| 9 | 紫 | `#8e24aa` |
+| 10 | ピンク | `#e91e63` |
+
+#### 2.1.3 テーマの色: 行構成（明度 5 段階）
+
+| 行 | 明度ラベル | 方向 |
+|---|---|---|
+| 1 | 標準 | 基準色 |
+| 2 | 明 +1 | 基準より明るい |
+| 3 | 明 +2 | より明るい（最明） |
+| 4 | 暗 -1 | 基準より暗い |
+| 5 | 暗 -2 | より暗い（最暗） |
+
+#### 2.1.4 テーマの色: 確定 HEX 一覧（50 色）
+
+行の並び順は「標準 → 明 +1 → 明 +2 → 暗 -1 → 暗 -2」の 5 段階。HEX は Material Design Color System（400 / 200 / 100 / 700 / 900 相当）を参考に静的定義する。
+
+| 行 | グレー | 赤 | オレンジ | アンバー | 黄 | 緑 | ティール | 青 | 紫 | ピンク |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 標準 (行1) | `#757575` | `#d50000` | `#f4511e` | `#ff8f00` | `#f6bf26` | `#0b8043` | `#00796b` | `#1976d2` | `#8e24aa` | `#e91e63` |
+| 明+1 (行2) | `#bdbdbd` | `#ef9a9a` | `#ffab91` | `#ffcc80` | `#fff176` | `#81c784` | `#80cbc4` | `#90caf9` | `#ce93d8` | `#f48fb1` |
+| 明+2 (行3) | `#f5f5f5` | `#ffebee` | `#fbe9e7` | `#fff8e1` | `#fffde7` | `#e8f5e9` | `#e0f2f1` | `#e3f2fd` | `#f3e5f5` | `#fce4ec` |
+| 暗-1 (行4) | `#424242` | `#b71c1c` | `#bf360c` | `#e65100` | `#f57f17` | `#1b5e20` | `#004d40` | `#0d47a1` | `#6a1b9a` | `#880e4f` |
+| 暗-2 (行5) | `#212121` | `#7f0000` | `#6d1f0a` | `#7c3700` | `#7c5c00` | `#0a3010` | `#00251a` | `#072356` | `#3b0a52` | `#4a0526` |
+
+#### 2.1.5 標準の色: 確定 HEX 一覧（10 色）
+
+彩度を重視した 10 色。1 行に横並びで表示する。
+
+| # | 色名 | HEX |
+|---|---|---|
+| 1 | 純赤 | `#ff0000` |
+| 2 | 鮮やかオレンジ | `#ff6600` |
+| 3 | 鮮やか黄 | `#ffcc00` |
+| 4 | 鮮やか緑 | `#33cc00` |
+| 5 | 鮮やかシアン | `#00cccc` |
+| 6 | 鮮やか青 | `#0066ff` |
+| 7 | 鮮やか紫 | `#6600cc` |
+| 8 | 鮮やかピンク | `#ff0099` |
+| 9 | 黒 | `#000000` |
+| 10 | 白 | `#ffffff` |
+
+#### 2.1.6 タイル仕様
+
+- タイルサイズ: 22px × 22px（テーマの色）/ 24px × 24px（標準の色）
+- ホバー時: scale(1.2)、`transition: transform 0.1s`
+- タイル間隔: 3px（gap）
+- タイル形状: 角丸 3px（border-radius）
+
+#### 2.1.7 アクティブ表示
 
 - 現在選択中のタイルに **チェックマーク（✓）** を白色で表示する
 - または `border: 3px solid #333;` + `box-shadow: 0 0 0 2px #fff inset;` によるハイライト枠でもよい（実装者が視認性の高い方を選択）
 - アクティブでないタイルは `border: 2px solid transparent;` を基本とし、ホバー時に `border-color: rgba(0,0,0,0.3);`
 
-#### 2.1.4 パレットの表示方法
+#### 2.1.8 パレットの表示方法
 
 - 各ルール行の色セルをクリックするとパレットポップアップが開く（インライン展開 or フローティング）
 - パレット外クリックで閉じる
@@ -141,7 +192,7 @@ Google Calendar 系統 + Material Design + 補色系を組み合わせた 20 色
 
 ### 3.1 案 A（独自実装: プリセットタイル + ネイティブ input[type=color] 連携）
 
-カレンダー向けプリセット色（20 色）をタイルグリッドとして表示し、「カスタム」タイルクリックでネイティブ `<input type="color">` を開く。高度な機能（スポイト/RGB/ドラッグ）は OS のネイティブピッカーに委ねる。外部依存ゼロ、実装工数最小。
+カレンダー向けプリセット色（v2: テーマの色 50 色 + 標準の色 10 色）をタイルグリッドとして表示し、「カスタム」タイルクリックでネイティブ `<input type="color">` を開く。高度な機能（スポイト/RGB/ドラッグ）は OS のネイティブピッカーに委ねる。外部依存ゼロ、実装工数最小。
 
 ### 3.2 案 B-1（Pickr CDN ロード）
 
@@ -186,7 +237,7 @@ Google Calendar 系統 + Material Design + 補色系を組み合わせた 20 色
 
 ---
 
-## 5. UI 仕様（フェーズ 1: 案 A ベース）
+## 5. UI 仕様（フェーズ 1: 案 A ベース・v2）
 
 ### 5.1 HTML 構造案
 
@@ -206,23 +257,35 @@ Google Calendar 系統 + Material Design + 補色系を組み合わせた 20 色
 
   <!-- プリセットパレットポップアップ -->
   <div class="kc-color-palette" role="dialog" aria-label="カラーパレット" hidden>
-    <!-- プリセット色タイル（20 個） -->
-    <div class="kc-color-palette-grid" role="listbox" aria-label="プリセットカラー">
-      <button type="button"
-        class="kc-color-tile"
-        role="option"
-        aria-label="トマト"
-        aria-selected="false"
-        data-color="#d50000"
-        style="background-color: #d50000;">
-      </button>
-      <!-- ... 20 色分繰り返し ... -->
+
+    <!-- テーマの色セクション（10列×5行） -->
+    <div class="kc-color-section" role="group" aria-label="テーマの色">
+      <div class="kc-color-section-title">テーマの色</div>
+      <div class="kc-color-theme-grid" role="listbox" aria-label="テーマカラー">
+        <!-- 行1: 標準 -->
+        <button type="button" class="kc-color-tile" role="option"
+          aria-label="グレー" aria-selected="false"
+          data-color="#757575" style="background-color: #757575;"></button>
+        <!-- ...行1の残り9色... -->
+        <!-- 行2〜5: 50色分繰り返し -->
+      </div>
+    </div>
+
+    <!-- 標準の色セクション（1行×10列） -->
+    <div class="kc-color-section" role="group" aria-label="標準の色">
+      <div class="kc-color-section-title">標準の色</div>
+      <div class="kc-color-standard-grid" role="listbox" aria-label="標準カラー">
+        <button type="button" class="kc-color-tile kc-color-tile--standard" role="option"
+          aria-label="純赤" aria-selected="false"
+          data-color="#ff0000" style="background-color: #ff0000;"></button>
+        <!-- ...10色分繰り返し... -->
+      </div>
     </div>
 
     <!-- カスタム色ボタン（ネイティブピッカーを呼び出す） -->
     <div class="kc-color-palette-custom">
       <button type="button" class="kc-color-custom-btn" aria-label="カスタムカラーを選択">
-        カスタム...
+        その他の色...
       </button>
       <!-- ネイティブピッカー（hidden で配置し、カスタムボタンから click() を呼び出す） -->
       <input type="color" class="kc-color-native-input" tabindex="-1"
@@ -260,39 +323,65 @@ Google Calendar 系統 + Material Design + 補色系を組み合わせた 20 色
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   padding: 8px;
   margin-top: 4px;
+  min-width: 240px;
 }
 
-/* タイルグリッド */
-.kc-color-palette-grid {
+/* セクション区切り */
+.kc-color-section + .kc-color-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e8e8e8;
+}
+
+/* セクションタイトル */
+.kc-color-section-title {
+  font-size: 11px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+/* テーマの色グリッド（10列×5行） */
+.kc-color-theme-grid {
   display: grid;
-  grid-template-columns: repeat(5, 28px);
-  gap: 4px;
+  grid-template-columns: repeat(10, 22px);
+  gap: 3px;
 }
 
-/* 色タイル */
+/* 標準の色グリッド（10列×1行） */
+.kc-color-standard-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 24px);
+  gap: 3px;
+}
+
+/* 色タイル（共通） */
 .kc-color-tile {
-  width: 28px;
-  height: 28px;
-  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
   border: 2px solid transparent;
   cursor: pointer;
   padding: 0;
   transition: transform 0.1s, border-color 0.1s;
 }
+.kc-color-tile--standard {
+  width: 24px;
+  height: 24px;
+}
 .kc-color-tile:hover {
-  transform: scale(1.15);
+  transform: scale(1.2);
   border-color: rgba(0, 0, 0, 0.3);
 }
+
 /* アクティブ（選択中）タイル */
 .kc-color-tile[aria-selected="true"] {
   border-color: #333;
   box-shadow: 0 0 0 2px #fff inset;
 }
-/* アクティブタイルのチェックマーク */
 .kc-color-tile[aria-selected="true"]::after {
-  content: '✓';
+  content: '\2713';
   color: #fff;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: bold;
   display: flex;
   align-items: center;
@@ -334,13 +423,62 @@ Google Calendar 系統 + Material Design + 補色系を組み合わせた 20 色
 
 ### 5.3 JS 動作仕様
 
-#### 5.3.1 パレットの開閉
+#### 5.3.1 データ構造
+
+```javascript
+// テーマの色（10列×5行 = 50色）
+// 配列は列優先（同じ列の5行をまとめる）で定義する
+var THEME_COLORS = [
+  // [列名, [行1標準, 行2明+1, 行3明+2, 行4暗-1, 行5暗-2]]
+  ['グレー',    ['#757575', '#bdbdbd', '#f5f5f5', '#424242', '#212121']],
+  ['赤',        ['#d50000', '#ef9a9a', '#ffebee', '#b71c1c', '#7f0000']],
+  ['オレンジ',  ['#f4511e', '#ffab91', '#fbe9e7', '#bf360c', '#6d1f0a']],
+  ['アンバー',  ['#ff8f00', '#ffcc80', '#fff8e1', '#e65100', '#7c3700']],
+  ['黄',        ['#f6bf26', '#fff176', '#fffde7', '#f57f17', '#7c5c00']],
+  ['緑',        ['#0b8043', '#81c784', '#e8f5e9', '#1b5e20', '#0a3010']],
+  ['ティール',  ['#00796b', '#80cbc4', '#e0f2f1', '#004d40', '#00251a']],
+  ['青',        ['#1976d2', '#90caf9', '#e3f2fd', '#0d47a1', '#072356']],
+  ['紫',        ['#8e24aa', '#ce93d8', '#f3e5f5', '#6a1b9a', '#3b0a52']],
+  ['ピンク',    ['#e91e63', '#f48fb1', '#fce4ec', '#880e4f', '#4a0526']],
+];
+
+// 標準の色（10色）
+var STANDARD_COLORS = [
+  { name: '純赤',           hex: '#ff0000' },
+  { name: '鮮やかオレンジ', hex: '#ff6600' },
+  { name: '鮮やか黄',       hex: '#ffcc00' },
+  { name: '鮮やか緑',       hex: '#33cc00' },
+  { name: '鮮やかシアン',   hex: '#00cccc' },
+  { name: '鮮やか青',       hex: '#0066ff' },
+  { name: '鮮やか紫',       hex: '#6600cc' },
+  { name: '鮮やかピンク',   hex: '#ff0099' },
+  { name: '黒',             hex: '#000000' },
+  { name: '白',             hex: '#ffffff' },
+];
+```
+
+#### 5.3.2 グリッド生成方針
+
+- `THEME_COLORS` は列優先で定義し、グリッドへの DOM 追加は **行優先（左上→右上→折り返し）** で行う
+- 行優先に変換するには「行インデックス × 10列を走査」するループで展開する
+
+擬似コード:
+
+```
+for row = 0 to 4:           // 行: 0=標準, 1=明+1, ... 4=暗-2
+  for col = 0 to 9:         // 列: 0=グレー, ... 9=ピンク
+    hex = THEME_COLORS[col][1][row]
+    name = THEME_COLORS[col][0] + ROW_LABELS[row]
+    themeGrid.append(buildTile(hex, name))
+```
+
+#### 5.3.3 パレットの開閉
 
 - `.kc-color-preview-btn` クリック: パレットの `hidden` を toggle し、`aria-expanded` を更新する
 - パレット外クリック（`document` の `mousedown` イベント）: パレットを閉じる
 - `Escape` キー: パレットを閉じ、フォーカスをプレビューボタンに戻す
 
-#### 5.3.2 タイルクリック時の処理
+#### 5.3.4 タイルクリック時の処理
 
 ```
 1. クリックされたタイルの data-color を取得する
@@ -352,7 +490,7 @@ Google Calendar 系統 + Material Design + 補色系を組み合わせた 20 色
    追加の保存処理は不要（既存の collectPermissionRules の参照先を変更しないことが前提）
 ```
 
-#### 5.3.3 カスタムボタンクリック時の処理
+#### 5.3.5 カスタムボタンクリック時の処理
 
 ```
 1. .kc-color-native-input.click() を呼び出してネイティブピッカーを開く
@@ -361,7 +499,7 @@ Google Calendar 系統 + Material Design + 補色系を組み合わせた 20 色
    b. 全タイルの aria-selected を false にリセットする（カスタム色はプリセット外のため）
 ```
 
-#### 5.3.4 既存 collectPermissionRules との連携
+#### 5.3.6 既存 collectPermissionRules との連携
 
 `collectPermissionRules()` は `.kc-permission-color` クラスの要素の `.value` を参照して色を収集している（`config.js:480-487`）。新実装では `.kc-color-native-input` が `<input type="color">` の役割を引き継ぎ、`.kc-permission-color` クラスを引き続き付与することで `collectPermissionRules()` の変更を最小化する。
 
@@ -390,11 +528,27 @@ colorInput.value = (rule && rule.color) ? rule.color : '#1976d2';
 
 `buildPermissionRow` 内で `buildColorPickerWidget(initialColor)` ヘルパー関数を呼び出し、返された `.kc-color-picker-wrapper` 要素を `cellColor` に追加する。ヘルパー関数の詳細は §5.3 の仕様に従う。`collectPermissionRules` が参照する `.kc-permission-color` クラスは `.kc-color-native-input` に付与して互換性を維持する。
 
-### 6.2 config.js: collectPermissionRules 関数（`config.js:480` 付近）
+### 6.2 config.js: プリセット色配列の変更
 
-変更なし（`.kc-permission-color` のセレクタを引き続き使用。§5.3.4 参照）。
+**変更前（v1）:**
 
-### 6.3 config.js: applyPermissionRules 関数
+```javascript
+var PRESET_COLORS = [/* 20色フラット配列 */];
+```
+
+**変更後（v2）:**
+
+```javascript
+// PRESET_COLORS を廃止し、2つの配列に分割する
+var THEME_COLORS = [/* 10列 × 5行 = 50色のマトリクス（§5.3.1 参照）*/];
+var STANDARD_COLORS = [/* 10色の標準色（§5.3.1 参照）*/];
+```
+
+### 6.3 config.js: collectPermissionRules 関数（`config.js:480` 付近）
+
+変更なし（`.kc-permission-color` のセレクタを引き続き使用。§5.3.6 参照）。
+
+### 6.4 config.js: applyPermissionRules 関数
 
 `applyPermissionRules` で保存済みの `color` をフォームに反映する際、`.kc-permission-color` への `.value` セットは従来通り機能する。ただし `.kc-color-preview-btn` の `background-color` スタイルも同期して更新する必要がある。
 
@@ -406,19 +560,20 @@ function syncColorPreview(row, color):
   var previewBtn  = row.querySelector('.kc-color-preview-btn')
   if nativeInput: nativeInput.value = color
   if previewBtn:  previewBtn.style.backgroundColor = color
-  // aria-selected 更新
+  // aria-selected 更新（THEME_COLORS + STANDARD_COLORS の両方を走査）
   row.querySelectorAll('.kc-color-tile').forEach(function(tile) {
     tile.setAttribute('aria-selected',
       tile.dataset.color === color ? 'true' : 'false')
   })
 ```
 
-### 6.4 config.css
+### 6.5 config.css
 
 - `.kc-permission-color` の既存スタイル（`width: 44px;` 等）は削除または `.kc-color-native-input` 向けに hidden 化スタイルへ変更する
 - `config.css:443-586` の `.kc-permission-*` ルールのうち、`.kc-permission-col-color` の幅指定（`grid-template-columns: 2fr 1fr 44px 40px;`）は変更なし（プレビューボタンが 28px のためカラム幅は 44px で余白が生じるが許容範囲）
+- v2 追加スタイル: `.kc-color-section`, `.kc-color-section-title`, `.kc-color-theme-grid`, `.kc-color-standard-grid`（§5.2 参照）
 
-### 6.5 データ構造への影響
+### 6.6 データ構造への影響
 
 **なし。** `permissionRules[].color` は引き続き `#RRGGBB` 形式の文字列を保持する（REQ_edit-permission-extension §6.1）。
 
@@ -439,7 +594,9 @@ function syncColorPreview(row, color):
 
 - プレビューボタン: `aria-label="色を選択: [色名]"`, `aria-expanded`, `aria-haspopup="true"`
 - パレットコンテナ: `role="dialog"`, `aria-label="カラーパレット"`
-- タイルグリッド: `role="listbox"`, `aria-label="プリセットカラー"`
+- テーマの色セクション: `role="group"`, `aria-label="テーマの色"`
+- 標準の色セクション: `role="group"`, `aria-label="標準の色"`
+- タイルグリッド: `role="listbox"`, `aria-label="テーマカラー"` / `"標準カラー"`
 - 各タイル: `role="option"`, `aria-label="[色名]"`, `aria-selected="true/false"`
 - ネイティブ input: `aria-hidden="true"`（スクリーンリーダー向けには直接操作を隠蔽）
 
@@ -450,7 +607,7 @@ function syncColorPreview(row, color):
 ### 8.1 フェーズ 1（案 A）のパフォーマンス影響
 
 - 追加の外部通信: **なし**
-- プラグイン dist サイズ増加: 最小（タイル定義の配列とイベントハンドラのみ。推定 +1〜2KB 未満）
+- プラグイン dist サイズ増加: 微増（v1 の 20 色配列から 60 色配列への変更。推定 +1〜3KB 未満）
 - 初期表示への影響: **なし**（DOM 生成は既存の `buildPermissionRow` 呼び出し時に同期で完結）
 - パレットポップアップの遅延表示は不要（DOM は `buildPermissionRow` で生成済み、`hidden` 属性で表示制御）
 
@@ -470,6 +627,17 @@ function syncColorPreview(row, color):
 | U-2 | kintone 環境の CSP 設定 | 案 B-1（CDN）を採用する場合、`https://cdn.jsdelivr.net` を CSP の `script-src` / `style-src` に追加許可する必要がある可能性がある（bushiroad-group.cybozu.com の CSP 設定未確認）| フェーズ 2 で案 B-1 を再評価する場合は管理者に CSP 設定を確認する。案 B-2（バンドル）であれば CSP の影響を受けない |
 | U-3 | パレットのポジション計算 | ルール行数が多い場合、パレットポップアップが設定画面の表示領域外に出る可能性がある | 実装時に `getBoundingClientRect()` で位置を動的計算し、下方向に余裕がない場合は上方向に展開するロジックを追加する |
 | U-4 | フェーズ 2 の移行タイミング | フェーズ 2 で Pickr バンドルへ移行する際、フェーズ 1 のプリセット UI を廃止するか共存させるかは未定 | Pickr の `swatches` オプションでプリセット色を引き継ぐ方針とし、フェーズ 2 の設計時に決定する |
+| U-5 | 暗-2 行（行5）の視認性 | グレー暗-2（`#212121`）など極暗色はパレット上で黒との区別が難しい場合がある | 実装・レビュー時に視認性を確認し、必要に応じて HEX を微調整する。builder が判断してよい |
+
+### 9.1 確定事項
+
+| Q-ID | 項目 | 決定内容（決定日）|
+|---|---|---|
+| Q1 | フェーズ 1 の実装方針 | 案 A（独自実装）採用 (2026-05-18) |
+| Q2 | プリセット色の出典 | Google Calendar + Material Design 系（v1）→ Office 風マトリクス構造（v2, 2026-05-18） |
+| Q3 | カスタム色の実装 | ネイティブ `<input type="color">` をフォールバックとして残す (2026-05-18) |
+| Q4 | データ形式 | `permissionRules[].color` は `#RRGGBB` 形式を維持 (2026-05-18) |
+| Q15 | カラーパレット構造 | Office 風 (10×5 テーマ + 10 標準 + カスタム) (2026-05-18) |
 
 ---
 
@@ -482,11 +650,13 @@ function syncColorPreview(row, color):
 **スコープ:**
 
 - `buildColorPickerWidget()` ヘルパー関数の実装（`config.js` への追加）
-- プリセット 20 色のタイルグリッド表示
+- `THEME_COLORS`（50 色）と `STANDARD_COLORS`（10 色）の 2 配列定義（`PRESET_COLORS` を廃止）
+- テーマの色（10 列 × 5 行）グリッド表示
+- 標準の色（1 行 × 10 列）グリッド表示
 - タイルクリックによる色設定・プレビュー更新
-- 「カスタム...」ボタン経由でのネイティブ `<input type="color">` へのフォールバック
+- 「その他の色...」ボタン経由でのネイティブ `<input type="color">` へのフォールバック
 - `collectPermissionRules` / `applyPermissionRules` との連携確認
-- CSS スタイルの追加（`config.css`）
+- CSS スタイルの追加（`config.css`）: 2 セクション対応（§5.2 参照）
 - アクセシビリティ対応（aria 属性、キーボード操作）
 
 **スコープ外（フェーズ 2）:**
@@ -505,4 +675,4 @@ function syncColorPreview(row, color):
 
 ---
 
-*このドキュメントは 2026-05-18 に作成されました。フェーズ 1 実装時に変更が生じた場合は本ドキュメントを更新してください。*
+*このドキュメントは 2026-05-18 に初版作成、同日 v2 に更新されました。フェーズ 1 実装時に変更が生じた場合は本ドキュメントを更新してください。*
