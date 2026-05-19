@@ -1,8 +1,8 @@
-# 要件定義書: ビュー個別設定 UI 改修（横並びレイアウト＋コピーポップアップ化）
+# 要件定義書: ビュー個別設定 UI 改修（横並びレイアウト＋コピーポップアップ化＋サブセクション分割）
 
 **文書番号**: REQ_view-config-popup
 **作成日**: 2026-05-18
-**最終更新日**: 2026-05-18（v1.1）
+**最終更新日**: 2026-05-18（v2.0）
 **作成者**: designer (サブエージェント)
 **対象ファイル**:
 - `plugin/src/html/config.html`（HTML 構造変更）
@@ -32,47 +32,55 @@
 
 Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実装した。このとき「対象ビュー選択」と「他ビューからコピー」は縦並びに配置され、コピー機能はセレクトボックス + 実行ボタンをセクション内に常時表示する設計だった。
 
-ユーザーのフィードバックにより、**コピー機能は頻出しない補助操作**であることが明確になった。常時表示はセクションを縦に圧迫し、主操作である「対象ビューの選択 → 設定編集」の視線移動を妨げている。
+v1 改修（commit 実装後）でコピー機能をモーダル化し、ビュー選択とコピーボタンを横並びにした。しかし「ビュー個別設定」セクション内には依然として「**どのビューの設定を行うか**（制御）」と「**指定したビューの個別設定**（編集対象）」が混在したフラット構造になっており、ユーザーの視線が設定対象を認識しにくい。
 
 ### 1.2 目的
 
-本改修で達成する目的は 2 点。
+v2 で達成する目的は 1 点。
 
-1. **「対象ビュー選択」と「コピー」ボタンを横並びにし、主操作のスペースを詰める**
-2. **コピー機能をポップアップ（モーダル）に移し、頻出しない操作が常時 UI を占有しないようにする**
+1. **「ビュー個別設定」セクションを 2 サブセクションに分割し、制御エリアと編集エリアを視覚的に明確に分離する**
+
+v1 の横並びレイアウト・コピーモーダル仕様はそのまま引き継ぐ。
 
 ---
 
 ## 2. 現状
 
-### 2.1 HTML 構造（config.html 行 171–268）
+### 2.1 HTML 構造（config.html 行 172–257）
+
+現状の `#kc-per-view-section` 内の要素は以下のようにフラットに並んでいる。
 
 | 要素 | セレクタ / ID | 役割 |
 |---|---|---|
 | セクションルート | `#kc-per-view-section` | ビュー個別設定全体 |
-| ビュー選択フィールド | `#kc-per-view-select`（親: `.kc-config-field`） | 対象ビューのドロップダウン |
-| ビュー選択ラベル | `#kc-per-view-label`（`span.kc-config-help-inline`） | 選択中ビュー名を aria-live で表示 |
-| コピーセクション | `#kc-copy-section`（`.kc-config-field-group.kc-copy-section`） | コピー機能の wrapper |
-| コピー元選択 | `#kc-copy-source`（`.kc-copy-source-select`） | コピー元ビューのドロップダウン |
-| コピー実行ボタン | `#kc-copy-execute` | コピーを実行するボタン |
-| コピー結果メッセージ | `#kc-copy-result`（`.kc-copy-result`） | 成否メッセージ（aria-live） |
+| ビュー選択行 | `.kc-view-control-row` | ビュー選択プルダウン + コピーボタン横並び行 |
+| ビュー選択 | `#kc-per-view-select` | 対象ビューのドロップダウン |
+| コピーボタン | `#kc-copy-open-modal` | コピーモーダルを開くボタン |
+| 新規ビュー名フィールド | `#kc-new-view-name-field` | 新規作成モード時のみ表示 |
+| 個別設定フォームエリア | `#kc-per-view-fields` | カレンダータイトル・初期ビューラジオボタン |
 
-現状は縦並び配置（ビュー選択 → コピーセクション → フォーム）。コピーセクションは常時表示。
+制御エリア（`.kc-view-control-row` + `#kc-new-view-name-field`）と編集エリア（`#kc-per-view-fields`）に論理的な区切りはなく、視覚的な分離もない。
 
 ### 2.2 JS（config.js）
 
 | 関数 | 行番号 | 概要 |
 |---|---|---|
 | `handleViewSelectChange` | 行 970–985 | 対象ビュー変更時に `currentViewId` を更新して `applyViewConfig` を呼ぶ |
-| `handleCopyFromView` | 行 992–1022 | コピー元 `#kc-copy-source` の選択値を読み、フォームに転記。`#kc-copy-result` に成否を表示 |
+| `handleCopyFromView` | 行 992–1022 | コピー元の選択値を読み、フォームに転記。コピー結果メッセージを表示 |
 | `rebuildCopySourceSelect` | 行 640–668 | コピー元セレクトを再構築。`excludeViewId` で現在ビューを除外 |
 | `loadViews` | 行 836–843 | kintone API からビュー一覧を取得 |
 
-現状はモーダルなし。`handleCopyFromView` 呼出元は `#kc-copy-execute` の click ハンドラのみ。
-
 ### 2.3 CSS
 
-既存クラス `.kc-copy-section`、`.kc-copy-row`（flex 横並び済み）が config.css に定義されている。モーダル用スタイルは未定義。
+| クラス名 | 役割 |
+|---|---|
+| `.kc-view-control-row` | ビュー選択行の wrapper（margin-bottom: 18px） |
+| `.kc-view-control-row__inputs` | select + ボタン横並び flex 行 |
+| `.kc-view-control-row__select` | ビュー選択 select（flex: 1） |
+| `.kc-config-subsection-title` | 小見出しスタイル（既存: §1 編集権限設定 内で使用） |
+| `.kc-per-view-fields` | 個別設定フォームエリア（margin-top: 8px） |
+
+`kc-view-control-panel` および `kc-view-edit-panel` は未定義。
 
 ---
 
@@ -80,35 +88,28 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 
 ### 3.1 レイアウト（横並び配置）
 
+v1 要件をそのまま引き継ぐ。
+
 #### 3.1.1 ビュー選択行の変更
 
-現在の「対象ビュー」フィールド（`.kc-config-field`）に「ほかビューからコピー」ボタンを同居させ、flex 横並びにする。
+`#kc-per-view-select` の右側に `#kc-copy-open-modal` を配置し、flex 横並び。
 
-- `#kc-per-view-select` の右側に `#kc-copy-open-btn`（新規）を配置する
 - ラベル「設定を編集するビュー」はセレクトとボタンの共通ラベルとして上部に表示する
 - `#kc-per-view-label`（span）はセレクトの下 or 右に残す（選択中ビュー名の aria-live 表示を維持）
 
-#### 3.1.2 コピーセクションの撤去
-
-現行の `#kc-copy-section`（`.kc-copy-section`）は HTML から削除する。コピー元セレクト（`#kc-copy-source`）とコピー実行ボタン（`#kc-copy-execute`）はポップアップ内に移動する。
-
-#### 3.1.3 レイアウト確定値
+#### 3.1.2 レイアウト確定値
 
 | 項目 | 値 |
 |---|---|
 | ビュー選択行の配置 | flex、`align-items: center`、`gap: 8px` |
 | `#kc-per-view-select` の幅 | `flex: 1`（残余幅を使用） |
-| `#kc-copy-open-btn` の幅 | `auto`（ボタン幅に合わせる、収縮させない） |
+| `#kc-copy-open-modal` の幅 | `auto`（ボタン幅に合わせる、収縮させない） |
 
 ### 3.2 コピーポップアップ（モーダル仕様）
 
-#### 3.2.1 トリガー
+v1 要件をそのまま引き継ぐ。詳細は v1 §3.2 を参照。主要点のみ再掲。
 
-- `#kc-copy-open-btn` クリックでポップアップを開く
-- ポップアップ表示時に `rebuildCopySourceSelect(currentViewId)` を呼び、現在のビューを除外したコピー元リストを再構築する
-- 新規ビュー作成モード（`currentViewId === null`）の場合は `rebuildCopySourceSelect(null)` で全件表示する
-
-#### 3.2.2 ポップアップ構成
+#### 3.2.1 ポップアップ構成
 
 ```
 [オーバーレイ .kc-modal-overlay]
@@ -122,24 +123,14 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
         ├─ [フッター .kc-modal-footer]
         │    ├─ <button id="kc-copy-execute">コピー実行</button>
         │    └─ <button id="kc-copy-modal-cancel">キャンセル</button>
-        └─ [メッセージ .kc-modal-msg aria-live="polite"]（コピー元未選択エラー表示用）
+        └─ [メッセージ .kc-modal-msg aria-live="polite"]
 ```
 
-#### 3.2.3 モーダルのサイズ・配置
-
-| 項目 | 値 |
-|---|---|
-| 幅 | 480px（固定） |
-| 最大幅 | `calc(100vw - 32px)`（小画面対応） |
-| 配置 | 画面中央（`position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%)`） |
-| オーバーレイ | `position: fixed; inset: 0; background: rgba(0,0,0,0.4)` |
-| z-index | `1000`（kintone 設定画面の標準 UI より手前） |
-
-#### 3.2.4 開閉条件
+#### 3.2.2 開閉条件
 
 | 操作 | 結果 |
 |---|---|
-| `#kc-copy-open-btn` クリック | ポップアップを開く |
+| `#kc-copy-open-modal` クリック | ポップアップを開く |
 | `#kc-copy-modal-cancel` クリック | ポップアップを閉じる（コピー処理なし） |
 | `.kc-modal-close`（×）クリック | ポップアップを閉じる（コピー処理なし） |
 | `.kc-modal-overlay` クリック | ポップアップを閉じる（背景クリック） |
@@ -147,39 +138,121 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 | コピー実行成功 | ポップアップを閉じる → 設定画面側の成功メッセージを表示 |
 | コピー実行失敗（未選択） | ポップアップ内の `.kc-modal-msg` にエラーを表示し、ポップアップは閉じない |
 
-#### 3.2.5 コピー実行フロー
-
-```
-[ユーザー: #kc-copy-execute クリック]
-  ↓
-  kc-copy-source の value を取得
-  ↓
-  value が空 → .kc-modal-msg にエラーメッセージを表示（ポップアップは維持）
-  ↓（value 有）
-  handleCopyFromView() 実行（フォームへの転記ロジックは既存流用）
-  ↓
-  ポップアップを閉じる
-  ↓
-  設定画面の既存メッセージ要素（.kc-config-error）に成功メッセージを表示
-  ↓
-  #kc-per-view-select にフォーカスを戻す
-```
-
 ### 3.3 フォーカス・キーボード操作
 
-#### 3.3.1 初期実装スコープ（必須）
+v1 要件をそのまま引き継ぐ。
 
 | 動作 | 仕様 |
 |---|---|
 | ポップアップを開いたとき | `.kc-modal-content` 内の最初のフォーカス可能要素（`#kc-copy-source`）にフォーカスを移す |
-| ESC キー | ポップアップを閉じ、`#kc-copy-open-btn` にフォーカスを戻す |
-| キャンセル / × クリック | ポップアップを閉じ、`#kc-copy-open-btn` にフォーカスを戻す |
+| ESC キー | ポップアップを閉じ、`#kc-copy-open-modal` にフォーカスを戻す |
+| キャンセル / × クリック | ポップアップを閉じ、`#kc-copy-open-modal` にフォーカスを戻す |
 | コピー実行後 | ポップアップを閉じ、`#kc-per-view-select` にフォーカスを戻す |
 
-#### 3.3.2 Phase 2 送り（スコープ外）
+フォーカストラップ（Tab キーでモーダル内を循環）は Phase 2 送り（スコープ外）。
 
-- **フォーカストラップ**（Tab キーでモーダル内を循環）は初期実装のスコープ外とする
-- 初期実装では Tab キーによるモーダル外への移動を防がない。kintone プラグイン設定画面の利用シーンではスクリーンリーダー利用は稀であるため、許容する
+### 3.4 セクション構造の視覚的分離（v2 新規）
+
+「ビュー個別設定」セクション（`#kc-per-view-section`）を以下 2 サブセクションに分割する。
+
+#### サブセクション構造
+
+```
+セクション: ビュー個別設定
+├ サブセクション①「対象ビューの選択」（制御）
+│  ├ 設定を編集するビュー [プルダウン] [ほかビューからコピー]
+│  └ 新規ビュー名（新規作成モード時のみ表示）
+│
+└ サブセクション②「選択中ビューの設定」（編集対象）
+   ├ カレンダータイトル
+   ├ 初期ビュー（ラジオボタン）
+   └ （将来追加されるビュー固有設定を含む）
+```
+
+#### サブセクションタイトル（確定）
+
+| # | タイトル | 理由 |
+|---|---|---|
+| サブセクション① | **対象ビューの選択** | 「何をするか（選ぶ）」を動詞 + 目的語で端的に表現。「設定対象の選択」より主語が明確。Office 系設定画面の慣習（「対象の選択 → 内容の編集」）に合わせる |
+| サブセクション② | **選択中ビューの設定** | 「①で選んだビューに紐づく設定項目がここにある」という文脈を自然に伝える。「ビュー固有設定」より現在状態（選択中）が明示されている |
+
+#### HTML 構造（確定）
+
+```html
+<section class="kc-config-section" id="kc-per-view-section">
+  <h2 class="kc-config-section-title">ビュー個別設定</h2>
+  <p class="kc-config-section-desc">
+    カレンダービューの作成・更新と、ビューごとの表示設定を行います。
+  </p>
+
+  <!-- サブセクション①: 制御 -->
+  <div class="kc-view-control-panel">
+    <h3 class="kc-config-subsection-title">対象ビューの選択</h3>
+
+    <!-- ビュー選択 + コピーボタン 横並び行 -->
+    <div class="kc-view-control-row">
+      <div class="kc-view-control-row__select-wrap">
+        <label class="kc-config-label" for="kc-per-view-select">設定を編集するビュー</label>
+        <div class="kc-view-control-row__inputs">
+          <select id="kc-per-view-select" class="kc-config-select kc-view-control-row__select">
+            <option value="__new__">-- 新規作成 --</option>
+          </select>
+          <button type="button" id="kc-copy-open-modal" class="kc-config-btn kc-config-btn-secondary">
+            ほかビューからコピー
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新規ビュー名入力 (新規選択時のみ表示) -->
+    <div class="kc-config-field" id="kc-new-view-name-field" style="display: none;">
+      <label class="kc-config-label" for="kc-new-view-name">新規ビュー名</label>
+      <input id="kc-new-view-name" type="text" class="kc-config-input" />
+    </div>
+  </div>
+
+  <!-- サブセクション②: 編集対象 -->
+  <div class="kc-view-edit-panel">
+    <h3 class="kc-config-subsection-title">選択中ビューの設定</h3>
+
+    <!-- ビュー個別設定フォーム -->
+    <div id="kc-per-view-fields" class="kc-per-view-fields">
+      <!-- カレンダータイトル・初期ビュー等（既存フォーム要素をそのまま移動） -->
+    </div>
+  </div>
+</section>
+```
+
+#### CSS スタイル（確定）
+
+```css
+/* サブセクション①: 背景色付きパネル */
+.kc-view-control-panel {
+  background: #f0f4f8;
+  border: 1px solid #d1d9e0;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+/* パネル内の小見出しは上余白をリセット */
+.kc-view-control-panel .kc-config-subsection-title {
+  margin-top: 0;
+}
+
+/* サブセクション②: 通常フォーム（追加スタイルなし） */
+/* .kc-view-edit-panel は特別なスタイル不要。既存 .kc-per-view-fields が管理 */
+```
+
+`kc-view-control-row` の `margin-bottom: 18px` は `.kc-view-control-panel` 内で padding が確保されるため、パネル内では `margin-bottom: 0` に上書きすること。
+
+#### 設計選択根拠（案 A 採用）
+
+| 案 | 内容 | 採否 |
+|---|---|---|
+| A | サブセクション①を背景色 + border + padding で囲む。②は通常フォーム | **採用** |
+| B | 両方に h4 + 区切り線のみ | 不採用（視覚的インパクト不足） |
+| C | ①をコーナー配置の操作パネル風に | 不採用（レスポンシブ難・UX 慣れ必要） |
 
 ---
 
@@ -187,7 +260,7 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 
 **変更なし。**
 
-コピー機能は `currentConfig.views[srcViewId]` の読み取りと現在フォームへの転記のみで、保存データの構造（`views` オブジェクト）に影響しない。モーダルの開閉は UI 状態のみで管理し、永続化データを操作しない。
+コピー機能は `currentConfig.views[srcViewId]` の読み取りと現在フォームへの転記のみ。サブセクション分割は HTML/CSS の構造変更のみで、保存データの構造（`views` オブジェクト）に影響しない。
 
 ---
 
@@ -197,23 +270,26 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 
 既存の `handleCopyFromView`（行 992–1022）はそのまま流用する。
 
-- コピー元値の読み取り元（`elCopySource.value`）はポップアップ内に移動した `#kc-copy-source` を指す。変数 `elCopySource` の参照先を新 DOM に合わせるだけでよい
+- コピー元値の読み取り元（`elCopySource.value`）はモーダル内の `#kc-copy-source-modal` を参照。変数の参照先は変更なし
 - 転記対象（`elCalendarTitle`・`defaultView` ラジオ）は変更なし
-- 現行の成否メッセージ書き込み先（`elCopyResult`）はポップアップ内の `.kc-modal-msg` に変更する
-  - ただし成功メッセージはポップアップを閉じた後に設定画面の `.kc-config-error` 要素に表示する（下記 5.2 参照）
 
 ### 5.2 成功メッセージ表示先の整合
 
 | 状況 | 表示先 | 内容 |
 |---|---|---|
-| コピー元未選択（エラー） | ポップアップ内 `.kc-modal-msg` | 「コピー元のビューを選択してください。」|
-| コピー成功 | 設定画面の既存 `.kc-config-error` 要素（兼用済み） | 「「○○」からコピーしました。保存してください。」|
-
-`.kc-config-error` 要素はすでに成功メッセージにも流用されているため、追加実装は不要。ポップアップを閉じるタイミングで表示するシーケンスを確認すること。
+| コピー元未選択（エラー） | モーダル内 `.kc-modal-msg` | 「コピー元のビューを選択してください。」|
+| コピー成功 | 設定画面の `.kc-config-error` 要素（兼用） | 「「○○」からコピーしました。保存してください。」|
 
 ### 5.3 `rebuildCopySourceSelect` の呼出タイミング
 
-現行は `handleViewSelectChange` の中で暗黙的に更新されているが、ポップアップ化後は**ポップアップを開く直前**に呼び出す。これにより、ポップアップを開いた時点での最新ビュー一覧（現在ビューを除外）を確実に反映できる。
+モーダルを開く直前に `rebuildCopySourceSelect(currentViewId)` を呼び出す。これにより、ポップアップを開いた時点での最新ビュー一覧（現在ビューを除外）を確実に反映する。
+
+### 5.4 サブセクション分割による DOM 移動の影響
+
+`.kc-view-control-row`・`#kc-new-view-name-field` は `.kc-view-control-panel` 内に移動する。
+`#kc-per-view-fields` は `.kc-view-edit-panel` 内に移動する。
+
+いずれも ID / クラス名はそのまま維持するため、JS 側の `getElementById` / `querySelector` 参照は変更不要。
 
 ---
 
@@ -223,23 +299,21 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 
 | 方式 | 採用判断 | 理由 |
 |---|---|---|
-| HTML `<dialog>` 要素 | 不採用 | kintone プラグイン設定画面は kintone が提供する HTML フレームに組み込まれるため、`<dialog>` の `showModal()` が意図通り動作するか実機確認が必要。また CSS の `::backdrop` はカスタマイズしにくい |
-| **`<div class="kc-modal-overlay">` + `<div class="kc-modal-content">`** | **採用** | kintone 設定画面の既存 CSS パターンと一貫性を保てる。UI 自由度が高く、kintone 環境での動作実績を積みやすい |
-
-**採用**: `div` ベースのカスタムモーダル。`kc-modal-overlay` / `kc-modal-content` / `kc-modal-header` / `kc-modal-body` / `kc-modal-footer` のクラス命名で統一する。
+| HTML `<dialog>` 要素 | 不採用 | kintone プラグイン設定画面での `showModal()` 動作に実機確認が必要。`::backdrop` のカスタマイズも難しい |
+| **`<div class="kc-modal-overlay">` + `<div class="kc-modal-content">`** | **採用** | 既存 CSS パターンと一貫性を保てる。kintone 環境での動作実績を積みやすい |
 
 ### 6.2 背景クリック・ESC キー対応
 
 | 機能 | 実装方式 |
 |---|---|
 | 背景クリックで閉じる | `kc-modal-overlay` の click ハンドラで閉じる。`kc-modal-content` の click は `stopPropagation` で遮断する |
-| ESC キーで閉じる | `document` の `keydown` ハンドラでポップアップ表示中のみ `event.key === 'Escape'` を検知して閉じる。ハンドラはポップアップ表示時に登録し、閉じ時に解除（`removeEventListener`）する |
+| ESC キーで閉じる | `document` の `keydown` ハンドラで `event.key === 'Escape'` を検知。ポップアップ表示時に登録し、閉じ時に解除（`removeEventListener`） |
 
 ### 6.3 モーダル DOM の配置場所
 
-モーダル DOM（`.kc-modal-overlay`）は `config.html` の `</body>` 直前に静的に記述し、`display: none` を初期値とする。JS での動的生成は避け、既存の HTML/CSS 管理パターンに合わせる。
+`.kc-modal-overlay` は `config.html` の `</body>` 直前に静的記述し、`hidden` 属性で初期非表示。JS での動的生成は避ける。
 
-### 6.4 CSS クラスの命名
+### 6.4 CSS クラスの命名（全体）
 
 | 要素 | クラス名 |
 |---|---|
@@ -251,6 +325,17 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 | フッター | `.kc-modal-footer` |
 | ポップアップ内メッセージ | `.kc-modal-msg` |
 | 表示状態（JS 制御） | `.kc-modal-overlay--active`（`display: flex` を付与） |
+| **制御サブセクション** | **`.kc-view-control-panel`**（v2 新規） |
+| **編集サブセクション** | **`.kc-view-edit-panel`**（v2 新規） |
+
+### 6.5 サブセクション分割の実装ポイント（v2 新規）
+
+- 追加が必要な CSS クラス: `.kc-view-control-panel`、`.kc-view-edit-panel`
+- `.kc-view-control-panel .kc-config-subsection-title` の `margin-top: 0` でパネル内の上余白をリセット
+- `.kc-view-control-panel` 内の `.kc-view-control-row` は `margin-bottom: 0` に上書きする（パネルの `padding` が余白を代替するため）
+- 既存の `kc-view-control-row` および `kc-view-control-row__*` クラスの grid / flex レイアウトは変更しない
+- `#kc-new-view-name-field` の表示制御（`display: none` / `display: block`）は JS 管理のまま維持
+- `h3.kc-config-subsection-title` は既存 CSS で定義済みのため、スタイル追加は不要。`margin-top: 0` の上書きのみ追加する
 
 ---
 
@@ -260,16 +345,15 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 
 - **Given**: プラグイン設定画面を開く
 - **When**: 「ビュー個別設定」セクションを確認する
-- **Then**: `#kc-per-view-select` と `#kc-copy-open-btn` が同一行に横並びで表示される
-- **And**: コピーセクション（`#kc-copy-section`）が画面に表示されない
+- **Then**: `#kc-per-view-select` と `#kc-copy-open-modal` が同一行に横並びで表示される
 
 ### AC7.2 コピーボタンクリックでポップアップが開く
 
 - **Given**: 既存ビューが 2 件以上存在し、いずれかを「対象ビュー」に選択している
-- **When**: `#kc-copy-open-btn` をクリックする
+- **When**: `#kc-copy-open-modal` をクリックする
 - **Then**: `.kc-modal-overlay--active` が表示され、モーダルが画面中央に現れる
-- **And**: `#kc-copy-source` に現在の対象ビューが除外されたリストが表示される
-- **And**: `#kc-copy-source` にフォーカスが移る
+- **And**: `#kc-copy-source-modal` に現在の対象ビューが除外されたリストが表示される
+- **And**: `#kc-copy-source-modal` にフォーカスが移る
 
 ### AC7.3 コピー元未選択でエラーメッセージがポップアップ内に表示される
 
@@ -284,7 +368,7 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 - **When**: 「コピー実行」をクリックする
 - **Then**: フォームのカレンダータイトルと初期ビューがコピー元の値に更新される
 - **And**: ポップアップが閉じる（`.kc-modal-overlay--active` が除去される）
-- **And**: 設定画面の `.kc-config-error` 要素に「「○○」からコピーしました。保存してください。」が表示される
+- **And**: 設定画面の `.kc-config-error` 要素に成功メッセージが表示される
 - **And**: `#kc-per-view-select` にフォーカスが戻る
 
 ### AC7.5 背景クリックでポップアップが閉じる
@@ -299,27 +383,42 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 - **Given**: ポップアップが開いている
 - **When**: ESC キーを押す
 - **Then**: ポップアップが閉じる
-- **And**: `#kc-copy-open-btn` にフォーカスが戻る
+- **And**: `#kc-copy-open-modal` にフォーカスが戻る
 
 ### AC7.7 キャンセルボタンでポップアップが閉じる
 
 - **Given**: ポップアップが開いている
 - **When**: 「キャンセル」ボタンをクリックする
 - **Then**: ポップアップが閉じる
-- **And**: `#kc-copy-open-btn` にフォーカスが戻る
+- **And**: `#kc-copy-open-modal` にフォーカスが戻る
 
 ### AC7.8 新規ビュー作成モードでもコピーボタンが機能する
 
 - **Given**: 「対象ビュー」ドロップダウンで「-- 新規作成 --」を選択している
-- **When**: `#kc-copy-open-btn` をクリックする
-- **Then**: `#kc-copy-source` に全ての既存ビューがリストアップされる（現在ビュー除外なし）
+- **When**: `#kc-copy-open-modal` をクリックする
+- **Then**: `#kc-copy-source-modal` に全ての既存ビューがリストアップされる（現在ビュー除外なし）
 
 ### AC7.9 既存のビュー選択・設定フォーム動作に影響がない
 
-- **Given**: 「ビュー個別設定」セクションの改修後
+- **Given**: サブセクション分割の改修後
 - **When**: ビュー選択ドロップダウンで各ビューを切り替える
 - **Then**: 各ビューの設定（カレンダータイトル・初期ビュー）が正しくフォームに反映される
 - **And**: コピー機能を使わない通常の編集フローで設定保存が正常に動作する
+
+### AC7.10 サブセクション①が背景色付きパネルで視覚的に分離されている（v2 新規）
+
+- **Given**: プラグイン設定画面を開く
+- **When**: 「ビュー個別設定」セクションを確認する
+- **Then**: `.kc-view-control-panel` が背景色（`#f0f4f8`）・ボーダー・角丸を持つパネルとして表示される
+- **And**: 見出し「対象ビューの選択」がパネル内の最上部に表示される
+- **And**: サブセクション②「選択中ビューの設定」はパネル外の通常フォームとして表示される
+
+### AC7.11 各サブセクションに小見出しが表示されている（v2 新規）
+
+- **Given**: プラグイン設定画面を開く
+- **When**: 「ビュー個別設定」セクションを確認する
+- **Then**: `h3.kc-config-subsection-title` として「対象ビューの選択」が `.kc-view-control-panel` 内に表示される
+- **And**: `h3.kc-config-subsection-title` として「選択中ビューの設定」が `.kc-view-edit-panel` 内に表示される
 
 ---
 
@@ -349,7 +448,9 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 |---|---|
 | L01 | 設定画面のウィンドウ幅を縮小したとき、`#kc-per-view-select` が収縮しボタンが見切れない |
 | L02 | ポップアップが画面中央に表示される（kintone 設定画面スクロール状態でも） |
-| L03 | 旧コピーセクション（セレクトボックス + 実行ボタンの常時表示）が画面に存在しない |
+| L03 | `.kc-view-control-panel` が背景色・ボーダー・角丸を持つパネルとして表示される |
+| L04 | `h3.kc-config-subsection-title`「対象ビューの選択」がパネル内の最上部に余白なく表示される |
+| L05 | サブセクション②「選択中ビューの設定」はパネル外の通常フォームとして表示され、スタイルが混在しない |
 
 ---
 
@@ -357,30 +458,38 @@ Phase 9（commit `35f3c47`）で「ビュー個別設定」セクションを実
 
 ### 9.1 前提条件
 
-- Phase 9（commit `35f3c47`）の実装がベースラインである
-- `plugin/src/css/config.css` にモーダル用スタイルを追記する権限がある
+- v1 改修（コピーモーダル化・横並びレイアウト）の実装がベースラインである
+- `plugin/src/css/config.css` に `.kc-view-control-panel`・`.kc-view-edit-panel` 用スタイルを追記する権限がある
 - kintone プラグイン設定画面の `config.html` は iframe 内で動作するため、`position: fixed` は iframe 内を基準とする（通常動作に影響なし）
 
 ### 9.2 リスク
 
 | リスク | 対策 |
 |---|---|
-| `elCopyResult` 変数が `#kc-copy-result`（旧 DOM）を参照したまま残るとエラーになる | builder は `elCopyResult` の参照先を `.kc-modal-msg` に変更する。旧 `#kc-copy-result` 要素は HTML から削除する |
+| `kc-view-control-row` の `margin-bottom: 18px` がパネル内で余白を過大にする | `.kc-view-control-panel .kc-view-control-row` セレクタで `margin-bottom: 0` に上書きする |
+| `kc-config-subsection-title` がパネル内で既存スタイル（`margin-top: 24px`）のままだと上余白が目立つ | `.kc-view-control-panel .kc-config-subsection-title { margin-top: 0; }` を追加する |
 | ESC キーの `keydown` ハンドラが複数回登録されてポップアップが 2 回閉じようとする | ポップアップを開く関数内で `addEventListener` 前に `removeEventListener` を呼ぶ、またはフラグ管理で二重登録を防ぐ |
 | kintone 設定画面の z-index 競合でモーダルが隠れる | z-index を `1000` に設定。実機確認で調整が必要な場合は builder が報告する |
 
 ### 9.3 未確定事項
 
-本要件定義書に未確定事項なし。ユーザー指示「clarifying questions なしで進めて」に従い、合理的判断で全項目を確定値として記載した。
+| Q | 内容 | ステータス |
+|---|---|---|
+| Q1 | コピーボタン ID | `#kc-copy-open-modal` に確定（既存実装から踏襲） |
+| Q2 | コピー元セレクト ID | `#kc-copy-source-modal` に確定（既存実装から踏襲） |
+| Q3 | モーダル実装方式 | `div` ベースのカスタムモーダルに確定 |
+| Q4 | サブセクション分割 | 制御（背景色付きパネル）と編集（通常フォーム）の 2 分割に確定（2026-05-18） |
 
 ---
 
 ## バージョン履歴
 
-**v1.0 (2026-05-18)**: 初版作成。
+**v1.0 (2026-05-18)**: 初版作成。横並びレイアウト + コピーポップアップ化。
 
-**v1.1 (2026-05-18)**: §3.2.4 のキャンセルボタン ID 表記を実装側 (#kc-copy-modal-cancel) に統一。
+**v1.1 (2026-05-18)**: §3.2.4 のキャンセルボタン ID 表記を実装側（#kc-copy-modal-cancel）に統一。
+
+**v2.0 (2026-05-18)**: ビュー個別設定セクションを「対象ビューの選択（制御）」「選択中ビューの設定（編集）」の 2 サブセクションに分割。制御サブセクションを背景色付きパネル（.kc-view-control-panel）で視覚的に分離。AC7.10・AC7.11 追加。§3.4・§6.5 新規追加。
 
 ---
 
-*本要件定義書: 章数 9、受入基準 9 件（AC7.1〜AC7.9）、未解決事項 0 件。2026-05-18 初版。*
+*本要件定義書: 章数 9、受入基準 11 件（AC7.1〜AC7.11）、未解決事項 0 件。v2.0 2026-05-18 更新。*
