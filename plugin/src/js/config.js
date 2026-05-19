@@ -119,7 +119,6 @@
 
   /* --- セクション 2: ビュー個別設定 (統合版) --- */
   var elPerViewSelect = document.getElementById('kc-per-view-select');
-  var elPerViewLabel = document.getElementById('kc-per-view-label');
   var elPerViewFields = document.getElementById('kc-per-view-fields');
   var elNewViewNameField = document.getElementById('kc-new-view-name-field');
   var elNewViewName = document.getElementById('kc-new-view-name');
@@ -198,6 +197,34 @@
       opt.textContent = item.label + ' (' + item.code + ')';
       selectEl.appendChild(opt);
     });
+
+    // 選択肢再構築後に空文字状態を反映する（applyFieldMapping で値が入る前でも正しく動作させるため）
+    syncSelectEmptyClass(selectEl);
+  }
+
+  /**
+   * select の value が空文字なら kc-select--empty クラスを付与し、それ以外なら除去する。
+   * 未選択時にプレースホルダー option を薄文字で表示するための仕組み。
+   * @param {HTMLSelectElement} selectEl - 対象の select 要素
+   */
+  function syncSelectEmptyClass(selectEl) {
+    if (!selectEl) { return; }
+    if (selectEl.value === '') {
+      selectEl.classList.add('kc-select--empty');
+    } else {
+      selectEl.classList.remove('kc-select--empty');
+    }
+  }
+
+  /**
+   * select に change イベントリスナーを登録して value が空文字かどうかに応じて
+   * kc-select--empty クラスを切り替える。初期状態も即時反映する。
+   * @param {HTMLSelectElement} selectEl - 対象の select 要素
+   */
+  function attachSelectEmptyClassSync(selectEl) {
+    if (!selectEl) { return; }
+    syncSelectEmptyClass(selectEl);
+    selectEl.addEventListener('change', function () { syncSelectEmptyClass(selectEl); });
   }
 
   /**
@@ -881,6 +908,8 @@
         fieldSel.value = rule.fieldCode;
       }
     }
+    // 生成時の選択状態に応じて空文字クラスを設定し、以降の変更も追跡する
+    attachSelectEmptyClassSync(fieldSel);
     return fieldSel;
   }
 
@@ -908,8 +937,11 @@
     if (rule && rule.permission) {
       permSel.value = rule.permission;
     } else {
-      permSel.value = 'edit';
+      // 新規行追加ボタン経由（rule === null）のデフォルトは閲覧者
+      permSel.value = 'view';
     }
+    // 生成時の選択状態に応じて空文字クラスを設定し、以降の変更も追跡する
+    attachSelectEmptyClassSync(permSel);
     return permSel;
   }
 
@@ -998,6 +1030,16 @@
     selectValue(elFieldPlace,    fieldMapping.fieldPlace    || '');
     selectValue(elFieldUserMail, fieldMapping.fieldUserMail || '');
     selectValue(elFieldMemo,     fieldMapping.fieldMemo     || '');
+
+    // 値反映後に空文字状態を再同期する（selectValue が値を設定した後の状態に合わせる）
+    syncSelectEmptyClass(elFieldTitle);
+    syncSelectEmptyClass(elFieldStart);
+    syncSelectEmptyClass(elFieldEnd);
+    syncSelectEmptyClass(elFieldAllday);
+    syncSelectEmptyClass(elFieldColor);
+    syncSelectEmptyClass(elFieldPlace);
+    syncSelectEmptyClass(elFieldUserMail);
+    syncSelectEmptyClass(elFieldMemo);
   }
 
   /**
@@ -1012,7 +1054,6 @@
       var monthRadio = document.querySelector('input[name="defaultView"][value="month"]');
       if (monthRadio) { monthRadio.checked = true; }
       setPerViewFieldsEnabled(true);
-      elPerViewLabel.textContent = '(新規ビュー)';
       elNewViewNameField.style.display = 'block';
       // コピー元 select の選択肢を最新化する (モーダル open 時に参照)
       // elCopySection 自体は非表示のまま維持する (モーダルが UI を担うため)
@@ -1037,12 +1078,6 @@
 
     // フォームを活性化
     setPerViewFieldsEnabled(true);
-
-    // 編集中ビューラベル更新 (select の右にインライン表示)
-    var viewName = findViewNameById(viewId);
-    elPerViewLabel.textContent = viewName
-      ? '(' + viewName + ' / id: ' + viewId + ')'
-      : '(id: ' + viewId + ')';
 
     // 既存ビュー選択時: 新規ビュー名フィールドは非表示
     // elCopySection は非表示のまま維持する (モーダルが UI を担うため)
@@ -1126,6 +1161,9 @@
         opt.textContent = v.name + ' (id: ' + v.id + ')';
         selectEl.appendChild(opt);
       });
+
+      // 選択肢再構築後に空文字状態を反映する
+      syncSelectEmptyClass(selectEl);
     }
 
     if (elCopySourceModal) { buildOptions(elCopySourceModal); }
@@ -1401,7 +1439,7 @@
     entries.forEach(function (v) {
       var opt = document.createElement('option');
       opt.value = String(v.id);
-      opt.textContent = v.name + ' (id: ' + v.id + ')';
+      opt.textContent = v.name;
       elPerViewSelect.appendChild(opt);
     });
 
@@ -1431,6 +1469,9 @@
       elPerViewSelect.value = '__new__';
       applyViewConfig(null);
     }
+
+    // ビュー選択プルダウンの値確定後に空文字クラスを同期する
+    syncSelectEmptyClass(elPerViewSelect);
   }
 
   /* ====================================================================
@@ -1577,7 +1618,7 @@
     // 新規作成時のビュー名バリデーション
     var newViewName = null;
     if (doUpdateViews && currentViewId === null) {
-      newViewName = (elNewViewName.value || 'カレンダー').trim();
+      newViewName = elNewViewName.value.trim();
       if (!newViewName) {
         showError('新規ビュー名を入力してください。');
         return false;
@@ -1867,6 +1908,19 @@
     } catch (e) {
       console.error('[KC Config] ビュー一覧初期化失敗:', e);
     }
+
+    // 静的 select に変更追跡リスナーを登録する（change 時に空文字クラスを切り替える）
+    // populateSelect / applyFieldMapping での初期反映済みのため、ここでは change のみ追加する
+    [
+      elFieldTitle, elFieldStart, elFieldEnd, elFieldAllday,
+      elFieldColor, elFieldPlace, elFieldUserMail, elFieldMemo
+    ].forEach(function (sel) {
+      if (!sel) { return; }
+      sel.addEventListener('change', function () { syncSelectEmptyClass(sel); });
+    });
+
+    // ビュー選択プルダウンにも空文字クラス同期を登録する（初期状態も反映）
+    attachSelectEmptyClassSync(elPerViewSelect);
 
     // ボタンイベントを登録 (上下 2 セット分を forEach で一括登録)
     elSubmits.forEach(function (btn) { btn.addEventListener('click', handleSubmit); });

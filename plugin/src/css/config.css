@@ -191,6 +191,30 @@ body {
 }
 
 /* ====================================================================
+ * 未選択プレースホルダー表示
+ * value="" が選択中の select に付与し、薄文字で表示する。
+ * Chrome / Edge / Firefox で動作確認予定。
+ * 未検証: macOS Safari では select 内の option タグへの color 適用が
+ *         OS レンダラーに委ねられるため、薄文字効果が得られない場合がある。
+ * ==================================================================== */
+
+/* select 自体を薄文字にする（プレースホルダー option が選択されているとき） */
+.kc-select--empty {
+  color: #999;
+}
+
+/* 通常の選択肢は濃い文字色に戻す。
+   ブラウザによっては select > option の color 制御が制限される（未検証）。 */
+.kc-select--empty option {
+  color: #333;
+}
+
+/* プレースホルダー option（value=""）は薄文字のまま維持する */
+.kc-select--empty option[value=""] {
+  color: #999;
+}
+
+/* ====================================================================
  * ラジオボタングループ
  * ==================================================================== */
 
@@ -749,7 +773,7 @@ body {
   color: #fff;
   background-color: #d93025;
   border: none;
-  border-radius: 4px;
+  border-radius: 50%;
   cursor: pointer;
   transition: background-color 0.15s, box-shadow 0.15s;
 }
@@ -766,6 +790,37 @@ body {
 /* 行追加ボタンエリア */
 .kc-permission-add-row {
   margin-top: 0;
+}
+
+/* ====================================================================
+ * ビュー個別設定: サブセクション (REQ_view-config-popup v2 §3.4)
+ * ==================================================================== */
+
+/* サブセクション①: 制御パネル (背景色付き) */
+.kc-view-control-panel {
+  background: #f0f4f8;
+  border: 1px solid #d1d9e0;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+/* パネル内の小見出しは上余白をリセット */
+.kc-view-control-panel .kc-config-subsection-title {
+  margin-top: 0;
+}
+
+/* パネル内の .kc-view-control-row は padding が余白を代替するため下余白を削除 */
+.kc-view-control-panel .kc-view-control-row {
+  margin-bottom: 0;
+}
+
+/* サブセクション②: 編集パネル (通常フォーム、追加スタイルなし) */
+/* .kc-view-edit-panel は特別なスタイル不要。既存 .kc-per-view-fields が管理 */
+
+.kc-view-edit-panel .kc-config-subsection-title {
+  margin-top: 0;
+  margin-bottom: 12px;
 }
 
 /* ====================================================================
@@ -894,6 +949,17 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+/* ====================================================================
+ * input / textarea プレースホルダー色
+ * ブラウザデフォルトより濃く表示される問題を防ぎ、プルダウン未選択時の
+ * #999 と統一する。Firefox は opacity をリセットしないと薄くなるため補正。
+ * ==================================================================== */
+
+.kc-config-input::placeholder {
+  color: #999;
+  opacity: 1;
 }
 
 /* ====================================================================
