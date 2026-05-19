@@ -1,14 +1,19 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (v5: bgColor / textColor 分離)
+ * KC Calendar プラグイン設定画面スクリプト (v6: 権限フィールド設定追加)
  *
- * 保存形式 (version 5):
+ * 保存形式 (version 6):
  *   {
- *     version: 5,
+ *     version: 6,
  *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ... },
  *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, bgColor, textColor }, ... ],
+ *     fieldValueRules: [ { fieldCode, fieldType, value, permission, bgColor, textColor }, ... ],
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
+ * v6 変更点:
+ *   - fieldValueRules 配列を追加（DROPDOWN/RADIO_BUTTON/CHECK_BOX/STATUS ベースの権限判定）
+ *   - 「編集権限設定」を「権限ユーザー設定」にリネーム
+ *   - v5→v6 マイグレーション: fieldValueRules: [] を追加
  * v5 変更点:
  *   - permissionRules 各エントリの color を bgColor + textColor に分離
  *   - v4→v5 マイグレーション: color → bgColor に流用・textColor を WCAG 輝度から自動判定
@@ -68,21 +73,37 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 5)
-   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, views: Object }}
+   * setConfig で保存する全体設定オブジェクト (version 6)
+   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, views: Object }}
    */
   var currentConfig = {
-    version: 5,
+    version: 6,
     fieldMapping: {},
     permissionRules: [],
+    fieldValueRules: [],
     views: {}
   };
 
   /**
-   * 権限設定 UI で使用する USER_SELECT フィールド一覧（loadFields 後に設定される）
+   * 権限ユーザー設定 UI で使用する USER_SELECT フィールド一覧（loadFields 後に設定される）
    * @type {Array<{code: string, label: string}>}
    */
   var permissionFieldOptions = [];
+
+  /**
+   * 権限フィールド設定 UI で使用するフィールド一覧（DROPDOWN/RADIO_BUTTON/CHECK_BOX）
+   * loadFields 後に設定される。STATUS は loadStatuses で別途追加される。
+   * @type {Array<{code: string, label: string, type: string, options: Object}>}
+   */
+  var fieldValueFieldOptions = [];
+
+  /**
+   * 権限フィールド設定で使用するプロセス管理ステータス一覧
+   * loadStatuses 後に設定される。未取得の場合は空配列。
+   * 未検証: kintone プロセス管理が無効のアプリでは空配列になる見込み。
+   * @type {Array<string>}
+   */
+  var statusOptions = [];
 
   /**
    * ビュー個別設定セクションで編集中のビュー ID (文字列)
@@ -113,9 +134,13 @@
   var elFieldMemo = document.getElementById('kc-field-memo');
   var elAlldayLabel = document.getElementById('kc-allday-label');
 
-  /* --- 編集権限設定 --- */
+  /* --- 権限ユーザー設定 (v6 リネーム: 旧「編集権限設定」) --- */
   var elPermissionRows = document.getElementById('kc-permission-rows');
   var elPermissionAdd  = document.getElementById('kc-permission-add');
+
+  /* --- 権限フィールド設定 (v6 新規) --- */
+  var elFieldValueRows = document.getElementById('kc-fieldvalue-rows');
+  var elFieldValueAdd  = document.getElementById('kc-fieldvalue-add');
 
   /* --- セクション 2: ビュー個別設定 (統合版) --- */
   var elPerViewSelect = document.getElementById('kc-per-view-select');
@@ -996,6 +1021,292 @@
     });
   }
 
+  /* ====================================================================
+   * 権限フィールド設定 UI (REQ_edit-permission-extension v6 §4.3)
+   * ==================================================================== */
+
+  /**
+   * フィールドコードに対応する選択肢（values）リストを返す
+   * DROPDOWN/RADIO_BUTTON/CHECK_BOX は fieldValueFieldOptions の options から、
+   * STATUS は statusOptions から取得する。
+   * @param {string} fieldCode - フィールドコード（'$status' の場合は STATUS 扱い）
+   * @param {string} fieldType - フィールド型
+   * @returns {string[]} 選択肢文字列の配列
+   */
+  function getFieldValueOptions(fieldCode, fieldType) {
+    if (fieldType === 'STATUS') {
+      return statusOptions.slice();
+    }
+    var found = fieldValueFieldOptions.filter(function (f) { return f.code === fieldCode; })[0];
+    if (!found || !found.options) return [];
+    return Object.keys(found.options).sort(function (a, b) {
+      var ia = Number((found.options[a] || {}).index);
+      var ib = Number((found.options[b] || {}).index);
+      return ia - ib;
+    });
+  }
+
+  /**
+   * 値選択ドロップダウンの内容を更新する
+   * フィールド選択変更時に呼び出す。
+   * @param {HTMLSelectElement} valueSel - 値ドロップダウン要素
+   * @param {string} fieldCode - 選択されたフィールドコード
+   * @param {string} fieldType - 選択されたフィールド型
+   * @param {string} [selectedValue] - 選択済み値（初期表示用）
+   */
+  function rebuildValueSelect(valueSel, fieldCode, fieldType, selectedValue) {
+    while (valueSel.options.length > 0) { valueSel.remove(0); }
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = fieldCode ? '-- 値を選択 --' : '-- フィールドを選択してください --';
+    emptyOpt.disabled = !fieldCode;
+    valueSel.appendChild(emptyOpt);
+
+    if (!fieldCode) {
+      syncSelectEmptyClass(valueSel);
+      return;
+    }
+
+    var opts = getFieldValueOptions(fieldCode, fieldType);
+    opts.forEach(function (v) {
+      var opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      valueSel.appendChild(opt);
+    });
+
+    if (selectedValue) { valueSel.value = selectedValue; }
+    syncSelectEmptyClass(valueSel);
+  }
+
+  /**
+   * 権限フィールド設定 1 行を生成する
+   * 6 セル: フィールド / 値 / 権限 / 背景色 / 文字色 / 削除
+   * フィールド変更時に値ドロップダウンを動的更新する（§C-2）
+   * @param {Object} [rule] - 既存ルール { fieldCode, fieldType, value, permission, bgColor, textColor }
+   * @returns {HTMLElement} .kc-fieldvalue-row 要素
+   */
+  function buildFieldValueRow(rule) {
+    var row = document.createElement('div');
+    row.className = 'kc-fieldvalue-row';
+
+    var fieldSel = buildFieldValueFieldSelect(rule);
+    var valueSel = buildFieldValueValueSelect(rule, fieldSel);
+    var permSel  = buildFieldValuePermSelect(rule);
+
+    var bgColor   = (rule && rule.bgColor)   ? rule.bgColor   : '#1976d2';
+    var textColor = (rule && rule.textColor)  ? rule.textColor : '#ffffff';
+    var bgWidget   = buildColorPickerWidget(bgColor,   'kc-fieldvalue-bgcolor');
+    var textWidget = buildColorPickerWidget(textColor, 'kc-fieldvalue-textcolor');
+
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn';
+    delBtn.textContent = '−';
+    delBtn.addEventListener('click', function () {
+      row.parentNode && row.parentNode.removeChild(row);
+    });
+
+    var cellField   = wrapCell(fieldSel);
+    var cellValue   = wrapCell(valueSel);
+    var cellPerm    = wrapCell(permSel);
+    var cellBg      = wrapCellCenter('kc-fieldvalue-col-bgcolor', bgWidget);
+    var cellText    = wrapCellCenter('kc-fieldvalue-col-textcolor', textWidget);
+    var cellAction  = wrapCell(delBtn);
+
+    row.appendChild(cellField);
+    row.appendChild(cellValue);
+    row.appendChild(cellPerm);
+    row.appendChild(cellBg);
+    row.appendChild(cellText);
+    row.appendChild(cellAction);
+
+    return row;
+  }
+
+  /**
+   * セルラッパー（.kc-fieldvalue-cell）を生成して子要素を追加する
+   * @param {HTMLElement} child
+   * @returns {HTMLElement}
+   */
+  function wrapCell(child) {
+    var cell = document.createElement('div');
+    cell.className = 'kc-fieldvalue-cell';
+    cell.appendChild(child);
+    return cell;
+  }
+
+  /**
+   * 中央揃えセルラッパーを生成する
+   * @param {string} extraClass - 追加クラス名
+   * @param {HTMLElement} child
+   * @returns {HTMLElement}
+   */
+  function wrapCellCenter(extraClass, child) {
+    var cell = document.createElement('div');
+    cell.className = 'kc-fieldvalue-cell ' + extraClass;
+    cell.appendChild(child);
+    return cell;
+  }
+
+  /**
+   * フィールド選択ドロップダウンを生成する（DROPDOWN/RADIO_BUTTON/CHECK_BOX + STATUS）
+   * @param {Object|null} rule
+   * @returns {HTMLSelectElement}
+   */
+  function buildFieldValueFieldSelect(rule) {
+    var fieldSel = document.createElement('select');
+    fieldSel.className = 'kc-config-select kc-fieldvalue-field-select';
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- フィールドを選択 --';
+    fieldSel.appendChild(emptyOpt);
+
+    // DROPDOWN/RADIO_BUTTON/CHECK_BOX フィールドを追加
+    fieldValueFieldOptions.forEach(function (f) {
+      var opt = document.createElement('option');
+      opt.value = f.code;
+      opt.dataset.fieldtype = f.type;
+      opt.textContent = f.label + ' (' + f.code + ')';
+      fieldSel.appendChild(opt);
+    });
+
+    // プロセス管理ステータスが有効な場合のみ STATUS を追加
+    if (statusOptions.length > 0) {
+      var statusOpt = document.createElement('option');
+      statusOpt.value = '$status';
+      statusOpt.dataset.fieldtype = 'STATUS';
+      statusOpt.textContent = 'ステータス (STATUS)';
+      fieldSel.appendChild(statusOpt);
+    }
+
+    if (rule && rule.fieldCode) {
+      fieldSel.value = rule.fieldCode;
+      if (fieldSel.value !== rule.fieldCode) {
+        var missingOpt = document.createElement('option');
+        missingOpt.value = rule.fieldCode;
+        missingOpt.textContent = rule.fieldCode + ' (フィールドが見つかりません)';
+        missingOpt.className = 'kc-option-missing';
+        fieldSel.appendChild(missingOpt);
+        fieldSel.value = rule.fieldCode;
+      }
+    }
+    attachSelectEmptyClassSync(fieldSel);
+    return fieldSel;
+  }
+
+  /**
+   * 値選択ドロップダウンを生成する（フィールド選択変更時に動的更新）
+   * @param {Object|null} rule
+   * @param {HTMLSelectElement} fieldSel - 連動するフィールド選択ドロップダウン
+   * @returns {HTMLSelectElement}
+   */
+  function buildFieldValueValueSelect(rule, fieldSel) {
+    var valueSel = document.createElement('select');
+    valueSel.className = 'kc-config-select kc-fieldvalue-value-select';
+
+    var initCode  = rule ? rule.fieldCode  : '';
+    var initType  = rule ? (rule.fieldType || '') : '';
+    var initValue = rule ? rule.value : '';
+    rebuildValueSelect(valueSel, initCode, initType, initValue);
+
+    // フィールド選択変更時に値選択肢を更新する
+    fieldSel.addEventListener('change', function () {
+      var selOpt = fieldSel.options[fieldSel.selectedIndex];
+      var newType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
+      rebuildValueSelect(valueSel, fieldSel.value, newType, '');
+    });
+
+    return valueSel;
+  }
+
+  /**
+   * 権限種別ドロップダウンを生成する（権限ユーザー設定と同一の選択肢）
+   * @param {Object|null} rule
+   * @returns {HTMLSelectElement}
+   */
+  function buildFieldValuePermSelect(rule) {
+    var permSel = document.createElement('select');
+    permSel.className = 'kc-config-select kc-fieldvalue-perm-select';
+
+    var permOptions = PERMISSION_OPTIONS_DEFAULT.slice();
+    if (rule && rule.permission === 'delete') {
+      permOptions.unshift({ value: 'delete', label: '管理者' });
+    }
+
+    permOptions.forEach(function (p) {
+      var opt = document.createElement('option');
+      opt.value = p.value;
+      opt.textContent = p.label;
+      permSel.appendChild(opt);
+    });
+
+    if (rule && rule.permission) {
+      permSel.value = rule.permission;
+    } else {
+      permSel.value = 'view';
+    }
+    attachSelectEmptyClassSync(permSel);
+    return permSel;
+  }
+
+  /**
+   * 権限フィールド設定行を DOM から収集して fieldValueRules 配列を返す
+   * fieldCode または value が未選択の行はスキップする
+   * @returns {Array<{fieldCode, fieldType, value, permission, bgColor, textColor}>}
+   */
+  function collectFieldValueRules() {
+    if (!elFieldValueRows) return [];
+    var rows = elFieldValueRows.querySelectorAll('.kc-fieldvalue-row');
+    var result = [];
+    rows.forEach(function (row) {
+      var fieldSel = row.querySelector('.kc-fieldvalue-field-select');
+      var valueSel = row.querySelector('.kc-fieldvalue-value-select');
+      var permSel  = row.querySelector('.kc-fieldvalue-perm-select');
+      var bgInput  = row.querySelector('.kc-fieldvalue-bgcolor');
+      var txtInput = row.querySelector('.kc-fieldvalue-textcolor');
+      if (!fieldSel || !valueSel || !permSel) return;
+
+      var fieldCode = fieldSel.value;
+      var value     = valueSel.value;
+      if (!fieldCode || !value) return;
+
+      var selOpt   = fieldSel.options[fieldSel.selectedIndex];
+      var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
+      // フィールドコードが $status の場合は STATUS 型確定
+      if (fieldCode === '$status') { fieldType = 'STATUS'; }
+
+      result.push({
+        fieldCode:  fieldCode,
+        fieldType:  fieldType,
+        value:      value,
+        permission: permSel.value || 'view',
+        bgColor:    bgInput  ? bgInput.value  : '#1976d2',
+        textColor:  txtInput ? txtInput.value : '#ffffff'
+      });
+    });
+    return result;
+  }
+
+  /**
+   * 保存済み fieldValueRules をフォームに反映する
+   * rules が空配列の場合は空の入力行を 1 つ表示する（UX 向上のため）
+   * @param {Array} rules - fieldValueRules 配列
+   */
+  function applyFieldValueRules(rules) {
+    if (!elFieldValueRows) return;
+    elFieldValueRows.innerHTML = '';
+    if (!Array.isArray(rules) || rules.length === 0) {
+      elFieldValueRows.appendChild(buildFieldValueRow(null));
+      return;
+    }
+    rules.forEach(function (rule) {
+      elFieldValueRows.appendChild(buildFieldValueRow(rule));
+    });
+  }
+
   /**
    * ビュー個別設定セクションの DOM から { calendarTitle, defaultView } を収集する
    * @returns {{ calendarTitle: string, defaultView: string }}
@@ -1235,9 +1546,24 @@
   }
 
   /**
+   * v5 → v6 マイグレーション（§8.8）
+   * permissionRules はそのまま維持し、fieldValueRules を空配列で初期化する
+   * @param {Object} config - version 5 形式の設定オブジェクト
+   * @returns {Object} version 6 形式に変換した設定オブジェクト
+   */
+  function migrateRuleV5toV6(config) {
+    if (!Array.isArray(config.fieldValueRules)) {
+      config.fieldValueRules = [];
+    }
+    config.version = 6;
+    return config;
+  }
+
+  /**
    * kintone.plugin.app.getConfig で設定を取得し currentConfig を初期化する。
    * - 旧フラット設定 (version 2 未満) は破棄して再初期化 (Q11 確定)
-   * - version 2 / 3 / 4 は v5 マイグレーションを実行（§8 参照）
+   * - version 2 / 3 / 4 は v5 マイグレーション → v6 マイグレーションをチェーン実行
+   * - version 5 は v6 マイグレーションを実行
    * - getConfig の返り値は { config: "<JSON文字列>" } 形式を前提とする
    * @returns {void}
    */
@@ -1261,7 +1587,7 @@
     // version 2 未満は破棄 (Q11 確定: 旧フラット設定は再初期化)
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
-      currentConfig = { version: 5, fieldMapping: {}, permissionRules: [], views: {} };
+      currentConfig = { version: 6, fieldMapping: {}, permissionRules: [], fieldValueRules: [], views: {} };
       return;
     }
 
@@ -1273,6 +1599,12 @@
       parsed = migrateToV5(parsed);
     }
 
+    // version 5 → 6 マイグレーション（§8.8）
+    if (Number(parsed.version) < 6) {
+      console.log('[KC Config] version 5 → 6 へマイグレーション実行');
+      parsed = migrateRuleV5toV6(parsed);
+    }
+
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
@@ -1281,10 +1613,11 @@
     });
 
     currentConfig = {
-      version:         5,
-      fieldMapping:    parsed.fieldMapping    || {},
-      permissionRules: rules,
-      views:           parsed.views           || {}
+      version:          6,
+      fieldMapping:     parsed.fieldMapping     || {},
+      permissionRules:  rules,
+      fieldValueRules:  Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
+      views:            parsed.views            || {}
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
   }
@@ -1314,7 +1647,7 @@
       populateSelect(elFieldUserMail, filterFields(props, TEXT_FIELD_TYPES),   true);
       populateSelect(elFieldMemo,     filterFields(props, MEMO_FIELD_TYPES),   true);
 
-      // 編集権限フィールド選択肢を収集する（USER_SELECT 型のみ）
+      // 権限ユーザー設定フィールド選択肢を収集する（USER_SELECT 型のみ）
       permissionFieldOptions = [];
       Object.keys(props).forEach(function (code) {
         var field = props[code];
@@ -1331,12 +1664,61 @@
         return 0;
       });
 
+      // 権限フィールド設定フィールド選択肢を収集する（DROPDOWN/RADIO_BUTTON/CHECK_BOX のみ）
+      fieldValueFieldOptions = [];
+      Object.keys(props).forEach(function (code) {
+        var field = props[code];
+        var ftype = field.type;
+        if (ftype === 'DROPDOWN' || ftype === 'RADIO_BUTTON' || ftype === 'CHECK_BOX') {
+          fieldValueFieldOptions.push({
+            code:    code,
+            label:   field.label || code,
+            type:    ftype,
+            options: field.options || {}
+          });
+        }
+      });
+      fieldValueFieldOptions.sort(function (a, b) {
+        if (a.label < b.label) return -1;
+        if (a.label > b.label) return 1;
+        return 0;
+      });
+
       return props;
     }).catch(function (err) {
       console.error('[KC Config] フィールド一覧取得失敗:', err);
       showError('フィールド一覧の取得に失敗しました。ページを再読み込みしてください。');
       throw err;
     });
+  }
+
+  /**
+   * kintone プロセス管理ステータス一覧を取得して statusOptions に設定する。
+   * アプリにプロセス管理が設定されていない場合は空配列のまま（STATUS フィールドは非表示）。
+   * 未検証: kintone 実機環境での /k/v1/app/status.json の挙動。
+   * @returns {Promise<void>}
+   */
+  async function loadStatuses() {
+    try {
+      var resp = await kintone.api(
+        kintone.api.url('/k/v1/app/status.json', true),
+        'GET',
+        { app: kintone.app.getId() }
+      );
+      if (!resp.enable) {
+        statusOptions = [];
+        return;
+      }
+      var states = resp.states || {};
+      statusOptions = Object.keys(states).sort(function (a, b) {
+        var ia = Number(states[a].index);
+        var ib = Number(states[b].index);
+        return ia - ib;
+      });
+    } catch (err) {
+      console.warn('[KC Config] プロセス管理ステータス取得失敗（プロセス管理未設定の可能性）:', err);
+      statusOptions = [];
+    }
   }
 
   /* ====================================================================
@@ -1638,6 +2020,9 @@
     // 権限設定を収集して currentConfig.permissionRules を更新
     currentConfig.permissionRules = collectPermissionRules();
 
+    // 権限フィールド設定を収集して currentConfig.fieldValueRules を更新
+    currentConfig.fieldValueRules = collectFieldValueRules();
+
     // 現在の編集中ビューの個別設定を保存 (新規作成時は後で ID 確定後に保存)
     if (currentViewId) {
       currentConfig.views[currentViewId] = collectViewConfig();
@@ -1737,11 +2122,12 @@
         }
       });
 
-      // 最終的な保存オブジェクト (version 5 形式: permissionRules + bgColor/textColor を含む)
+      // 最終的な保存オブジェクト (version 6 形式: permissionRules + fieldValueRules を含む)
       var finalConfig = {
-        version: 5,
+        version: 6,
         fieldMapping:    currentConfig.fieldMapping,
-        permissionRules: currentConfig.permissionRules || [],
+        permissionRules: currentConfig.permissionRules  || [],
+        fieldValueRules: currentConfig.fieldValueRules  || [],
         views:           mergedViews
       };
 
@@ -1873,10 +2259,13 @@
    * ==================================================================== */
 
   /**
-   * 設定画面の初期化処理 (統合版: Phase 7 + Phase 9)
+   * 設定画面の初期化処理 (統合版: Phase 7 + Phase 9 + v6)
    * 1. loadInitialConfig() で既存設定取得・初期化
    * 2. loadFields() でフィールドプルダウン構築
+   * 2.5. loadStatuses() でプロセス管理ステータス取得
    * 3. applyFieldMapping() で共通設定を反映
+   * 3.5. applyPermissionRules() で権限ユーザー設定を反映
+   * 3.6. applyFieldValueRules() で権限フィールド設定を反映
    * 4. refreshPerViewSelect() でビュー個別設定プルダウン構築 (orphan 削除も実行)
    * 5. ボタン初期状態を applyViewConfig の結果に合わせて設定
    */
@@ -1895,12 +2284,19 @@
       console.error('[KC Config] フィールド一覧取得失敗:', e);
     }
 
+    // 2.5. プロセス管理ステータスを取得する（権限フィールド設定の STATUS 選択肢に使用）
+    await loadStatuses();
+
     // 3. 共通設定 (fieldMapping) をフォームに反映
     applyFieldMapping(currentConfig.fieldMapping);
 
-    // 3.5. 権限設定 (permissionRules) をフォームに反映
+    // 3.5. 権限ユーザー設定 (permissionRules) をフォームに反映
     // loadFields が完了した後に呼ぶこと（permissionFieldOptions が確定している必要があるため）
     applyPermissionRules(currentConfig.permissionRules || []);
+
+    // 3.6. 権限フィールド設定 (fieldValueRules) をフォームに反映
+    // loadFields + loadStatuses 完了後に呼ぶこと
+    applyFieldValueRules(currentConfig.fieldValueRules || []);
 
     // 4. ビュー一覧を取得してプルダウンを構築 (orphan 削除も実行)
     try {
@@ -1957,10 +2353,17 @@
 
     // ESC キーハンドラは openModal/closeModal 内で登録・解除する (Med-1: 常時登録を廃止)
 
-    // 編集権限設定 − 行追加ボタン
+    // 権限ユーザー設定 − 行追加ボタン
     if (elPermissionAdd) {
       elPermissionAdd.addEventListener('click', function () {
         elPermissionRows.appendChild(buildPermissionRow(null));
+      });
+    }
+
+    // 権限フィールド設定 − 行追加ボタン
+    if (elFieldValueAdd) {
+      elFieldValueAdd.addEventListener('click', function () {
+        elFieldValueRows.appendChild(buildFieldValueRow(null));
       });
     }
 

@@ -143,12 +143,13 @@
      * プラグイン設定が存在しない / version 2 未満の場合はハードコード値を維持する（フォールバック）。
      * KC.Boot.init の冒頭で呼び出すこと。
      *
-     * 保存形式 (version 5):
+     * 保存形式 (version 6):
      *   getConfig 返り値の .config キーを JSON.parse した 2 階層オブジェクトを使用する
      *   {
-     *     version: 5,
+     *     version: 6,
      *     fieldMapping: { ... },
      *     permissionRules: [{ fieldCode, fieldType, permission, bgColor, textColor }, ...],
+     *     fieldValueRules: [{ fieldCode, fieldType, value, permission, bgColor, textColor }, ...],
      *     views: { "<viewId>": { calendarTitle, defaultView } }
      *   }
      *
@@ -246,7 +247,7 @@
         }
       }
 
-      // 権限ルール (version 2 以降) を適用
+      // 権限ユーザールール (version 2 以降) を適用
       // v2/v3/v4 の設定は permissionRules なし / color プロパティのみ → 空配列 or フォールバック
       // bgColor/textColor が欠落したエントリは desktop.js 側で補完する（v4→v5 後方互換）
       var rawRules = Array.isArray(config.permissionRules) ? config.permissionRules : [];
@@ -263,8 +264,13 @@
         };
       });
 
+      // フィールド値権限ルール (version 6 以降) を適用
+      // v5 以前の設定では fieldValueRules が存在しないため空配列として初期化する（§8.3 後方互換）
+      KC.Config.FIELDVALUE_RULES = Array.isArray(config.fieldValueRules) ? config.fieldValueRules : [];
+
       console.log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD,
-        'PERMISSION_RULES:', KC.Config.PERMISSION_RULES);
+        'PERMISSION_RULES:', KC.Config.PERMISSION_RULES,
+        'FIELDVALUE_RULES:', KC.Config.FIELDVALUE_RULES);
     }
   };
 
@@ -273,11 +279,17 @@
   // calendarTitle 設定済みフラグ用プロパティ（空文字 = 未設定 = detectAppName を実行）
   KC.Config.CALENDAR_TITLE = '';
   /**
-   * 編集権限ルール配列 (REQ_edit-permission-extension v5 §6.1)
+   * 権限ユーザールール配列 (REQ_edit-permission-extension v6 §6.1)
    * loadFromPluginConfig で上書きされる。初期値は空配列 = 全員 edit 権限（フォールバック）
    * @type {Array<{fieldCode: string, fieldType: string, permission: string, bgColor: string, textColor: string}>}
    */
   KC.Config.PERMISSION_RULES = [];
+  /**
+   * フィールド値権限ルール配列 (REQ_edit-permission-extension v6 §6.1)
+   * loadFromPluginConfig で上書きされる。初期値は空配列 = フォールバック
+   * @type {Array<{fieldCode: string, fieldType: string, value: string, permission: string, bgColor: string, textColor: string}>}
+   */
+  KC.Config.FIELDVALUE_RULES = [];
 
   /* ====================================================================
    * WCAG 輝度ユーティリティ (REQ §8.7)
@@ -596,6 +608,26 @@
         }
       }
 
+      // フィールド値権限判定用のフィールド値を収集する（REQ_edit-permission-extension v6 §6.2）
+      // CHECK_BOX は文字列配列、その他（DROPDOWN/RADIO_BUTTON/STATUS）は文字列で格納する
+      var valueFields = {};
+      var fvRules = KC.Config.FIELDVALUE_RULES || [];
+      for (var fvi = 0; fvi < fvRules.length; fvi++) {
+        var fvCode = fvRules[fvi].fieldCode;
+        var fvType = fvRules[fvi].fieldType;
+        if (!fvCode) continue;
+        if (fvCode === '$status') {
+          // $status はプロセス管理の特殊フィールドコード（未検証: 実機での動作を要確認）
+          valueFields[fvCode] = rec['$status'] ? (rec['$status'].value || '') : '';
+        } else if (rec[fvCode]) {
+          if (fvType === 'CHECK_BOX') {
+            valueFields[fvCode] = Array.isArray(rec[fvCode].value) ? rec[fvCode].value : [];
+          } else {
+            valueFields[fvCode] = rec[fvCode].value || '';
+          }
+        }
+      }
+
       var ev = {
         id:               rec.$id.value,
         rev:              rec.$revision.value,
@@ -607,7 +639,8 @@
         userMail:         self._safeVal(rec, F.userMail),
         account:          F.account && rec[F.account] ? ((rec[F.account].value || [])[0]?.code || '') : '',
         memo:             self._safeVal(rec, F.memo),
-        permissionFields: permissionFields  /* 権限判定用フィールド値（REQ_edit-permission-extension §6.2） */
+        permissionFields: permissionFields, /* 権限ユーザー判定用フィールド値（REQ §6.2） */
+        valueFields:      valueFields        /* フィールド値権限判定用フィールド値（REQ v6 §6.2） */
       };
 
       if (KC.Config.START_FIELD_TYPE === 'DATE') {
@@ -693,6 +726,16 @@
         var pfc = permRules[pri].fieldCode;
         if (pfc && fieldList.indexOf(pfc) === -1) {
           fieldList.push(pfc);
+        }
+      }
+
+      // フィールド値権限判定用フィールドを取得対象に追加（重複は除去）
+      // $status は kintone のシステムフィールドのため fields パラメータに含めることで取得可能（未検証）
+      var fvRulesForField = KC.Config.FIELDVALUE_RULES || [];
+      for (var fvri = 0; fvri < fvRulesForField.length; fvri++) {
+        var fvfc = fvRulesForField[fvri].fieldCode;
+        if (fvfc && fieldList.indexOf(fvfc) === -1) {
+          fieldList.push(fvfc);
         }
       }
 
@@ -2264,39 +2307,72 @@
     }
 
     /**
-     * イベントに対するログインユーザーの権限と表示色を返す（OR 結合・最高権限採用）
-     * - permissionRules が空配列の場合: edit 相当（フォールバック: 全員編集可）・bgColor/textColor: null
-     * - permissionRules に 1 件以上あるがどのルールにもマッチしない場合: view 相当・色: null
-     * @param {Object} evt - KcEvent（permissionFields を含む）
-     * @returns {{ canEdit: boolean, canDelete: boolean, canOpenDialog: boolean, bgColor: string|null, textColor: string|null }}
+     * フィールド値権限ルール 1 エントリの値マッチを判定する（REQ v6 §5.10）
+     * CHECK_BOX は任意要素一致（§10 U-7）、その他は完全一致
+     * @param {string|string[]} fieldValue - レコードのフィールド値
+     * @param {string} ruleValue - ルールの条件値
+     * @param {string} fieldType - フィールド型
+     * @returns {boolean}
+     */
+    function _matchFieldValue(fieldValue, ruleValue, fieldType) {
+      if (fieldType === 'CHECK_BOX') {
+        return Array.isArray(fieldValue) && fieldValue.indexOf(ruleValue) !== -1;
+      }
+      return fieldValue === ruleValue;
+    }
+
+    /**
+     * イベントに対するログインユーザーの権限と表示色を返す（v6: フィールド値ルール優先）
+     * 優先順位: fieldValueRules → permissionRules → フォールバック（§5.10）
+     * - 両配列が空配列の場合: edit 相当（フォールバック: 全員編集可）・bgColor/textColor: null
+     * - 設定あり・非マッチ: view 相当・色: null
+     * @param {Object} evt - KcEvent（permissionFields / valueFields を含む）
+     * @returns {{ canEdit: boolean, canDelete: boolean, canOpenDialog: boolean, bgColor: string|null, textColor: string|null, source: string }}
      */
     function getPermission(evt) {
-      var rules = KC.Config.PERMISSION_RULES || [];
+      var fvRules   = KC.Config.FIELDVALUE_RULES  || [];
+      var permRules = KC.Config.PERMISSION_RULES  || [];
 
-      // フォールバック: ルールなし = 全員 edit、色なし
-      if (!rules || rules.length === 0) {
-        return { canEdit: true, canDelete: false, canOpenDialog: true, bgColor: null, textColor: null };
+      // 1. フィールド値ルールを先にチェック（§5.10）
+      for (var fi = 0; fi < fvRules.length; fi++) {
+        var fvRule    = fvRules[fi];
+        var fieldVal  = evt.valueFields ? evt.valueFields[fvRule.fieldCode] : undefined;
+        if (fieldVal === undefined) continue;
+        if (!_matchFieldValue(fieldVal, fvRule.value, fvRule.fieldType)) continue;
+        return {
+          canEdit:       _permLevel(fvRule.permission) >= 2,
+          canDelete:     _permLevel(fvRule.permission) >= 3,
+          canOpenDialog: true,
+          bgColor:       fvRule.bgColor   || null,
+          textColor:     fvRule.textColor || null,
+          source:        'field'
+        };
       }
 
-      // 権限: OR 結合・最高権限採用（§5.3）
-      var best = null;
-      for (var i = 0; i < rules.length; i++) {
-        var granted = _evalEntry(rules[i], evt);
-        if (_permLevel(granted) > _permLevel(best)) {
-          best = granted;
+      // 2. ユーザー権限ルール（§5.3 / §5.8）
+      if (permRules.length > 0) {
+        var best = null;
+        for (var pi = 0; pi < permRules.length; pi++) {
+          var granted = _evalEntry(permRules[pi], evt);
+          if (_permLevel(granted) > _permLevel(best)) { best = granted; }
         }
+        var colors = _resolveColors(permRules, evt);
+        if (best !== null) {
+          return {
+            canEdit:       _permLevel(best) >= _permLevel('edit'),
+            canDelete:     _permLevel(best) >= _permLevel('delete'),
+            canOpenDialog: true,
+            bgColor:       colors.bgColor,
+            textColor:     colors.textColor,
+            source:        'user'
+          };
+        }
+        // 設定あり・非マッチ: view 相当・色なし
+        return { canEdit: false, canDelete: false, canOpenDialog: true, bgColor: null, textColor: null, source: 'user' };
       }
 
-      // 色: 上から最初にマッチした行の bgColor/textColor を採用（§5.8）
-      var colors = _resolveColors(rules, evt);
-
-      return {
-        canEdit:       _permLevel(best) >= _permLevel('edit'),
-        canDelete:     _permLevel(best) >= _permLevel('delete'),
-        canOpenDialog: true,
-        bgColor:       colors.bgColor,
-        textColor:     colors.textColor
-      };
+      // 3. 両配列空: フォールバック（全員 edit）
+      return { canEdit: true, canDelete: false, canOpenDialog: true, bgColor: null, textColor: null, source: 'fallback' };
     }
 
     return {

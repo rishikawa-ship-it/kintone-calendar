@@ -793,6 +793,158 @@ body {
 }
 
 /* ====================================================================
+ * 権限フィールド設定 UI (REQ_edit-permission-extension v6 §4.3)
+ * ==================================================================== */
+
+/* セクション全体をカード風に囲む（権限ユーザー設定と同スタイル） */
+.kc-fieldvalue-section {
+  background: #f5f7fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 14px 16px 16px;
+  margin-bottom: 18px;
+}
+
+/* セクション内の小見出し: 上余白を詰める */
+.kc-fieldvalue-section .kc-config-subsection-title {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+/* セクション内ヒント */
+.kc-fieldvalue-section .kc-hint {
+  font-size: 13px;
+  color: #666;
+  margin: 0 0 12px;
+}
+
+/* テーブル全体のラッパー */
+/* overflow: visible にしてカラーピッカーポップオーバーが親に切られないようにする */
+.kc-fieldvalue-table {
+  border: 1px solid #d8dce4;
+  border-radius: 4px;
+  overflow: visible;
+  margin-bottom: 10px;
+}
+
+/* カラムヘッダー行 (6列: フィールド / 値 / 権限 / 背景 / 文字 / 操作) */
+.kc-fieldvalue-header {
+  display: grid;
+  grid-template-columns: 2fr 1.5fr 1fr 44px 44px 40px;
+  gap: 8px;
+  align-items: center;
+  background: #e8ecf1;
+  border-bottom: 1px solid #d0d5df;
+  padding: 6px 8px;
+}
+
+.kc-fieldvalue-header-col {
+  font-size: 12px;
+  font-weight: bold;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 権限エントリ行コンテナ */
+.kc-fieldvalue-rows {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+/* 1 行のエントリ (6列) */
+.kc-fieldvalue-row {
+  display: grid;
+  grid-template-columns: 2fr 1.5fr 1fr 44px 44px 40px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eaecf0;
+  transition: background 0.1s;
+}
+
+.kc-fieldvalue-row:last-child {
+  border-bottom: none;
+}
+
+.kc-fieldvalue-row:hover {
+  background: #f0f4f8;
+}
+
+/* 各セル wrapper */
+.kc-fieldvalue-cell {
+  min-width: 0;
+}
+
+/* フィールド選択ドロップダウン */
+.kc-fieldvalue-field-select {
+  width: 100%;
+  max-width: none;
+}
+
+/* 値選択ドロップダウン */
+.kc-fieldvalue-value-select {
+  width: 100%;
+  max-width: none;
+}
+
+/* 権限種別ドロップダウン */
+.kc-fieldvalue-perm-select {
+  width: 100%;
+  max-width: none;
+}
+
+/* 背景色カラム */
+.kc-fieldvalue-col-bgcolor {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 文字色カラム */
+.kc-fieldvalue-col-textcolor {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 行追加ボタンエリア */
+.kc-fieldvalue-add-row {
+  margin-top: 0;
+}
+
+/* 削除ボタン（権限ユーザー設定の .kc-permission-del-btn と同スタイル） */
+.kc-fieldvalue-del-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin: 0 auto;
+  font-size: 18px;
+  font-weight: bold;
+  line-height: 1;
+  color: #fff;
+  background-color: #d93025;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+
+.kc-fieldvalue-del-btn:hover {
+  background-color: #b3261e;
+  box-shadow: 0 2px 6px rgba(211, 48, 37, 0.4);
+}
+
+.kc-fieldvalue-del-btn:active {
+  background-color: #8c1c16;
+}
+
+/* ====================================================================
  * ビュー個別設定: サブセクション (REQ_view-config-popup v2 §3.4)
  * ==================================================================== */
 

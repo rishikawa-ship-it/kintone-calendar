@@ -252,10 +252,11 @@
           </div>
 
           <!-- ====================================================
-            編集権限設定 (REQ_edit-permission-extension v5 §4)
+            権限ユーザー設定 (REQ_edit-permission-extension v6 §4.2)
+            ※ v5 まで「編集権限設定」だったセクションを v6 でリネーム
           ==================================================== -->
           <div class="kc-permission-section">
-            <h3 class="kc-config-subsection-title">編集権限設定</h3>
+            <h3 class="kc-config-subsection-title">権限ユーザー設定</h3>
             <p class="kc-config-section-desc">
               予定の表示色と編集権限を管理するユーザーをフィールド単位で設定します。
               0 件の場合は全員が編集可能です（既存挙動との後方互換）。
@@ -276,6 +277,35 @@
 
             <div class="kc-permission-add-row">
               <button type="button" id="kc-permission-add" class="kc-config-btn kc-config-btn-secondary">
+                + 行を追加
+              </button>
+            </div>
+          </div>
+
+          <!-- ====================================================
+            権限フィールド設定 (REQ_edit-permission-extension v6 §4.3)
+            フィールド値・ステータスベースの権限判定（ユーザー権限より優先）
+          ==================================================== -->
+          <div class="kc-fieldvalue-section">
+            <h3 class="kc-config-subsection-title">権限フィールド設定</h3>
+            <p class="kc-hint">フィールド値やステータスで権限を制御します（ユーザー権限より優先）。</p>
+
+            <div class="kc-fieldvalue-table">
+              <div class="kc-fieldvalue-header">
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-field">フィールド</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-value">値</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-perm">権限</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-bgcolor">背景</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-textcolor">文字</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-action"></div>
+              </div>
+              <div id="kc-fieldvalue-rows" class="kc-fieldvalue-rows">
+                <!-- 権限フィールド設定行を JavaScript で動的追加 -->
+              </div>
+            </div>
+
+            <div class="kc-fieldvalue-add-row">
+              <button type="button" id="kc-fieldvalue-add" class="kc-config-btn kc-config-btn-secondary">
                 + 行を追加
               </button>
             </div>
