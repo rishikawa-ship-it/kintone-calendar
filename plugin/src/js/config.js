@@ -11,7 +11,7 @@
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
  * v6 変更点:
- *   - fieldValueRules 配列を追加（DROPDOWN/RADIO_BUTTON/CHECK_BOX/STATUS ベースの権限判定）
+ *   - fieldValueRules 配列を追加（DROP_DOWN/RADIO_BUTTON/CHECK_BOX/STATUS ベースの権限判定）
  *   - 「編集権限設定」を「権限ユーザー設定」にリネーム
  *   - v5→v6 マイグレーション: fieldValueRules: [] を追加
  * v5 変更点:
@@ -91,7 +91,7 @@
   var permissionFieldOptions = [];
 
   /**
-   * 権限フィールド設定 UI で使用するフィールド一覧（DROPDOWN/RADIO_BUTTON/CHECK_BOX）
+   * 権限フィールド設定 UI で使用するフィールド一覧（DROP_DOWN/RADIO_BUTTON/CHECK_BOX）
    * loadFields 後に設定される。STATUS は loadStatuses で別途追加される。
    * @type {Array<{code: string, label: string, type: string, options: Object}>}
    */
@@ -100,10 +100,16 @@
   /**
    * 権限フィールド設定で使用するプロセス管理ステータス一覧
    * loadStatuses 後に設定される。未取得の場合は空配列。
-   * 未検証: kintone プロセス管理が無効のアプリでは空配列になる見込み。
    * @type {Array<string>}
    */
   var statusOptions = [];
+
+  /**
+   * プロセス管理が有効かどうかのフラグ。
+   * loadStatuses 完了後に確定する。false の場合はステータス選択肢を非表示にする。
+   * @type {boolean}
+   */
+  var statusEnabled = false;
 
   /**
    * ビュー個別設定セクションで編集中のビュー ID (文字列)
@@ -1027,7 +1033,7 @@
 
   /**
    * フィールドコードに対応する選択肢（values）リストを返す
-   * DROPDOWN/RADIO_BUTTON/CHECK_BOX は fieldValueFieldOptions の options から、
+   * DROP_DOWN/RADIO_BUTTON/CHECK_BOX は fieldValueFieldOptions の options から、
    * STATUS は statusOptions から取得する。
    * @param {string} fieldCode - フィールドコード（'$status' の場合は STATUS 扱い）
    * @param {string} fieldType - フィールド型
@@ -1151,7 +1157,7 @@
   }
 
   /**
-   * フィールド選択ドロップダウンを生成する（DROPDOWN/RADIO_BUTTON/CHECK_BOX + STATUS）
+   * フィールド選択ドロップダウンを生成する（DROP_DOWN/RADIO_BUTTON/CHECK_BOX + STATUS）
    * @param {Object|null} rule
    * @returns {HTMLSelectElement}
    */
@@ -1164,7 +1170,7 @@
     emptyOpt.textContent = '-- フィールドを選択 --';
     fieldSel.appendChild(emptyOpt);
 
-    // DROPDOWN/RADIO_BUTTON/CHECK_BOX フィールドを追加
+    // DROP_DOWN/RADIO_BUTTON/CHECK_BOX フィールドを追加
     fieldValueFieldOptions.forEach(function (f) {
       var opt = document.createElement('option');
       opt.value = f.code;
@@ -1173,8 +1179,8 @@
       fieldSel.appendChild(opt);
     });
 
-    // プロセス管理ステータスが有効な場合のみ STATUS を追加
-    if (statusOptions.length > 0) {
+    // プロセス管理が有効かつステータス一覧が取得できた場合のみ STATUS を追加
+    if (statusEnabled && statusOptions.length > 0) {
       var statusOpt = document.createElement('option');
       statusOpt.value = '$status';
       statusOpt.dataset.fieldtype = 'STATUS';
@@ -1664,12 +1670,12 @@
         return 0;
       });
 
-      // 権限フィールド設定フィールド選択肢を収集する（DROPDOWN/RADIO_BUTTON/CHECK_BOX のみ）
+      // 権限フィールド設定フィールド選択肢を収集する（DROP_DOWN/RADIO_BUTTON/CHECK_BOX のみ）
       fieldValueFieldOptions = [];
       Object.keys(props).forEach(function (code) {
         var field = props[code];
         var ftype = field.type;
-        if (ftype === 'DROPDOWN' || ftype === 'RADIO_BUTTON' || ftype === 'CHECK_BOX') {
+        if (ftype === 'DROP_DOWN' || ftype === 'RADIO_BUTTON' || ftype === 'CHECK_BOX') {
           fieldValueFieldOptions.push({
             code:    code,
             label:   field.label || code,
@@ -1693,9 +1699,9 @@
   }
 
   /**
-   * kintone プロセス管理ステータス一覧を取得して statusOptions に設定する。
-   * アプリにプロセス管理が設定されていない場合は空配列のまま（STATUS フィールドは非表示）。
-   * 未検証: kintone 実機環境での /k/v1/app/status.json の挙動。
+   * kintone プロセス管理ステータス一覧を取得して statusOptions / statusEnabled に設定する。
+   * enable=false またはエラー時は statusEnabled=false・statusOptions=[] のままとし、
+   * ステータス選択肢は buildFieldValueFieldSelect で非表示になる。
    * @returns {Promise<void>}
    */
   async function loadStatuses() {
@@ -1706,6 +1712,8 @@
         { app: kintone.app.getId() }
       );
       if (!resp.enable) {
+        // プロセス管理が無効: ステータス選択肢を非表示にする
+        statusEnabled = false;
         statusOptions = [];
         return;
       }
@@ -1715,8 +1723,10 @@
         var ib = Number(states[b].index);
         return ia - ib;
       });
+      statusEnabled = true;
     } catch (err) {
       console.warn('[KC Config] プロセス管理ステータス取得失敗（プロセス管理未設定の可能性）:', err);
+      statusEnabled = false;
       statusOptions = [];
     }
   }

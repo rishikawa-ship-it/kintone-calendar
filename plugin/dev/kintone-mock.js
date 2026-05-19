@@ -15,6 +15,16 @@
   var PLUGIN_ID = 'kc-dev-plugin-id';
   var APP_ID = 891;
 
+  // プロセス管理モック設定: true にするとステータス選択肢が表示される
+  // false にするとステータス選択肢が完全に非表示になる（enable=false 相当）
+  var MOCK_STATUS_ENABLED = true;
+
+  var MOCK_STATUSES = {
+    '未着手': { index: '0', assignee: { type: 'ONE', entities: [] } },
+    '進行中': { index: '1', assignee: { type: 'ONE', entities: [] } },
+    '完了':   { index: '2', assignee: { type: 'ONE', entities: [] } }
+  };
+
   // モックフィールド一覧 (setup-test-app/fields-config.datetime.json と同等構成)
   var MOCK_FIELDS = {
     title:      { type: 'SINGLE_LINE_TEXT', code: 'title',      label: 'タイトル' },
@@ -99,6 +109,14 @@
             MOCK_VIEWS[k] = params.views[k];
           });
           resolve({ revision: '2' });
+        }
+        // GET /k/v1/app/status.json（プロセス管理設定取得用）
+        else if (/app\/status/.test(url) && method === 'GET') {
+          if (!MOCK_STATUS_ENABLED) {
+            resolve({ enable: false, states: {}, actions: [], revision: '1' });
+          } else {
+            resolve({ enable: true, states: MOCK_STATUSES, actions: [], revision: '1' });
+          }
         }
         // GET /k/v1/app/settings.json（アプリ管理権限チェック用）
         else if (/app\/settings/.test(url) && method === 'GET') {

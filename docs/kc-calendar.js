@@ -437,7 +437,7 @@
       }
 
       // フィールド値権限判定用のフィールド値を収集する（REQ_edit-permission-extension v6 §6.2）
-      // CHECK_BOX は文字列配列、その他（DROPDOWN/RADIO_BUTTON/STATUS）は文字列で格納する
+      // CHECK_BOX は文字列配列、その他（DROP_DOWN/RADIO_BUTTON/STATUS）は文字列で格納する
       var valueFields = {};
       var fvRules = KC.Config.FIELDVALUE_RULES || [];
       for (var fvi = 0; fvi < fvRules.length; fvi++) {

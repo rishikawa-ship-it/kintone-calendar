@@ -19,6 +19,7 @@
 **v5 (2026-05-18)**: 背景色と文字色を分離。`color` プロパティを廃止し、`bgColor` / `textColor` の 2 プロパティに変更。マイグレーション v4→v5 で背景色の WCAG 相対輝度から文字色を自動判定（白 or 黒）。本体側 getPermission の戻り値も拡張。新規行デフォルト: 青背景 #1976d2 + 白文字 #ffffff。
 **v5.1 (2026-05-18)**: 新規行のデフォルト権限を edit (編集者) → view (閲覧者) に変更。安全側に倒すユーザー指示。
 **v6 (2026-05-19)**: 「編集権限設定」を「権限ユーザー設定」にリネーム。新規「権限フィールド設定」(fieldValueRules) を追加 (フィールド値・ステータスベースで権限・色を判定)。優先順位: フィールド値ルール > ユーザー権限ルール (権限・色とも)。kintone プロセス管理ステータスにも対応。v5→v6 マイグレーション規則を §8.8 に追加。Q18〜Q20 を確定事項に追記。
+**v6.1 (2026-05-19)**: フィールド型名表記を kintone 正式型名 `DROP_DOWN`（アンダースコア付き）に統一。
 
 ---
 
@@ -48,7 +49,7 @@ v6 では、ユーザー属性（USER_SELECT フィールド）に基づく**権
 3. フィールドごとに権限の種類 (閲覧のみ / 編集可 / 削除可) を設定できるようにする
 4. 各ルールに背景色・文字色（カラーピッカー）を追加し、該当ユーザーの予定をその色で表示できるようにする
 5. 上記をプラグイン設定画面の GUI として提供し、管理者がコードを変更せずに制御できるようにする
-6. フィールド値（DROPDOWN / RADIO_BUTTON / CHECK_BOX）およびプロセス管理ステータスに基づく権限・色制御を新設し、ユーザー属性によらないレコード属性ベースの制御を可能にする
+6. フィールド値（DROP_DOWN / RADIO_BUTTON / CHECK_BOX）およびプロセス管理ステータスに基づく権限・色制御を新設し、ユーザー属性によらないレコード属性ベースの制御を可能にする
 
 ---
 
@@ -210,21 +211,21 @@ v6 では、ユーザー属性（USER_SELECT フィールド）に基づく**権
 
 フィールド値に基づいて権限・表示色を判定する `fieldValueRules` を新設する。
 
-- **対応フィールド型**: `DROPDOWN` / `RADIO_BUTTON` / `CHECK_BOX` / `STATUS`
+- **対応フィールド型**: `DROP_DOWN` / `RADIO_BUTTON` / `CHECK_BOX` / `STATUS`
 - **判定方式**:
-  - `DROPDOWN` / `RADIO_BUTTON` / `STATUS`: レコードのフィールド値（文字列）と `rule.value` の完全一致
+  - `DROP_DOWN` / `RADIO_BUTTON` / `STATUS`: レコードのフィールド値（文字列）と `rule.value` の完全一致
   - `CHECK_BOX`: レコードのフィールド値（文字列配列）のいずれかの要素と `rule.value` が一致（任意要素一致、§10 U-7 参照）
 - 各 `fieldValueRule` エントリは `{ fieldCode, fieldType, value, permission, bgColor, textColor }` の 6 要素を保持する
 - 新規ルール追加時のデフォルト: `permission: 'view'`、`bgColor: '#1976d2'`、`textColor: '#ffffff'`
 - ステータスフィールドは通常 `$status` フィールドコードまたはアプリ内で設定したフィールドコードでアクセスする（§10 U-9 参照）
 
 **フィールド選択 UI**:
-- DROPDOWN / RADIO_BUTTON / CHECK_BOX 型: `GET /k/v1/app/form/fields.json` から取得
+- DROP_DOWN / RADIO_BUTTON / CHECK_BOX 型: `GET /k/v1/app/form/fields.json` から取得
 - STATUS 型: `GET /k/v1/app/status.json` から取得し、フィールド選択ドロップダウンに「ステータス (STATUS)」として追加
 
 **値選択 UI**:
 - 選択したフィールドの選択肢を動的に表示する
-- DROPDOWN / RADIO_BUTTON / CHECK_BOX: フォームフィールド定義の `options` から取得
+- DROP_DOWN / RADIO_BUTTON / CHECK_BOX: フォームフィールド定義の `options` から取得
 - STATUS: プロセス管理の各ステータス名を `GET /k/v1/app/status.json` から取得
 
 #### FR-9: 権限の優先順位（新規）
@@ -348,12 +349,12 @@ kintone のプロセス管理機能が有効なアプリにおいて、プロセ
 #### 各行の構成要素
 
 1. **フィールドプルダウン** (`<select>`)
-   - DROPDOWN / RADIO_BUTTON / CHECK_BOX 型: `GET /k/v1/app/form/fields.json` の結果から該当型を抽出
+   - DROP_DOWN / RADIO_BUTTON / CHECK_BOX 型: `GET /k/v1/app/form/fields.json` の結果から該当型を抽出
    - STATUS 型: `GET /k/v1/app/status.json` でプロセス管理が有効な場合のみ「ステータス (STATUS)」を追加
    - 先頭オプションは「-- フィールドを選択 --」(空値)
 2. **値プルダウン** (`<select>`)
    - フィールドプルダウンの選択変更に連動して動的に更新する
-   - DROPDOWN / RADIO_BUTTON / CHECK_BOX: フォームフィールド定義の `options` からラベルを表示
+   - DROP_DOWN / RADIO_BUTTON / CHECK_BOX: フォームフィールド定義の `options` からラベルを表示
    - STATUS: プロセス管理の各ステータス名を表示
    - フィールド未選択時は「-- フィールドを選択してください --」(無効)
 3. **権限種別プルダウン** (`<select>`)
@@ -377,7 +378,7 @@ kintone のプロセス管理機能が有効なアプリにおいて、プロセ
 権限ユーザー設定の絞り込みは `USER_SELECT` 型の直接比較で実装する（`field.type === 'USER_SELECT'`）。
 
 権限フィールド設定の絞り込みは以下の型の直接比較で実装する:
-- `field.type === 'DROPDOWN'`
+- `field.type === 'DROP_DOWN'`
 - `field.type === 'RADIO_BUTTON'`
 - `field.type === 'CHECK_BOX'`
 - STATUS 型はフォームフィールドではなくプロセス管理として別途取得する
@@ -597,7 +598,7 @@ function getPermission(evt, record):
 function getFieldValue(record, fieldCode, fieldType):
   if fieldType === 'CHECK_BOX':
     return record[fieldCode].value  // 文字列配列
-  return record[fieldCode].value    // 文字列 (DROPDOWN / RADIO_BUTTON / STATUS)
+  return record[fieldCode].value    // 文字列 (DROP_DOWN / RADIO_BUTTON / STATUS)
 
 // フィールド値マッチ判定
 function matchFieldValue(fieldValue, ruleValue, fieldType):
@@ -661,7 +662,7 @@ function matchFieldValue(fieldValue, ruleValue, fieldType):
   "fieldValueRules": [
     {
       "fieldCode": "string",
-      "fieldType": "STATUS | DROPDOWN | RADIO_BUTTON | CHECK_BOX",
+      "fieldType": "STATUS | DROP_DOWN | RADIO_BUTTON | CHECK_BOX",
       "value": "string",
       "permission": "view | edit | delete",
       "bgColor": "#RRGGBB",
@@ -713,7 +714,7 @@ function matchFieldValue(fieldValue, ruleValue, fieldType):
     },
     {
       "fieldCode": "重要度",
-      "fieldType": "DROPDOWN",
+      "fieldType": "DROP_DOWN",
       "value": "高",
       "permission": "view",
       "bgColor": "#ff8f00",
@@ -737,7 +738,7 @@ function matchFieldValue(fieldValue, ruleValue, fieldType):
 v5 では `permissionFields: { [fieldCode]: string[] }` を追加した。v6 では `fieldValueRules` の判定に必要なフィールド値を格納するため `valueFields` を追加する。
 
 - **既存**: `permissionFields: { [fieldCode]: string[] }` (USER_SELECT の `value[].code`)
-- **新規**: `valueFields: { [fieldCode]: string | string[] }` (DROPDOWN / RADIO_BUTTON / STATUS は文字列、CHECK_BOX は文字列配列)
+- **新規**: `valueFields: { [fieldCode]: string | string[] }` (DROP_DOWN / RADIO_BUTTON / STATUS は文字列、CHECK_BOX は文字列配列)
 
 レコード取得時に `fieldValueRules[].fieldCode` 配下のフィールド値も取得し、`evt.valueFields` に格納する。STATUS 型は `record.$status.value`（または設定フィールドコードの `.value`）から取得する。
 
@@ -747,7 +748,7 @@ v5 では `permissionFields: { [fieldCode]: string[] }` を追加した。v6 で
   // ... 既存フィールド
   permissionFields: { [fieldCode: string]: string[] }  // USER_SELECT の value[].code
   valueFields: {
-    [fieldCode: string]: string | string[]  // DROPDOWN/RADIO/STATUS: string, CHECK_BOX: string[]
+    [fieldCode: string]: string | string[]  // DROP_DOWN/RADIO/STATUS: string, CHECK_BOX: string[]
   }
 }
 ```
@@ -987,7 +988,7 @@ v4 / v3 / v2 → v6 は既存の連鎖マイグレーション（v? → v5 → v
 | Q17 背景色変更時の文字色自動補正 | 自動補正しない（マイグレーション時のみ WCAG 輝度から自動判定）(2026-05-18) | ユーザーの選択を尊重。意図的な配色（例: 赤背景に白文字）を自動で書き換えない |
 | Q18 権限設定の 2 系統 | permissionRules（権限ユーザー設定）と fieldValueRules（権限フィールド設定）の 2 系統で権限を管理する (2026-05-19) | ユーザー属性ベースとレコード属性ベースの 2 軸で柔軟な権限制御を実現 |
 | Q19 権限の優先順位 | フィールド値ルール（fieldValueRules）> ユーザー権限ルール（permissionRules）。権限・色の決定ともに同一の優先順位を適用 (2026-05-19) | レコード属性（ステータス等）による制御を優先することで、個人属性より業務フローを重視した制御が可能 |
-| Q20 対応フィールド型 | 権限フィールド設定の対応型: DROPDOWN / RADIO_BUTTON / CHECK_BOX / STATUS (2026-05-19) | 選択系フィールドおよびプロセス管理ステータスを対象とすることで、業務フロー連携に対応 |
+| Q20 対応フィールド型 | 権限フィールド設定の対応型: DROP_DOWN / RADIO_BUTTON / CHECK_BOX / STATUS (2026-05-19) | 選択系フィールドおよびプロセス管理ステータスを対象とすることで、業務フロー連携に対応 |
 
 ---
 
@@ -1018,7 +1019,7 @@ v4 / v3 / v2 → v6 は既存の連鎖マイグレーション（v? → v5 → v
 
 【権限フィールド設定】
 8. 「+ 行を追加」で権限フィールドエントリを追加
-9. フィールドプルダウン: DROPDOWN / RADIO_BUTTON / CHECK_BOX / STATUS から選択
+9. フィールドプルダウン: DROP_DOWN / RADIO_BUTTON / CHECK_BOX / STATUS から選択
 10. 値プルダウン: 選択したフィールドの選択肢が自動表示されるので選択
 11. 権限種別ドロップダウン: 「編集者」「閲覧者」を選択
 12. 背景色・文字色カラーピッカーで色を指定
