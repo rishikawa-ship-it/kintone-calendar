@@ -1058,10 +1058,10 @@ body.kc-dnd-active * {
 .kc-settings-btn {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 4px 8px;
+  border-radius: 5px;
+  padding: 5px 10px;
   cursor: pointer;
-  font-size: 18px;
+  font-size: 23px;
   line-height: 1;
   color: #4a5568;
   margin-left: 8px;

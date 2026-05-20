@@ -268,6 +268,10 @@
       // v5 以前の設定では fieldValueRules が存在しないため空配列として初期化する（§8.3 後方互換）
       KC.Config.FIELDVALUE_RULES = Array.isArray(config.fieldValueRules) ? config.fieldValueRules : [];
 
+      // メールアドレス初期値設定 (fieldMapping.mailLoginUserDefault が存在しない場合は false: 後方互換デフォルト)
+      KC.Config.MAIL_LOGIN_USER_DEFAULT =
+        (config.fieldMapping && config.fieldMapping.mailLoginUserDefault === true);
+
       console.log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD,
         'PERMISSION_RULES:', KC.Config.PERMISSION_RULES,
         'FIELDVALUE_RULES:', KC.Config.FIELDVALUE_RULES);
@@ -290,6 +294,12 @@
    * @type {Array<{fieldCode: string, fieldType: string, value: string, permission: string, bgColor: string, textColor: string}>}
    */
   KC.Config.FIELDVALUE_RULES = [];
+  /**
+   * メールアドレス初期値設定フラグ
+   * loadFromPluginConfig で上書きされる。初期値は false（後方互換デフォルト）
+   * @type {boolean}
+   */
+  KC.Config.MAIL_LOGIN_USER_DEFAULT = false;
 
   /* ====================================================================
    * WCAG 輝度ユーティリティ (REQ §8.7)
@@ -913,6 +923,8 @@
       // ポップアップ側では KC.Config.ALLDAY_LABEL がデフォルト値のままになるケースがあり、
       // アプリで設定されたラベルと不一致だと終日 ON が反映されない（DATETIME + 終日 不具合）
       sessionStorage.setItem('KC_ALLDAY_LABEL', KC.Config.ALLDAY_LABEL || '終日');
+      // メールアドレス初期値設定フラグをポップアップへ渡す
+      sessionStorage.setItem('KC_MAIL_LOGIN_USER_DEFAULT', KC.Config.MAIL_LOGIN_USER_DEFAULT ? '1' : '0');
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/edit';
       var popup = this._openWindow(url);
@@ -4831,7 +4843,7 @@
       btn.appendChild(icon);
 
       btn.addEventListener('click', function () {
-        window.location.href = '/k/admin/app/' + kintone.app.getId() + '/plugin/';
+        window.location.href = '/k/admin/app/' + kintone.app.getId() + '/plugin/config?pluginId=' + PLUGIN_ID;
       });
 
       headRight.appendChild(btn);
@@ -5302,6 +5314,9 @@
     var savedAlldayLabel = sessionStorage.getItem('KC_ALLDAY_LABEL');
     var alldayLabel = savedAlldayLabel || KC.Config.ALLDAY_LABEL || '終日';
 
+    // メールアドレス初期値設定フラグを sessionStorage から取得する
+    var mailLoginUserDefault = sessionStorage.getItem('KC_MAIL_LOGIN_USER_DEFAULT') === '1';
+
     var record = event.record;
 
     if (data.allday) {
@@ -5338,8 +5353,12 @@
 
     // ログインユーザー情報をセット
     var user = kintone.getLoginUser();
-    if (F.userMail && record[F.userMail]) record[F.userMail].value = user.email || '';
+    // アカウントフィールド: 設定によらず常にセット（仕様）
     if (F.account && record[F.account]) record[F.account].value = [{ code: user.code }];
+    // メールアドレスフィールド: mailLoginUserDefault が true の場合のみ新規作成時にセット
+    if (mailLoginUserDefault && F.userMail && record[F.userMail]) {
+      record[F.userMail].value = user.email || '';
+    }
 
     // ポップアップ内でキャンセルボタンを監視して自動クローズする
     // kintone の新規作成キャンセルはURLを変えず任意のkintoneイベントも発火しないため、

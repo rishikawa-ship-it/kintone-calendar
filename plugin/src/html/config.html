@@ -4,7 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>KC Calendar プラグイン設定</title>
-    <link rel="stylesheet" href="../css/config.css" />
   </head>
   <body>
     <div class="kc-config-container">
@@ -122,6 +121,10 @@
             <select id="kc-field-usermail" name="fieldUserMail" class="kc-config-select">
               <option value="">-- 未設定 --</option>
             </select>
+            <label class="kc-config-checkbox-label">
+              <input type="checkbox" id="kc-mail-login-user-default" name="mailLoginUserDefault">
+              新規予定作成時、ログインユーザーのメールアドレスを初期値として入れる
+            </label>
           </div>
 
           <div class="kc-config-field-group">
@@ -294,6 +297,7 @@
               </div>
             </div>
 
+
           </div>
         </section>
 
@@ -339,6 +343,5 @@
       </div>
     </div>
 
-    <script src="../js/config.js"></script>
   </body>
 </html>

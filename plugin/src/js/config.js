@@ -46,6 +46,23 @@
 (function (PLUGIN_ID) {
   'use strict';
 
+  // グローバルエラーハンドラ — IIFE 内のどこで止まっても捕捉する
+  window.addEventListener('error', function (e) {
+    console.error('[KC Config] window error:', {
+      message: e.message,
+      filename: e.filename,
+      lineno: e.lineno,
+      colno: e.colno,
+      stack: e.error && e.error.stack
+    });
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    console.error('[KC Config] unhandledrejection:', {
+      reason: e.reason,
+      stack: e.reason && e.reason.stack
+    });
+  });
+
   /* ====================================================================
    * フィールド型フィルタ定義
    * ==================================================================== */
@@ -67,6 +84,33 @@
 
   /** メモフィールドとして選択可能な型 */
   var MEMO_FIELD_TYPES = ['MULTI_LINE_TEXT', 'RICH_TEXT', 'SINGLE_LINE_TEXT'];
+
+  /* ====================================================================
+   * ユーティリティ
+   * ==================================================================== */
+
+  /**
+   * プラグイン設定画面の URL からアプリ ID を取得する。
+   * kintone 実機の設定画面 URL は /k/admin/app/<appId>/plugin/... 形式で
+   * クエリパラメータに app= が含まれないため、パスから抽出を優先する。
+   * @returns {string|null} アプリ ID 文字列、または取得不可時は null
+   */
+  function getAppIdFromUrl() {
+    // kintone プラグイン設定画面の URL パスから抽出 (/k/admin/app/<appId>/plugin/...)
+    var pathMatch = window.location.pathname.match(/\/k\/admin\/app\/(\d+)\//);
+    if (pathMatch) {
+      return pathMatch[1];
+    }
+    // フォールバック 1: kintone JS API (環境によっては動く)
+    if (typeof kintone !== 'undefined' && kintone.app && typeof kintone.app.getId === 'function') {
+      var id = kintone.app.getId();
+      if (id) {
+        return String(id);
+      }
+    }
+    // フォールバック 2: クエリパラメータ ?app=<appId> (ローカル dev/index.html 互換)
+    return new URL(window.location.href).searchParams.get('app');
+  }
 
   /* ====================================================================
    * グローバル状態
@@ -147,6 +191,9 @@
   /* --- 権限フィールド設定 (v6 新規) --- */
   var elFieldValueRows = document.getElementById('kc-fieldvalue-rows');
   var elFieldValueAdd  = document.getElementById('kc-fieldvalue-add');
+
+  /* --- マッピング設定内メール初期値チェックボックス --- */
+  var elMailLoginUserDefault = document.getElementById('kc-mail-login-user-default');
 
   /* --- セクション 2: ビュー個別設定 (統合版) --- */
   var elPerViewSelect = document.getElementById('kc-per-view-select');
@@ -1593,7 +1640,13 @@
     // version 2 未満は破棄 (Q11 確定: 旧フラット設定は再初期化)
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
-      currentConfig = { version: 6, fieldMapping: {}, permissionRules: [], fieldValueRules: [], views: {} };
+      currentConfig = {
+        version: 6,
+        fieldMapping: {},
+        permissionRules: [],
+        fieldValueRules: [],
+        views: {}
+      };
       return;
     }
 
@@ -1618,12 +1671,18 @@
       if (!rule.textColor) { rule.textColor = pickTextColorByBg(rule.bgColor); }
     });
 
+    // fieldMapping.mailLoginUserDefault の後方互換デフォルト処理 (存在しない場合は false)
+    var fm = parsed.fieldMapping || {};
+    if (typeof fm.mailLoginUserDefault !== 'boolean') {
+      fm.mailLoginUserDefault = false;
+    }
+
     currentConfig = {
-      version:          6,
-      fieldMapping:     parsed.fieldMapping     || {},
-      permissionRules:  rules,
-      fieldValueRules:  Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
-      views:            parsed.views            || {}
+      version:         6,
+      fieldMapping:    fm,
+      permissionRules: rules,
+      fieldValueRules: Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
+      views:           parsed.views || {}
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
   }
@@ -1640,7 +1699,7 @@
     return kintone.api(
       kintone.api.url('/k/v1/app/form/fields', true),
       'GET',
-      { app: kintone.app.getId() }
+      { app: getAppIdFromUrl() }
     ).then(function (resp) {
       var props = resp.properties;
 
@@ -1709,7 +1768,7 @@
       var resp = await kintone.api(
         kintone.api.url('/k/v1/app/status.json', true),
         'GET',
-        { app: kintone.app.getId() }
+        { app: getAppIdFromUrl() }
       );
       if (!resp.enable) {
         // プロセス管理が無効: ステータス選択肢を非表示にする
@@ -1732,6 +1791,27 @@
   }
 
   /* ====================================================================
+   * メールアドレス初期値チェックボックス disabled 連動
+   * ==================================================================== */
+
+  /**
+   * メールアドレス初期値チェックボックス (kc-mail-login-user-default) の
+   * disabled 状態を fieldUserMail の選択状態に連動させる。
+   * fieldUserMail が未設定の場合は disabled にして自動的に unchecked にする。
+   * elFieldUserMail の change イベント時にも呼ばれる。
+   */
+  function updateMailCheckboxState() {
+    if (!elMailLoginUserDefault) { return; }
+    var fieldCode = elFieldUserMail ? elFieldUserMail.value : '';
+    if (!fieldCode) {
+      elMailLoginUserDefault.disabled = true;
+      elMailLoginUserDefault.checked = false;
+    } else {
+      elMailLoginUserDefault.disabled = false;
+    }
+  }
+
+  /* ====================================================================
    * ビュー管理ユーティリティ
    * ==================================================================== */
 
@@ -1744,7 +1824,7 @@
     var resp = await kintone.api(
       kintone.api.url('/k/v1/app/views.json', true),
       'GET',
-      { app: kintone.app.getId() }
+      { app: getAppIdFromUrl() }
     );
     return resp.views;
   }
@@ -2070,7 +2150,7 @@
           await kintone.api(
             kintone.api.url('/k/v1/preview/app/views.json', true),
             'PUT',
-            { app: kintone.app.getId(), views: allViews }
+            { app: getAppIdFromUrl(), views: allViews }
           );
 
           // 作成後のビュー ID を再取得して currentViewId に反映
@@ -2097,7 +2177,7 @@
             await kintone.api(
               kintone.api.url('/k/v1/preview/app/views.json', true),
               'PUT',
-              { app: kintone.app.getId(), views: allViews }
+              { app: getAppIdFromUrl(), views: allViews }
             );
           } else {
             console.warn('[KC Config] 更新対象ビューが見つかりませんでした: id =', currentViewId);
@@ -2132,21 +2212,38 @@
         }
       });
 
+      // マッピング設定内メール初期値チェックを DOM から収集する
+      var mailLoginUserDefault = elMailLoginUserDefault
+        ? elMailLoginUserDefault.checked
+        : false;
+
+      // fieldMapping にチェック結果をマージする
+      var updatedFieldMapping = Object.assign({}, currentConfig.fieldMapping, {
+        mailLoginUserDefault: mailLoginUserDefault
+      });
+
       // 最終的な保存オブジェクト (version 6 形式: permissionRules + fieldValueRules を含む)
       var finalConfig = {
         version: 6,
-        fieldMapping:    currentConfig.fieldMapping,
-        permissionRules: currentConfig.permissionRules  || [],
-        fieldValueRules: currentConfig.fieldValueRules  || [],
+        fieldMapping:    updatedFieldMapping,
+        permissionRules: currentConfig.permissionRules || [],
+        fieldValueRules: currentConfig.fieldValueRules || [],
         views:           mergedViews
       };
 
-      // setConfig は文字列のみ受付のため JSON.stringify して config キーに格納
-      // コールバック形式を Promise 化して await できるようにする
+      // kintone の required_params チェックは setConfig 第1引数の最上位キーと照合する仕様。
+      // manifest.json で required_params に fieldTitle/fieldStart/fieldEnd を指定しているため、
+      // これら3キーを最上位に併設する。実際の設定読み込みは config キー経由（既存動作を維持）。
+      var fm = finalConfig.fieldMapping || {};
       await new Promise(function (resolve, reject) {
         try {
           kintone.plugin.app.setConfig(
-            { config: JSON.stringify(finalConfig) },
+            {
+              fieldTitle: fm.fieldTitle || '',
+              fieldStart: fm.fieldStart || '',
+              fieldEnd:   fm.fieldEnd   || '',
+              config: JSON.stringify(finalConfig)
+            },
             resolve
           );
         } catch (setErr) {
@@ -2219,7 +2316,7 @@
       await kintone.api(
         kintone.api.url('/k/v1/preview/app/deploy.json', true),
         'POST',
-        { apps: [{ app: kintone.app.getId() }] }
+        { apps: [{ app: getAppIdFromUrl() }] }
       );
 
       // デプロイ完了をポーリングで待機 (Phase 7 の handleViewApply と同じ API パターン)
@@ -2231,7 +2328,7 @@
         var statusResp = await kintone.api(
           kintone.api.url('/k/v1/preview/app/deploy.json', true),
           'GET',
-          { apps: [kintone.app.getId()] }
+          { apps: [getAppIdFromUrl()] }
         );
         var appStatus = statusResp.apps[0].status;
 
@@ -2239,7 +2336,7 @@
           // ビュー一覧を再取得してプルダウンを更新 (新規作成後に currentViewId を select に反映)
           await refreshPerViewSelect();
           showSuccess('設定を保存しアプリを更新しました (他の未保存変更も同時に公開されました)');
-          setTimeout(function () { history.back(); }, 2000);
+          setTimeout(function () { window.location.href = '/k/' + getAppIdFromUrl() + '/'; }, 2000);
           return;
         }
         if (appStatus === 'FAIL' || appStatus === 'CANCEL') {
@@ -2308,6 +2405,13 @@
     // loadFields + loadStatuses 完了後に呼ぶこと
     applyFieldValueRules(currentConfig.fieldValueRules || []);
 
+    // 3.7. メールアドレス初期値チェックボックスを設定値から反映し disabled 状態を更新する
+    if (elMailLoginUserDefault) {
+      var savedMail = currentConfig.fieldMapping && currentConfig.fieldMapping.mailLoginUserDefault;
+      elMailLoginUserDefault.checked = savedMail === true;
+    }
+    updateMailCheckboxState();
+
     // 4. ビュー一覧を取得してプルダウンを構築 (orphan 削除も実行)
     try {
       await refreshPerViewSelect();
@@ -2324,6 +2428,11 @@
       if (!sel) { return; }
       sel.addEventListener('change', function () { syncSelectEmptyClass(sel); });
     });
+
+    // fieldUserMail の変更に連動してメールアドレス初期値チェックボックスの disabled 状態を更新する
+    if (elFieldUserMail) {
+      elFieldUserMail.addEventListener('change', updateMailCheckboxState);
+    }
 
     // ビュー選択プルダウンにも空文字クラス同期を登録する（初期状態も反映）
     attachSelectEmptyClassSync(elPerViewSelect);
@@ -2385,10 +2494,23 @@
     });
   }
 
-  document.addEventListener('DOMContentLoaded', function () {
+  // kintone は manifest 経由で config.js を動的注入するため、
+  // 注入時点で DOMContentLoaded が発火済み (interactive / complete) になっている。
+  // readyState を確認し、loading 中なら DOMContentLoaded を待ち、
+  // それ以外 (interactive / complete) なら即実行する。
+  function bootInit() {
     init().catch(function (e) {
-      console.error('[KC Config] 初期化エラー:', e);
+      console.error('[KC Config] 初期化エラー', e);
     });
-  });
+  }
+
+  if (document.readyState === 'loading') {
+    // DOM パース中: DOMContentLoaded を待つ
+    document.addEventListener('DOMContentLoaded', bootInit);
+  } else {
+    // 既に DOMContentLoaded 発火済み (interactive / complete): 即実行
+    // ※ kintone manifest 経由の動的注入では通常こちらを通る
+    bootInit();
+  }
 
 })(kintone.$PLUGIN_ID);
