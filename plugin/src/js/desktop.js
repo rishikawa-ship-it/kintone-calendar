@@ -2057,7 +2057,9 @@
      * @returns {HTMLElement}
      */
     function _buildMonthChipGhost(ev) {
-      var color = ev.color || '#3b82f6';
+      // bgColor 未指定時のフォールバック: #818cf8（インジゴ）で統一
+      // ただしゴーストは kc-event--ghost CSS で白（#ffffff !important）に上書きされるため表示上は影響なし
+      var color = ev.color || '#818cf8';
       var ghost = document.createElement('div');
       ghost.className = 'kc-month-chip kc-event--ghost';
       ghost.style.position = 'fixed';
@@ -2560,6 +2562,7 @@
       el.className = 'kc-ad-event';
       // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
       if (!canEdit) el.style.cursor = 'pointer';
+      el.dataset.eventId = ev.id;  // SearchFilter プルダウン逆引き用
 
       el.style.left   = ((ev.colStart / colCount) * 100) + '%';
       el.style.width  = ((ev.span    / colCount) * 100) + '%';
@@ -2862,8 +2865,8 @@
         weekYMD.push(U.fmtYMD(U.addDays(range.start, wi)));
       }
 
-      // フィルタ適用（all: 全件, mine: 自分のみ, others: 他人のみ）
-      var filteredEvents = KC.EventFilter.apply(S.events || []);
+      // フィルタ適用（all: 全件, mine: 自分のみ, others: 他人のみ）→ 検索フィルタ
+      var filteredEvents = KC.SearchFilter.apply(KC.EventFilter.apply(S.events || []));
 
       // ===== 終日イベント: Google カレンダー方式（単一絶対配置バー）=====
       var weekEvents = [];
@@ -3009,6 +3012,7 @@
           // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
           div.className = 'kc-event';
           if (!evtCanEdit) div.style.cursor = 'pointer';
+          div.dataset.eventId = evt.id;  // SearchFilter プルダウン逆引き用
           div.style.top    = 'calc(' + topPct + '% + 0px)';
           div.style.height = 'calc(' + heightPct + '% - 2px)';
           div.style.pointerEvents = 'auto';
@@ -3168,8 +3172,6 @@
     // 月ビュー DOM ルート要素（_ensureMonthDOM で生成・キャッシュ）
     var _monthRoot = null;
 
-    // _toRgba15 の結果キャッシュ（color 文字列 → rgba 文字列）
-    var _rgba15Cache = {};
 
     /**
      * 月ビューの表示範囲（42日分 = 6行 × 7列）を算出する
@@ -3404,40 +3406,6 @@
     }
 
     /**
-     * 任意の CSS color 文字列を 15% 透過 rgba に変換する
-     * canvas を使って hex / rgb() / hsl() / 色名を統一処理する（KC.Lanes.isLightColor と同方式）
-     * @param {string} color - 任意の CSS カラー文字列
-     * @returns {string} rgba() 文字列（変換失敗時は青系フォールバック）
-     */
-    function _toRgba15(color) {
-      if (!color) return 'rgba(59,130,246,0.15)';
-      if (_rgba15Cache[color] !== undefined) return _rgba15Cache[color];
-      try {
-        var canvas = document.createElement('canvas');
-        canvas.width = canvas.height = 1;
-        var ctx = canvas.getContext('2d');
-        ctx.fillStyle = color;
-        ctx.fillRect(0, 0, 1, 1);
-        var d = ctx.getImageData(0, 0, 1, 1).data;
-        var result = 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',0.15)';
-        _rgba15Cache[color] = result;
-        return result;
-      } catch (e) {
-        return 'rgba(59,130,246,0.15)';
-      }
-    }
-
-    /**
-     * chip の背景色を計算する（15% 透過）
-     * hex / rgb() / hsl() / 色名すべてに対応する
-     * @param {string} color - evt.color（未設定時は #3b82f6）
-     * @returns {string} CSS background 値
-     */
-    function _chipBg(color) {
-      return _toRgba15(color || '#3b82f6');
-    }
-
-    /**
      * .kc-ad-event 要素を月ビュー用に生成する（DnD 対応版）
      * @param {Object} ev - 位置情報付き KcEvent（colStart, span, lane, adDateRange を含む）
      * @returns {HTMLElement}
@@ -3446,9 +3414,11 @@
       var perm    = KC.LoginContext.getPermission(ev);
       var canEdit = perm.canEdit;
       var el = document.createElement('div');
-      el.className = 'kc-ad-event';
+      // kc-ad-event--month: 月ビュー専用デザイン（左線ストライプ型）を適用
+      el.className = 'kc-ad-event kc-ad-event--month';
       // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
       if (!canEdit) el.style.cursor = 'pointer';
+      el.dataset.eventId = ev.id;  // SearchFilter プルダウン逆引き用
 
       // 絶対配置の位置計算
       el.style.left   = ((ev.colStart / 7) * 100) + '%';
@@ -3457,22 +3427,22 @@
       el.style.height = BAR_H + 'px';
       el.style.pointerEvents = 'auto';
 
-      // 権限ルールにマッチした bgColor を優先し、なければイベント自体の色フィールドを使用
+      // 月ビュー終日バーは左線ストライプ型（案 A）:
+      //   - bgColor を border-left-color に適用し、背景は固定 #e5e7eb
+      //   - 背景固定のため文字色も固定 #1f2937（isLightColor 判定不要）
       var displayBgColor = perm.bgColor || ev.color || null;
       if (displayBgColor) {
-        el.style.backgroundColor = displayBgColor;
-        el.style.borderColor     = displayBgColor;
-        el.style.color = perm.textColor || (KC.Lanes.isLightColor(displayBgColor) ? '#1f2937' : '#ffffff');
+        el.style.borderLeftColor = displayBgColor;
+        el.style.background      = '#e5e7eb';
+        el.style.color           = '#1f2937';
       }
 
       el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
+      // dot は CSS で非表示（.kc-ad-event--month .dot { display: none }）にするが
+      // DOM 構造は後方互換のため残す
       var dot = document.createElement('span');
       dot.className = 'dot';
-      if (displayBgColor) {
-        var dotColor = perm.textColor || (KC.Lanes.isLightColor(displayBgColor) ? '#1f2937' : '#ffffff');
-        dot.style.background = dotColor;
-      }
 
       var titleSpan = document.createElement('span');
       titleSpan.className = 'kc-ad-evt-title';
@@ -3530,22 +3500,24 @@
       var chipPerm    = KC.LoginContext.getPermission(evt);
       var chipCanEdit = chipPerm.canEdit;
       // 権限ルールにマッチした bgColor を優先し、なければイベント自体の色フィールドを使用
-      var bgColor = chipPerm.bgColor || evt.color || '#3b82f6';
+      var bgColor = chipPerm.bgColor || evt.color || null;
       var chip = document.createElement('div');
       chip.className = 'kc-month-chip';
       // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
       if (!chipCanEdit) chip.style.cursor = 'pointer';
       chip.dataset.evId = evt.id;
-      chip.style.background = _chipBg(bgColor);
-      // 未検証: 月ビュー chip は背景を 15% 透過するため、textColor が白系でも視認性が
-      // 確保されるかは実機確認が必要。問題があれば透過背景の不採用 or textColor の
-      // 暗色フォールバックを検討。
-      // textColor が指定されていればそちらを優先（15% 透過背景が薄い場合はダーク維持）
-      chip.style.color = chipPerm.textColor || '#1f2937';
+      chip.dataset.eventId = evt.id;  // SearchFilter プルダウン逆引き用（evId と同値）
+      // プラグイン設定の配色をそのまま適用する（週/日ビュー・終日と同一方式）
+      // bgColor 未設定時は CSS デフォルト（.kc-month-chip の background）に委ねる
+      if (bgColor) {
+        chip.style.background = bgColor;
+        chip.style.color = chipPerm.textColor || (KC.Lanes.isLightColor(bgColor) ? '#1f2937' : '#ffffff');
+      }
 
       var dot = document.createElement('span');
       dot.className = 'kc-month-chip-dot';
-      dot.style.background = bgColor;
+      // bgColor 未指定時のフォールバック: #dbeafe 背景に合わせたインジゴ（#818cf8）で統一
+      dot.style.background = bgColor || '#818cf8';
 
       var evStart = new Date(evt.start);
       var timeSpan = document.createElement('span');
@@ -3719,8 +3691,8 @@
 
       var range = monthRange(S.current);
 
-      // フィルタ適用（all: 全件, mine: 自分のみ, others: 他人のみ）
-      var filteredMonthEvents = KC.EventFilter.apply(S.events || []);
+      // フィルタ適用（all: 全件, mine: 自分のみ, others: 他人のみ）→ 検索フィルタ
+      var filteredMonthEvents = KC.SearchFilter.apply(KC.EventFilter.apply(S.events || []));
 
       var weekEls = Array.from(gridEl.querySelectorAll('.kc-month-week'));
       weekEls.forEach(function (weekEl, weekIdx) {
@@ -3979,7 +3951,8 @@
       var ymd = U.fmtYMD(S.current);
       var dayYMDs = [ymd];
 
-      var filteredEvents = KC.EventFilter.apply(S.events || []);
+      // フィルタ適用（all: 全件, mine: 自分のみ, others: 他人のみ）→ 検索フィルタ
+      var filteredEvents = KC.SearchFilter.apply(KC.EventFilter.apply(S.events || []));
 
       // ===== 終日イベント配置 =====
       var dayEvents = [];
@@ -4093,6 +4066,7 @@
         // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
         div.className = 'kc-event';
         if (!evtCanEdit) div.style.cursor = 'pointer';
+        div.dataset.eventId = evt.id;  // SearchFilter プルダウン逆引き用
         div.style.top    = 'calc(' + topPct + '% + 0px)';
         div.style.height = 'calc(' + heightPct + '% - 2px)';
         div.style.pointerEvents = 'auto';
@@ -4292,7 +4266,12 @@
       if (KC.State.view === 'month' && KC.RenderMonth) {
         requestAnimationFrame(function () {
           KC.RenderMonth.placeMonthEvents();
+          // 月ビューは placeMonthEvents 完了後にハイライトを適用する
+          KC.SearchFilter.applyHighlight();
         });
+      } else {
+        // 週ビュー・日ビューは同期的にハイライトを適用する
+        KC.SearchFilter.applyHighlight();
       }
       this.refreshTitle();
     },
@@ -4569,6 +4548,611 @@
   };
 
   /* ====================================================================
+   * KC.SearchFilter — 検索欄フィルタ（Phase A: REQ_search-bar v2）
+   * ヘッダー右側に検索入力欄を追加し、タイトルキーワードで予定を絞り込む
+   * ==================================================================== */
+  KC.SearchFilter = {
+    /** 現在の検索クエリ（空文字 = 無効） */
+    query: '',
+    /** デバウンス用タイマーID */
+    _timer: null,
+    /** IME 入力中フラグ（compositionstart〜compositionend 間は true） */
+    _composing: false,
+    /** アクティブ候補の index（-1 = 未選択） */
+    activeIndex: -1,
+    /** 現在のマッチ候補 DOM 要素リスト（表示順） */
+    _matchList: [],
+
+    /**
+     * 検索クエリを設定し、再描画をトリガーする
+     * @param {string} q - 新しいクエリ
+     */
+    setQuery: function (q) {
+      this.query = q;
+      this._syncClearBtn();
+      this.activeIndex = -1;
+      KC.Render.renderGrid();
+    },
+
+    /**
+     * events 配列をそのまま返す（フィルタしない）。
+     * 非マッチ予定の視覚化は applyHighlight() の opacity 制御で行うため、
+     * ここで配列を絞り込むと DOM に非マッチ要素が存在せず半透明表示が機能しない。
+     * @param {Array} events - KcEvent 配列
+     * @returns {Array} 入力をそのまま返す
+     */
+    apply: function (events) {
+      return events;
+    },
+
+    /**
+     * クエリを半角/全角スペースで分割してトークン配列を返す
+     * @returns {string[]}
+     */
+    _getTokens: function () {
+      return this.query.trim().toLowerCase()
+        .split(/[\s　]+/)
+        .filter(function (t) { return t !== ''; });
+    },
+
+    /**
+     * 1件の予定がトークン配列に全てマッチするか判定する
+     * @param {Object} evt - KcEvent
+     * @param {string[]} tokens
+     * @returns {boolean}
+     */
+    _matchesTokens: function (evt, tokens) {
+      var title = (evt.title || '').toLowerCase();
+      return tokens.every(function (t) { return title.indexOf(t) !== -1; });
+    },
+
+    /**
+     * クエリが空または該当予定かどうかを判定する（単体チェック用）
+     * @param {Object} evt - KcEvent
+     * @returns {boolean}
+     */
+    _matches: function (evt) {
+      if (!this.query) return true;
+      var tokens = this._getTokens();
+      if (tokens.length === 0) return true;
+      return this._matchesTokens(evt, tokens);
+    },
+
+    /**
+     * 描画後にマッチ候補 DOM 要素へクラスを付与し、activeIndex を適用する。
+     * el.title 属性（「タイトル\n時刻」形式）の改行前テキストでマッチ判定する。
+     * 対象セレクタ: .kc-event, .kc-ad-event, .kc-month-chip
+     */
+    applyHighlight: function () {
+      var allEls = Array.from(document.querySelectorAll('.kc-event, .kc-ad-event, .kc-month-chip'));
+
+      // 既存クラス・スタイルをリセット
+      allEls.forEach(function (el) {
+        el.classList.remove('kc-event--match', 'kc-event--match-active');
+        el.style.opacity = '';
+      });
+
+      if (!this.query) {
+        this._matchList = [];
+        this.activeIndex = -1;
+        this._updateEmptyMsg(false, '');
+        this._renderDropdown();
+        return;
+      }
+
+      var tokens = this._getTokens();
+      this._matchList = [];
+      var self = this;
+
+      if (tokens.length === 0) {
+        this._updateEmptyMsg(false, '');
+        this._renderDropdown();
+        return;
+      }
+
+      allEls.forEach(function (el) {
+        // ゴースト・dragging 要素はスキップ
+        if (el.classList.contains('kc-event--ghost')) return;
+        if (el.classList.contains('kc-event--dragging')) return;
+        if (el.classList.contains('kc-ad-event--dragging')) return;
+
+        // タイトル取得: el.title 属性（"タイトル\n時刻"形式）の改行前を使用。
+        // .kc-month-chip は title 属性を持たないため .kc-month-chip-title の textContent にフォールバック。
+        var rawTitle = '';
+        if (el.title) {
+          rawTitle = el.title.split('\n')[0];
+        } else {
+          var titleSpan = el.querySelector('.kc-month-chip-title, .kc-ad-evt-title, .kc-evt-title');
+          rawTitle = titleSpan ? titleSpan.textContent : '';
+        }
+
+        var matched = tokens.every(function (t) { return rawTitle.toLowerCase().indexOf(t) !== -1; });
+
+        if (matched) {
+          el.classList.add('kc-event--match');
+          self._matchList.push(el);
+        } else {
+          el.style.opacity = '0.25';
+        }
+      });
+
+      var count = this._matchList.length;
+      this._updateEmptyMsg(count === 0, this.query);
+
+      if (count === 0) {
+        this.activeIndex = -1;
+      } else if (this.activeIndex < 0 || this.activeIndex >= count) {
+        this.activeIndex = 0;
+      }
+
+      if (this.activeIndex >= 0) {
+        this._matchList[this.activeIndex].classList.add('kc-event--match-active');
+      }
+
+      // プルダウン一覧を更新し、アクティブ行を同期する
+      this._renderDropdown();
+      this._updateDropdownActive();
+    },
+
+    /**
+     * activeIndex を変更してアクティブ候補クラスを切り替え、必要ならスクロールする
+     * @param {number} newIndex - 新しい activeIndex
+     */
+    _activateAt: function (newIndex) {
+      var count = this._matchList.length;
+      if (count === 0) return;
+
+      // 既存のアクティブクラスを外す
+      this._matchList.forEach(function (el) { el.classList.remove('kc-event--match-active'); });
+
+      this.activeIndex = newIndex;
+      var el = this._matchList[this.activeIndex];
+      el.classList.add('kc-event--match-active');
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+      // プルダウン側のアクティブ行も同期する
+      this._updateDropdownActive();
+    },
+
+    /** Enter または ↓ キー押下時: 次候補に移動（循環あり） */
+    focusNext: function () {
+      var count = this._matchList.length;
+      if (count === 0) return;
+      var next = (this.activeIndex + 1) % count;
+      this._activateAt(next);
+    },
+
+    /** ↑ キー押下時: 前候補に移動（循環あり） */
+    focusPrev: function () {
+      var count = this._matchList.length;
+      if (count === 0) return;
+      var prev = (this.activeIndex - 1 + count) % count;
+      this._activateAt(prev);
+    },
+
+    /**
+     * 0件メッセージの表示/非表示を制御する
+     * @param {boolean} show - true なら表示
+     * @param {string} query - 現在のクエリ（メッセージ文字列に使用）
+     */
+    _updateEmptyMsg: function (show, query) {
+      var el = document.getElementById('kc-search-empty');
+      if (!el) return;
+      if (show) {
+        el.textContent = '「' + query + '」に一致する予定はありません';
+        el.style.display = 'block';
+      } else {
+        el.textContent = '';
+        el.style.display = 'none';
+      }
+    },
+
+    /** クリアボタンの表示/非表示を同期する */
+    _syncClearBtn: function () {
+      var btn = document.getElementById('kc-search-clear');
+      if (!btn) return;
+      if (this.query) {
+        btn.removeAttribute('hidden');
+      } else {
+        btn.setAttribute('hidden', '');
+      }
+    },
+
+    /**
+     * 検索欄 DOM を生成して headRight の先頭（FilterDropdown より左）に挿入する
+     * @param {HTMLElement} headRight - .kc-head-right 要素
+     */
+    buildDOM: function (headRight) {
+      // 多重挿入防止
+      if (document.getElementById('kc-search')) return;
+
+      var wrap = document.createElement('div');
+      wrap.id = 'kc-search';
+      wrap.className = 'kc-search';
+      wrap.setAttribute('role', 'search');
+
+      var icon = document.createElement('span');
+      icon.className = 'kc-search-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = '🔍';
+
+      var input = document.createElement('input');
+      input.type = 'search';
+      input.id = 'kc-search-input';
+      input.className = 'kc-search-input';
+      input.placeholder = '予定を検索';
+      input.setAttribute('aria-label', '予定を検索');
+      input.setAttribute('autocomplete', 'off');
+
+      var clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.id = 'kc-search-clear';
+      clearBtn.className = 'kc-search-clear';
+      clearBtn.setAttribute('aria-label', '検索をクリア');
+      clearBtn.setAttribute('hidden', '');
+      clearBtn.textContent = '×';
+
+      wrap.appendChild(icon);
+      wrap.appendChild(input);
+      wrap.appendChild(clearBtn);
+
+      // プルダウン（#kc-search-dropdown）を wrap の子として追加
+      // wrap に position: relative を付与して absolute 配置の基準点にする
+      var dropdown = document.createElement('div');
+      dropdown.id = 'kc-search-dropdown';
+      dropdown.className = 'kc-search-dropdown';
+      dropdown.setAttribute('role', 'listbox');
+      dropdown.setAttribute('hidden', '');
+      wrap.appendChild(dropdown);
+
+      // FilterDropdown より左: headRight の先頭に挿入
+      headRight.insertBefore(wrap, headRight.firstChild);
+
+      // 0件メッセージ要素をカレンダーグリッド直前に追加
+      this._buildEmptyMsg();
+
+      // イベントリスナー登録
+      this._bindEvents(input, clearBtn);
+
+      // 外側クリックでプルダウンを閉じる（多重登録防止フラグで一度だけ登録）
+      this._bindOutsideClick();
+    },
+
+    /** 0件メッセージ DOM を生成する */
+    _buildEmptyMsg: function () {
+      if (document.getElementById('kc-search-empty')) return;
+      var msg = document.createElement('div');
+      msg.id = 'kc-search-empty';
+      msg.className = 'kc-search-empty';
+      msg.setAttribute('aria-live', 'polite');
+      msg.style.display = 'none';
+      var root = document.getElementById('kc-root');
+      if (root) root.appendChild(msg);
+    },
+
+    /**
+     * document に外側クリックリスナーを登録する。
+     * 多重登録防止のためフラグで一度だけ登録する。
+     * #kc-search / #kc-search-dropdown の外をクリックしたときにプルダウンを閉じる。
+     */
+    _bindOutsideClick: function () {
+      if (this._outsideClickBound) return;
+      this._outsideClickBound = true;
+      var self = this;
+      document.addEventListener('click', function (e) {
+        var dd = document.getElementById('kc-search-dropdown');
+        if (!dd || dd.hasAttribute('hidden')) return;
+        var searchEl = document.getElementById('kc-search');
+        if (searchEl && searchEl.contains(e.target)) return;
+        if (dd.contains(e.target)) return;
+        self._hideDropdown();
+      });
+    },
+
+    /**
+     * input と clearBtn にイベントリスナーを設定する
+     * @param {HTMLInputElement} input
+     * @param {HTMLButtonElement} clearBtn
+     */
+    _bindEvents: function (input, clearBtn) {
+      var self = this;
+
+      // IME 管理
+      input.addEventListener('compositionstart', function () {
+        self._composing = true;
+      });
+      input.addEventListener('compositionend', function () {
+        self._composing = false;
+        // IME 確定後にデバウンスを開始する
+        self._scheduleSearch(input.value);
+      });
+
+      // 通常入力（デバウンス）
+      input.addEventListener('input', function () {
+        self._syncClearBtn2(input.value);
+        if (self._composing) return;
+        self._scheduleSearch(input.value);
+      });
+
+      // キーボードナビゲーション（Enter / ↑↓ / ESC）
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          if (self._composing) return;
+          e.preventDefault();
+          self.focusNext();
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          self.focusNext();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          self.focusPrev();
+        } else if (e.key === 'Escape') {
+          // ESC: クエリ全クリア + プルダウン閉じる + フォーカスを外す
+          input.value = '';
+          self.setQuery('');
+          self._hideDropdown();
+          input.blur();
+        }
+      });
+
+      // 検索欄フォーカス復帰時: クエリが存在していればプルダウンを再表示する
+      input.addEventListener('focus', function () {
+        self._showDropdown();
+      });
+
+      // クリアボタン
+      clearBtn.addEventListener('click', function () {
+        input.value = '';
+        self.setQuery('');
+        input.focus();
+      });
+    },
+
+    /**
+     * input値に応じてクリアボタンの表示を同期する（input イベント用）
+     * @param {string} val - 現在の input.value
+     */
+    _syncClearBtn2: function (val) {
+      var btn = document.getElementById('kc-search-clear');
+      if (!btn) return;
+      if (val) {
+        btn.removeAttribute('hidden');
+      } else {
+        btn.setAttribute('hidden', '');
+      }
+    },
+
+    /**
+     * デバウンスタイマーをセットして検索を実行する
+     * @param {string} val - 入力値
+     */
+    _scheduleSearch: function (val) {
+      clearTimeout(this._timer);
+      var self = this;
+      this._timer = setTimeout(function () {
+        self.query = val;
+        self.activeIndex = -1;
+        KC.Render.renderGrid();
+      }, 300);
+    },
+
+    /* ------------------------------------------------------------------
+     * 検索プルダウン（案 X）
+     * ------------------------------------------------------------------ */
+
+    /**
+     * KC.State.events から id でイベントオブジェクトを逆引きする
+     * @param {string} id - イベント ID
+     * @returns {Object|null}
+     */
+    _evtFromId: function (id) {
+      var events = KC.State.events || [];
+      for (var i = 0; i < events.length; i++) {
+        if (events[i].id === id) return events[i];
+      }
+      return null;
+    },
+
+    /**
+     * evt.start から "M/D(曜) HH:MM" または "M/D(曜) 終日" を返す
+     * @param {Object} evt - KcEvent
+     * @returns {string}
+     */
+    _fmtEvtDate: function (evt) {
+      var DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
+      var d = new Date(evt.start);
+      var prefix = (d.getMonth() + 1) + '/' + d.getDate()
+        + '(' + DAY_NAMES[d.getDay()] + ')';
+      if (evt.allday) return prefix + ' 終日';
+      var hh = ('0' + d.getHours()).slice(-2);
+      var mm = ('0' + d.getMinutes()).slice(-2);
+      return prefix + ' ' + hh + ':' + mm;
+    },
+
+    /**
+     * プルダウンの内容を _matchList から再構築して表示/非表示を切り替える
+     * クエリが空、または matchList が空（0件）の場合の処理も含む
+     */
+    _renderDropdown: function () {
+      var dd = document.getElementById('kc-search-dropdown');
+      if (!dd) return;
+
+      // クエリが空のときはプルダウンを非表示にする
+      if (!this.query) {
+        dd.setAttribute('hidden', '');
+        dd.innerHTML = '';
+        return;
+      }
+
+      dd.removeAttribute('hidden');
+      dd.innerHTML = '';
+
+      if (this._matchList.length === 0) {
+        var emptyEl = document.createElement('div');
+        emptyEl.className = 'kc-search-dropdown-empty';
+        emptyEl.textContent = '該当する予定がありません';
+        dd.appendChild(emptyEl);
+        return;
+      }
+
+      var self = this;
+      this._matchList.forEach(function (el, idx) {
+        var item = self._buildDropdownItem(el, idx);
+        dd.appendChild(item);
+      });
+    },
+
+    /**
+     * プルダウンの 1 行 DOM を生成する
+     * @param {HTMLElement} el - .kc-event / .kc-ad-event / .kc-month-chip 要素
+     * @param {number} idx - _matchList 内のインデックス
+     * @returns {HTMLElement}
+     */
+    _buildDropdownItem: function (el, idx) {
+      var evtId = el.dataset.eventId;
+      var evt = evtId ? this._evtFromId(evtId) : null;
+
+      // 予定の bgColor を決定（permissionRules → evt.color → デフォルト）
+      var markerColor = '#818cf8';
+      if (evt) {
+        var perm = KC.LoginContext.getPermission(evt);
+        markerColor = perm.bgColor || evt.color || '#818cf8';
+      }
+
+      var item = document.createElement('div');
+      item.className = 'kc-search-dropdown-item';
+      item.setAttribute('role', 'option');
+      item.dataset.index = String(idx);
+
+      // 左端カラーマーカー
+      var markerEl = document.createElement('span');
+      markerEl.className = 'kc-search-dropdown-item-marker';
+      markerEl.style.backgroundColor = markerColor;
+
+      // コンテンツ領域（マーカーの右側）
+      var bodyEl = document.createElement('div');
+      bodyEl.className = 'kc-search-dropdown-item-body';
+
+      // 日時行（日付+曜日部分を span で囲んで土日祝色を適用）
+      var dateEl = document.createElement('div');
+      dateEl.className = 'kc-search-dropdown-item-date';
+      if (evt) {
+        this._buildDateContent(dateEl, evt);
+      }
+
+      var titleEl = document.createElement('div');
+      titleEl.className = 'kc-search-dropdown-item-title';
+      titleEl.textContent = evt ? (evt.title || '(無題)') : '(無題)';
+
+      bodyEl.appendChild(dateEl);
+      bodyEl.appendChild(titleEl);
+
+      item.appendChild(markerEl);
+      item.appendChild(bodyEl);
+
+      var self = this;
+      item.addEventListener('click', function () {
+        self._activateAt(idx);
+        // 項目選択後はプルダウンのみ閉じる（クエリ・ハイライトは維持）
+        self._hideDropdown();
+      });
+
+      return item;
+    },
+
+    /**
+     * 日時表示 div に土日祝色付き span を挿入する
+     * 例: "5/22(日) 14:00" → テキスト "5/22" + span.kc-dd-day--sun "(日)" + テキスト " 14:00"
+     * @param {HTMLElement} container - 追記先の div 要素
+     * @param {Object} evt - KcEvent
+     */
+    _buildDateContent: function (container, evt) {
+      var DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
+      var d = new Date(evt.start);
+      var dow = d.getDay();
+
+      // 土日祝判定（KC.Utils.getHolidayName は KC.Holidays に委譲し、未取得時はハードコードフォールバック）
+      var isHoliday = !!KC.Utils.getHolidayName(d);
+      var dayClass = '';
+      if (isHoliday || dow === 0) {
+        dayClass = 'kc-dd-day--sun';
+      } else if (dow === 6) {
+        dayClass = 'kc-dd-day--sat';
+      }
+      // 祝日は日曜と同じ赤系で表示（kc-dd-day--sun を流用）
+      // 土曜祝日も赤系優先とするため isHoliday チェックを先に行っている
+
+      var datePart = (d.getMonth() + 1) + '/' + d.getDate();
+      var dayPart = '(' + DAY_NAMES[dow] + ')';
+      var timePart = evt.allday
+        ? ' 終日'
+        : ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+
+      // 日付テキストノード
+      container.appendChild(document.createTextNode(datePart));
+
+      // 曜日 span（色クラスあり）
+      var daySpan = document.createElement('span');
+      if (dayClass) daySpan.className = dayClass;
+      daySpan.textContent = dayPart;
+      container.appendChild(daySpan);
+
+      // 時刻テキストノード
+      container.appendChild(document.createTextNode(timePart));
+    },
+
+    /**
+     * プルダウン内のアクティブ行（--active クラス）を activeIndex に同期する。
+     * アクティブ行がリスト内で見えない場合は自動スクロールする
+     */
+    _updateDropdownActive: function () {
+      var dd = document.getElementById('kc-search-dropdown');
+      if (!dd) return;
+
+      var items = dd.querySelectorAll('.kc-search-dropdown-item');
+      items.forEach(function (item) {
+        item.classList.remove('kc-search-dropdown-item--active');
+      });
+
+      if (this.activeIndex < 0 || this.activeIndex >= items.length) return;
+
+      var activeItem = items[this.activeIndex];
+      activeItem.classList.add('kc-search-dropdown-item--active');
+
+      // アクティブ行がドロップダウンのスクロール領域外なら自動スクロール
+      var ddTop = dd.scrollTop;
+      var ddBottom = ddTop + dd.clientHeight;
+      var itemTop = activeItem.offsetTop;
+      var itemBottom = itemTop + activeItem.offsetHeight;
+      if (itemTop < ddTop) {
+        dd.scrollTop = itemTop;
+      } else if (itemBottom > ddBottom) {
+        dd.scrollTop = itemBottom - dd.clientHeight;
+      }
+    },
+
+    /**
+     * プルダウンを非表示にする（hidden 属性をセット）
+     */
+    _hideDropdown: function () {
+      var dd = document.getElementById('kc-search-dropdown');
+      if (!dd) return;
+      dd.setAttribute('hidden', '');
+    },
+
+    /**
+     * プルダウンを表示する（matchList が空でなくクエリが存在する場合のみ）
+     */
+    _showDropdown: function () {
+      if (!this.query) return;
+      if (!this._matchList || this._matchList.length === 0) return;
+      var dd = document.getElementById('kc-search-dropdown');
+      if (!dd) return;
+      dd.removeAttribute('hidden');
+    }
+  };
+
+  /* ====================================================================
    * KC.FilterDropdown — イベントフィルタドロップダウン
    * ヘッダー右側に「すべて / 自分のみ / 他人のみ」を切り替える UI を提供する
    * ==================================================================== */
@@ -4766,6 +5350,8 @@
         close();
 
         KC.State.view = value;
+        // ビュー切替時: activeIndex をリセット（FR-7）。クエリとマッチリストは維持する
+        KC.SearchFilter.activeIndex = -1;
         KC.Render.refresh();
       }
 
@@ -5209,6 +5795,12 @@
       // ViewDropdown 初期化
       KC.ViewDropdown.init();
 
+      // SearchFilter 初期化（検索欄 UI を FilterDropdown の左に追加）
+      var sfHeadRight = document.querySelector('.kc-head-right');
+      if (sfHeadRight) {
+        KC.SearchFilter.buildDOM(sfHeadRight);
+      }
+
       // FilterDropdown 初期化（フィルタドロップダウン UI を .kc-head-right に追加）
       KC.FilterDropdown.init();
 
@@ -5273,6 +5865,13 @@
     if (event.viewType !== 'custom') return event;
 
     if (KC.Boot._initialized) {
+      // ビュー再表示時: 検索クエリをリセットして入力欄を空にする（FR-9）
+      KC.SearchFilter.query = '';
+      KC.SearchFilter.activeIndex = -1;
+      KC.SearchFilter._matchList = [];
+      var srchInput = document.getElementById('kc-search-input');
+      if (srchInput) srchInput.value = '';
+      KC.SearchFilter._syncClearBtn();
       KC.Render.refresh();
       return event;
     }

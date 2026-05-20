@@ -365,7 +365,7 @@
 .kc-ad-event {
   position: absolute;
   height: var(--kc-ad-bar-h, 24px);
-  background: #eef2ff;
+  background: #dbeafe;
   border: 1px solid var(--kc-border);
   border-radius: 10px;
   padding: 0 8px;
@@ -412,7 +412,7 @@
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: #3b82f6;
+  background: #818cf8; /* デフォルト色（#dbeafe 背景に合わせたインジゴ）。色指定時は JS で上書き */
   flex: 0 0 auto;
 }
 
@@ -502,7 +502,7 @@
   right: 6px;
   border-radius: 10px;
   border: 1px solid var(--kc-border);
-  background: #eef2ff;
+  background: #dbeafe;
   padding: 4px 8px;
   font-size: 16px;
   line-height: 1.25;
@@ -901,10 +901,10 @@ body.kc-dnd-active * {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 16px;
   padding: 1px 4px;
   cursor: grab;
-  border-radius: 3px;
+  border-radius: 10px;
   overflow: hidden;
   white-space: nowrap;
   margin-top: 1px;
@@ -912,6 +912,8 @@ body.kc-dnd-active * {
   flex: 0 0 auto;
   position: relative;
   z-index: 2;  /* .kc-month-ad-events (z-index: 1) より前面に表示 */
+  background: #dbeafe;  /* デフォルト色（.kc-event と統一）。bgColor 指定時は JS で上書き */
+  color: #1f2937;
 }
 .kc-month-chip:hover { filter: brightness(0.95); }
 
@@ -925,7 +927,7 @@ body.kc-dnd-active * {
 
 /* chip の時刻 */
 .kc-month-chip-time {
-  font-size: 12px;
+  font-size: 16px;
   flex: 0 0 auto;
   color: var(--kc-subtext);
 }
@@ -1011,6 +1013,38 @@ body.kc-dnd-active * {
 }
 
 /* ==========================================================================
+ * 17.1 月ビュー終日バー: 左線ストライプ型デザイン（案 A）
+ *   - kc-ad-event--month クラスは buildMonthAlldayBar() で付与（月ビュー専用）
+ *   - 週/日ビューの .kc-ad-event には kc-ad-event--month が付かないためスコープ外
+ * ========================================================================== */
+
+/* 月ビュー終日バーの基本スタイル（左線ストライプ型） */
+.kc-ad-event--month {
+  /* 角丸なし（矩形）*/
+  border-radius: 0;
+  /* 背景は固定薄グレー（ユーザー指定色は border-left に集約） */
+  background: #e5e7eb;
+  border: none;
+  /* 左端の色ライン */
+  border-left: 4px solid #818cf8; /* デフォルト色（bgColor 未指定時）: JS で上書き */
+  /* 文字色は背景固定なので濃いグレー固定 */
+  color: #1f2937;
+  /* 件名を左線にぴったり寄せる（dot 非表示のため gap・左 padding を詰める） */
+  gap: 0;
+  padding: 0 4px;
+}
+
+/* 月ビュー終日バーの dot は左線で色を表現するため非表示 */
+.kc-ad-event--month .dot {
+  display: none;
+}
+
+/* 月ビュー終日バーのホバー: brightness で反応（背景色固定なので filter で対応） */
+.kc-ad-event--month:hover {
+  filter: brightness(0.96);
+}
+
+/* ==========================================================================
  * 18. 自分の予定の強調表示（ログインユーザーの account と一致する予定）
  * ========================================================================== */
 
@@ -1078,4 +1112,179 @@ body.kc-dnd-active * {
 }
 .kc-settings-btn-icon {
   display: inline-block;
+}
+
+/* ==========================================================================
+ * 21. 検索欄（KC.SearchFilter — REQ_search-bar Phase A）
+ * ========================================================================== */
+
+/* 検索欄ラッパー */
+.kc-search {
+  display: flex;
+  align-items: center;
+  border: 1px solid #c1c5ca;
+  border-radius: 10px;
+  height: 38px;
+  padding: 0 8px;
+  background: #fff;
+  gap: 4px;
+  transition: border-color .2s;
+}
+.kc-search:focus-within {
+  border-color: #1a73e8;
+}
+
+/* 検索アイコン（装飾のみ） */
+.kc-search-icon {
+  font-size: 14px;
+  color: #777;
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
+/* テキスト入力欄 */
+.kc-search-input {
+  border: none;
+  outline: none;
+  font-size: 14px;
+  width: 160px;
+  background: transparent;
+  color: var(--kc-text);
+  min-width: 0;
+}
+/* type="search" のデフォルト × ボタンを非表示にする（クリアボタンを独自実装するため） */
+.kc-search-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* クリアボタン */
+.kc-search-clear {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  color: #777;
+  padding: 0 2px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.kc-search-clear:hover {
+  color: var(--kc-text);
+}
+
+/* 0件メッセージ */
+.kc-search-empty {
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--kc-subtext);
+  text-align: center;
+  border: 1px dashed var(--kc-border);
+  border-radius: 8px;
+  margin: 0 12px;
+}
+
+/* ==========================================================================
+ * 22. マッチ候補ハイライト（KC.SearchFilter — REQ_search-bar Phase A）
+ * ========================================================================== */
+
+/* 一致候補: 青細枠 */
+.kc-event--match,
+.kc-ad-event.kc-event--match,
+.kc-month-chip.kc-event--match {
+  outline: 2px solid #2563eb;
+}
+
+/* アクティブ候補: 青太枠 + 外周光彩 */
+.kc-event--match-active,
+.kc-ad-event.kc-event--match-active,
+.kc-month-chip.kc-event--match-active {
+  outline: 3px solid #1d4ed8;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.3);
+}
+
+/* ==========================================================================
+ * 23. 検索プルダウン一覧（KC.SearchFilter 案 X — REQ_search-bar Phase B）
+ * ========================================================================== */
+
+/* 検索欄ラッパーを relative 基準点にする（プルダウン absolute 配置用） */
+.kc-search {
+  position: relative;
+}
+
+/* プルダウンコンテナ */
+.kc-search-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  width: 320px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid var(--kc-border, #e5e7eb);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  z-index: 1000;
+}
+
+/* 各行 */
+.kc-search-dropdown-item {
+  display: flex;
+  align-items: stretch;
+  padding: 0;
+  cursor: pointer;
+  border-bottom: 1px solid #f3f4f6;
+  overflow: hidden;
+}
+.kc-search-dropdown-item:last-child {
+  border-bottom: none;
+}
+.kc-search-dropdown-item:hover {
+  background: #f3f4f6;
+}
+.kc-search-dropdown-item--active {
+  background: #dbeafe;
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+}
+
+/* 左端カラーマーカー（予定の bgColor を反映） */
+.kc-search-dropdown-item-marker {
+  flex: 0 0 4px;
+  background: #818cf8;
+  border-radius: 0;
+}
+
+/* マーカーの右側コンテンツ領域 */
+.kc-search-dropdown-item-body {
+  flex: 1 1 auto;
+  padding: 8px 12px;
+  min-width: 0;
+}
+
+/* 日時テキスト */
+.kc-search-dropdown-item-date {
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 2px;
+}
+
+/* 曜日部分の色付け（週ビュー・月ビューと同じ色系統） */
+.kc-search-dropdown-item-date .kc-dd-day--sat { color: #1a73e8; }
+.kc-search-dropdown-item-date .kc-dd-day--sun { color: #e53e3e; }
+.kc-search-dropdown-item-date .kc-dd-day--holiday { color: #e53e3e; }
+
+/* タイトルテキスト */
+.kc-search-dropdown-item-title {
+  font-size: 14px;
+  color: #1f2937;
+  font-weight: 500;
+}
+
+/* 0 件メッセージ（プルダウン内） */
+.kc-search-dropdown-empty {
+  padding: 16px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
 }
