@@ -1198,6 +1198,8 @@
         _onMoveAlldayMove(e);
       } else if (_drag.type === 'resize-left' || _drag.type === 'resize-right') {
         _onResizeAlldayMove(e);
+      } else if (_drag.type === 'resize-left-timed-span' || _drag.type === 'resize-right-timed-span') {
+        _onResizeTimedSpanMoveMonth(e);
       }
     }
 
@@ -1453,6 +1455,48 @@
       // newStartDate.getDay() は 0=日曜〜6=土曜 で colIdx と一致する
       _positionMonthGhost(_drag.ghost, U.fmtYMD(newStartDate), spanDays, newStartDate.getDay());
       _updateAlldayGhostLabel(_drag.ghost, newStartDate, newEndDate);
+    }
+
+    /**
+     * 月ビュー日跨ぎ時間予定リサイズの mousemove 処理
+     * 日付のみ伸縮し、時刻は元の値を維持する（_buildChipISO を流用）
+     * @param {MouseEvent} e
+     */
+    function _onResizeTimedSpanMoveMonth(e) {
+      var info = _monthCellFromXY(e.clientX, e.clientY);
+      if (!info) return;
+
+      var origEv = _drag.ev;
+      var U = KC.Utils;
+
+      var origStartDate = new Date(origEv.start.substring(0, 10) + 'T00:00:00');
+      var origEndDate   = new Date(origEv.end.substring(0, 10)   + 'T00:00:00');
+      var targetDate    = new Date(info.dateYMD + 'T00:00:00');
+      var newStartDate, newEndDate;
+
+      if (_drag.type === 'resize-left-timed-span') {
+        newStartDate = targetDate;
+        newEndDate   = origEndDate;
+        // 最小スパン: 開始日 < 終了日（単日にはなれるが逆転は防ぐ）
+        if (newStartDate.getTime() >= newEndDate.getTime()) {
+          newStartDate = origStartDate;
+        }
+      } else {
+        // 右端: targetYMD = 表示終了日（終日と異なり +1 しない）
+        newStartDate = origStartDate;
+        newEndDate   = targetDate;
+        if (newEndDate.getTime() <= newStartDate.getTime()) {
+          newEndDate = origEndDate;
+        }
+      }
+
+      // 時刻は元の ISO 文字列の時刻部分を維持
+      _drag.newStart = _buildChipISO(origEv.start, U.fmtYMD(newStartDate));
+      _drag.newEnd   = _buildChipISO(origEv.end,   U.fmtYMD(newEndDate));
+
+      var spanDays = Math.round((newEndDate.getTime() - newStartDate.getTime()) / 86400000) + 1;
+      if (spanDays < 1) spanDays = 1;
+      _positionMonthGhost(_drag.ghost, U.fmtYMD(newStartDate), spanDays, newStartDate.getDay());
     }
 
     /**
@@ -2224,6 +2268,41 @@
     }
 
     /**
+     * 月ビュー日跨ぎ時間予定バーのリサイズ DnD を開始する（スコープ C-resize）
+     * 終日の startResizeAlldayMonth と同構造だが type が異なり、
+     * mousemove 側で時刻維持ロジック（_onResizeTimedSpanMoveMonth）を呼ぶ。
+     * @param {Object} ev - KcEvent（時間予定）
+     * @param {'left'|'right'} side
+     * @param {MouseEvent} mousedown
+     * @param {HTMLElement} barEl - .kc-month-chip--span 要素
+     */
+    function startResizeMonthTimedSpan(ev, side, mousedown, barEl) {
+      mousedown.preventDefault();
+
+      var ghost = _buildMonthChipGhost(ev);
+      ghost.style.position    = 'fixed';
+      ghost.style.zIndex      = '9999';
+      ghost.style.pointerEvents = 'none';
+
+      _drag = {
+        view:     'month',
+        type:     side === 'left' ? 'resize-left-timed-span' : 'resize-right-timed-span',
+        ev:       ev,
+        ghost:    ghost,
+        origBar:  barEl,
+        startX:   mousedown.clientX,
+        startY:   mousedown.clientY,
+        started:  false,
+        lane:     ev.lane || 0,
+        newStart: null,
+        newEnd:   null
+      };
+
+      document.addEventListener('mousemove', _onMouseMoveAllday);
+      document.addEventListener('mouseup', _onMouseUpAllday);
+    }
+
+    /**
      * KC.DnD.beginSelection — DESIGN.md §206 に記載があるが未実装（スタブ）
      * Phase 2 以降で範囲選択による新規作成が必要な場合に実装する
      */
@@ -2236,13 +2315,14 @@
     // =========================================================================
     return {
       get _drag() { return _drag; },
-      startMoveAllday:        startMoveAllday,
-      startResizeAllday:      startResizeAllday,
-      startMoveAlldayMonth:   startMoveAlldayMonth,
-      startResizeAlldayMonth: startResizeAlldayMonth,
-      startMoveMonthChip:     startMoveMonthChip,
-      startMove:              startMove,
-      startResize:            startResize,
+      startMoveAllday:           startMoveAllday,
+      startResizeAllday:         startResizeAllday,
+      startMoveAlldayMonth:      startMoveAlldayMonth,
+      startResizeAlldayMonth:    startResizeAlldayMonth,
+      startMoveMonthChip:        startMoveMonthChip,
+      startResizeMonthTimedSpan: startResizeMonthTimedSpan,
+      startMove:                 startMove,
+      startResize:               startResize,
       beginSelection:         beginSelection,
       _cancel:                _cancel
     };
@@ -2521,10 +2601,62 @@
       return weekEvents;
     }
 
+    /**
+     * 時間予定（allday=false）用バー位置算出
+     * eventToBarPosition は終日用（end を day-1 換算）のため時間予定では誤差が出る。
+     * 時間予定の end は実際の終了日時なので endDate に -1 換算は不要。
+     * @param {Object} evt - KcEvent（allday=false, start/end を含む）
+     * @param {string[]} weekYMD - 表示列の YYYY-MM-DD 配列（7要素）
+     * @returns {{ colStart: number, span: number, adDateRange: string } | null}
+     *   当週に重なりがない場合は null。span が 1 のとき（単日）は null を返す。
+     */
+    function timedEventToBarPosition(evt, weekYMD) {
+      var s = new Date(evt.start);
+      var e = new Date(evt.end);
+
+      // 時間予定は end が実終了時刻なので day-1 換算なし
+      var startDate = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+      var endDate   = new Date(e.getFullYear(), e.getMonth(), e.getDate());
+      // 終了時刻が 0:00 ちょうどの場合は前日終了とみなす（例: ~24:00 = ~翌0:00）
+      if (e.getHours() === 0 && e.getMinutes() === 0 && e.getSeconds() === 0) {
+        endDate = new Date(endDate.getTime() - 86400000);
+      }
+
+      var evStartYMD = U.fmtYMD(startDate);
+      var evEndYMD   = U.fmtYMD(endDate);
+
+      // 単日（開始日 = 終了日）は日跨ぎバーではなく chip で描画するため null を返す
+      if (evStartYMD === evEndYMD) return null;
+
+      var weekStartYMD = weekYMD[0];
+      var weekEndYMD   = weekYMD[weekYMD.length - 1];
+
+      // 当週に重なりがなければ null
+      if (evStartYMD > weekEndYMD || evEndYMD < weekStartYMD) return null;
+
+      var clampedStartYMD = (evStartYMD < weekStartYMD) ? weekStartYMD : evStartYMD;
+      var clampedEndYMD   = (evEndYMD > weekEndYMD)     ? weekEndYMD   : evEndYMD;
+
+      var colStart = weekYMD.indexOf(clampedStartYMD);
+      var colEnd   = weekYMD.indexOf(clampedEndYMD);
+      if (colStart < 0 || colEnd < 0) return null;
+
+      var startStr  = (startDate.getMonth() + 1) + '/' + startDate.getDate();
+      var endStr    = (endDate.getMonth() + 1) + '/' + endDate.getDate();
+      var adDateRange = (startStr === endStr) ? startStr : (startStr + ' ~ ' + endStr);
+
+      return {
+        colStart:    colStart,
+        span:        colEnd - colStart + 1,
+        adDateRange: adDateRange
+      };
+    }
+
     return {
-      isLightColor:       isLightColor,
-      eventToBarPosition: eventToBarPosition,
-      assignLanes:        assignLanes
+      isLightColor:            isLightColor,
+      eventToBarPosition:      eventToBarPosition,
+      timedEventToBarPosition: timedEventToBarPosition,
+      assignLanes:             assignLanes
     };
   }());
 
@@ -2936,16 +3068,65 @@
         }
       }
 
-      // ===== 通常イベント配置（日跨ぎ対応: per-event 分割描画）=====
-      // 各イベントに対して、表示週内の各日とのオーバーラップを計算しセグメントを生成する
+      // ===== 通常イベント配置（日跨ぎ対応 + カラム分割）=====
+      // 2パス方式:
+      //   第1パス: 全イベントを走査し、日インデックスごとにセグメント情報を収集
+      //   colIdx 計算: 貪欲法でカラム割り当て（境界接触は重なりなし: a.end <= b.start）
+      //   第2パス: DOM 生成時に colIdx / maxCols を参照して left / width をインラインで設定
+      //
+      // REQ_overlap-rendering §6.1（設計案 A: Google カレンダー方式）準拠
+      // AC4.4: 1件のみの日はインラインスタイル未設定（CSS の left:6px/right:6px が有効）
+
+      /**
+       * セグメント配列（同一日の時間予定）にカラム情報を付与する（貪欲法）
+       * 境界値が接するだけ（a.endMin === b.startMin）は重なりに含めない（§5.1）
+       * @param {Array} segs - { startMin, endMin, ... } を持つオブジェクトの配列（破壊的変更あり）
+       */
+      function _calcOverlapLayout(segs) {
+        // 開始時刻昇順でソート（同時刻の場合は終了時刻が遅いものを先に）
+        segs.sort(function (a, b) {
+          return a.startMin !== b.startMin
+            ? a.startMin - b.startMin
+            : b.endMin - a.endMin;
+        });
+
+        // endTimes[colIdx] = そのカラムに最後に配置したセグメントの endMin
+        var endTimes = [];
+
+        segs.forEach(function (seg) {
+          // 空きカラムを探す: endMin <= startMin なら境界接触のみ = 重なりなし
+          var freeCol = -1;
+          for (var ci = 0; ci < endTimes.length; ci++) {
+            if (endTimes[ci] <= seg.startMin) {
+              freeCol = ci;
+              break;
+            }
+          }
+          if (freeCol >= 0) {
+            seg.colIdx = freeCol;
+            endTimes[freeCol] = seg.endMin;
+          } else {
+            seg.colIdx = endTimes.length;
+            endTimes.push(seg.endMin);
+          }
+        });
+
+        var maxCols = endTimes.length || 1;
+        segs.forEach(function (seg) { seg.maxCols = maxCols; });
+      }
+
+      // 日インデックスごとのセグメント情報を収集する
+      // segments[dayIdx] = [{ evt, hitDayIndices, segStartMin, segEndMin, topPct, heightPct, colIdx, maxCols }]
+      var daySegmentsMap = {};
+      for (var dsi = 0; dsi < 7; dsi++) { daySegmentsMap[dsi] = []; }
+
       filteredEvents.forEach(function (evt) {
-        if (evt.allday) return;  // 終日は上記で処理済み
+        if (evt.allday) return;
 
         var evStart = new Date(evt.start);
         var evEnd   = new Date(evt.end);
         var totalMin = 24 * 60;
 
-        // ツールチップ用の全体時刻文字列を生成
         var sTimeStr = U.pad2(evStart.getHours()) + ':' + U.pad2(evStart.getMinutes());
         var eTimeStr = U.pad2(evEnd.getHours())   + ':' + U.pad2(evEnd.getMinutes());
         var sDateStr = (evStart.getMonth() + 1) + '/' + evStart.getDate();
@@ -2959,42 +3140,65 @@
         var hitDayIndices = [];
         for (var di = 0; di < 7; di++) {
           var dayYMD  = weekYMD[di];
-          var dayStart = new Date(dayYMD + 'T00:00:00');
-          var dayEnd   = new Date(dayYMD + 'T00:00:00');
-          dayEnd.setDate(dayEnd.getDate() + 1);  // 翌日0時 = 当日の終端
-          if (evStart < dayEnd && evEnd > dayStart) {
+          var dayStart0 = new Date(dayYMD + 'T00:00:00');
+          var dayEnd0   = new Date(dayYMD + 'T00:00:00');
+          dayEnd0.setDate(dayEnd0.getDate() + 1);
+          if (evStart < dayEnd0 && evEnd > dayStart0) {
             hitDayIndices.push(di);
           }
         }
         if (hitDayIndices.length === 0) return;
 
-        var isMultiDay = hitDayIndices.length > 1;
-        var evtPerm    = KC.LoginContext.getPermission(evt);
-        var evtCanEdit = evtPerm.canEdit;
-        var evtBgColor = evtPerm.bgColor || evt.color || null;
-        // 全セグメントの DOM を収集（DnD の origBars 渡し用）
-        var segmentEls = [];
-
+        // 各日セグメントをマップに追加
         hitDayIndices.forEach(function (dayIdx) {
-          var dayYMD   = weekYMD[dayIdx];
-          var dayStart = new Date(dayYMD + 'T00:00:00');
-          var dayEnd   = U.addDays(dayStart, 1);
+          var dayYMD2  = weekYMD[dayIdx];
+          var dayStart2 = new Date(dayYMD2 + 'T00:00:00');
+          var dayEnd2   = U.addDays(dayStart2, 1);
 
-          // セグメントの開始・終了（分単位）
-          var segStartMs = Math.max(evStart.getTime(), dayStart.getTime());
-          var segEndMs   = Math.min(evEnd.getTime(),   dayEnd.getTime());
-          var segStartMin = Math.round((segStartMs - dayStart.getTime()) / 60000);
-          var segEndMin   = Math.round((segEndMs   - dayStart.getTime()) / 60000);
+          var segStartMs = Math.max(evStart.getTime(), dayStart2.getTime());
+          var segEndMs   = Math.min(evEnd.getTime(),   dayEnd2.getTime());
+          var segStartMin = Math.round((segStartMs - dayStart2.getTime()) / 60000);
+          var segEndMin   = Math.round((segEndMs   - dayStart2.getTime()) / 60000);
           if (segEndMin > totalMin) segEndMin = totalMin;
           if (segStartMin < 0) segStartMin = 0;
           if (segEndMin <= segStartMin) return;
 
-          var topPct    = (segStartMin / totalMin) * 100;
-          var heightPct = ((segEndMin - segStartMin) / totalMin) * 100;
+          daySegmentsMap[dayIdx].push({
+            evt: evt,
+            hitDayIndices: hitDayIndices,
+            fullTimeStr: fullTimeStr,
+            segStartMin: segStartMin,
+            segEndMin: segEndMin,
+            topPct: (segStartMin / totalMin) * 100,
+            heightPct: ((segEndMin - segStartMin) / totalMin) * 100,
+            colIdx: 0,    // _calcOverlapLayout で上書き
+            maxCols: 1    // _calcOverlapLayout で上書き
+          });
+        });
+      });
+
+      // 各日ごとにカラム分割を計算する
+      for (var calcDi = 0; calcDi < 7; calcDi++) {
+        var segsForDay = daySegmentsMap[calcDi];
+        if (segsForDay.length > 1) {
+          _calcOverlapLayout(segsForDay);
+        }
+        // 1件のみの場合は colIdx=0, maxCols=1 のまま（インラインスタイル未設定でフル幅: AC4.4）
+      }
+
+      // イベント別セグメント DOM を収集するマップ（DnD の allBars 渡し用）
+      // キー: evt.id, 値: [div, ...]
+      var evtSegElsMap = {};
+
+      // 第2パス: DOM を生成して overlay に追加する
+      for (var domDi = 0; domDi < 7; domDi++) {
+        var domSegs = daySegmentsMap[domDi];
+        domSegs.forEach(function (seg) {
+          var evt = seg.evt;
 
           var firstHourRow = rows.children[0];
           if (!firstHourRow) return;
-          var colCell = firstHourRow.children[dayIdx];
+          var colCell = firstHourRow.children[domDi];
           if (!colCell) return;
 
           var overlay = colCell.querySelector('.kc-overlay');
@@ -3008,39 +3212,76 @@
             colCell.appendChild(overlay);
           }
 
+          var evtPerm    = KC.LoginContext.getPermission(evt);
+          var evtCanEdit = evtPerm.canEdit;
+          var evtBgColor = evtPerm.bgColor || evt.color || null;
+          var isMultiDay = seg.hitDayIndices.length > 1;
+
           var div = document.createElement('div');
-          // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
           div.className = 'kc-event';
           if (!evtCanEdit) div.style.cursor = 'pointer';
-          div.dataset.eventId = evt.id;  // SearchFilter プルダウン逆引き用
-          div.style.top    = 'calc(' + topPct + '% + 0px)';
-          div.style.height = 'calc(' + heightPct + '% - 2px)';
+          div.dataset.eventId = evt.id;
+          div.style.top    = 'calc(' + seg.topPct + '% + 0px)';
+          div.style.height = 'calc(' + seg.heightPct + '% - 2px)';
           div.style.pointerEvents = 'auto';
+
+          // 等分割＋半重ね＋右側余白方式（REQ_overlap-rendering §3.1 FR-1 確定版第6版）
+          // colWidth = usableW / (1 + (N-1) * 0.5)   usableW = overlayWidth - GUTTER - RIGHT_MARGIN_PX
+          // left     = GUTTER + colIdx * colWidth * 0.5
+          // width    = colWidth（全列同幅）
+          // right    = 'auto'（CSS の right:6px を上書き）
+          // z-index  = 10 + colIdx（後方カラムほど前面: AC4.9）
+          // 1件のみ（maxCols===1）はインラインスタイル未設定のため CSS left:6px/right:6px が有効（AC4.4）
+          if (seg.maxCols > 1) {
+            var OVERLAP_RATIO   = 0.5; // 後発カラムを colWidth の 50% 右にオフセット
+            var RIGHT_MARGIN_PX = 24;  // 新規追加用の右側余白
+            var GUTTER          = 6;   // CSS left:6px に対応する左余白（px）
+            var N               = seg.maxCols;
+            var overlayW        = overlay.offsetWidth;
+            if (overlayW > 0) {
+              // px で計算可能な場合
+              var usableW    = overlayW - GUTTER - RIGHT_MARGIN_PX;
+              var colWidth   = usableW / (1 + (N - 1) * OVERLAP_RATIO);
+              var overlapOff = colWidth * OVERLAP_RATIO;
+              div.style.left  = (GUTTER + seg.colIdx * overlapOff) + 'px';
+              div.style.width = colWidth + 'px';
+            } else {
+              // overlayWidth が 0 の場合: パーセント近似（RIGHT_MARGIN_PX=24 ≈ 12% / GUTTER=6 ≈ 3%）
+              var RIGHT_MARGIN_PCT = 12;
+              var GUTTER_PCT       = 3;
+              var usableW_pct      = 100 - GUTTER_PCT - RIGHT_MARGIN_PCT; // 85%
+              var colWidth_pct     = usableW_pct / (1 + (N - 1) * OVERLAP_RATIO);
+              var overlapOff_pct   = colWidth_pct * OVERLAP_RATIO;
+              div.style.left  = (GUTTER_PCT + seg.colIdx * overlapOff_pct) + '%';
+              div.style.width = colWidth_pct + '%';
+            }
+            div.style.right   = 'auto';
+            div.style.zIndex  = String(10 + seg.colIdx);
+          }
 
           // 日跨ぎセグメントのクラス付与（AC4.25）
           if (isMultiDay) {
-            var isFirst = dayIdx === hitDayIndices[0];
-            var isLast  = dayIdx === hitDayIndices[hitDayIndices.length - 1];
+            var hitDays = seg.hitDayIndices;
+            var isFirst = domDi === hitDays[0];
+            var isLast  = domDi === hitDays[hitDays.length - 1];
             if (isFirst && !isLast)        div.classList.add('kc-event--span-start');
             else if (isLast && !isFirst)   div.classList.add('kc-event--span-end');
             else if (!isFirst && !isLast)  div.classList.add('kc-event--span-middle');
           }
 
-          // 権限ルールにマッチした bgColor を優先し、なければイベント自体の色フィールドを使用
           if (evtBgColor) {
             div.style.backgroundColor = evtBgColor;
             div.style.borderColor     = evtBgColor;
             div.style.color = evtPerm.textColor || (KC.Lanes.isLightColor(evtBgColor) ? '#1f2937' : '#ffffff');
           }
 
-          // XSS 安全: textContent 使用
           var titleDiv = document.createElement('div');
           titleDiv.className = 'kc-evt-title';
           titleDiv.textContent = evt.title || '(無題)';
 
           var metaDiv = document.createElement('div');
           metaDiv.className = 'kc-evt-meta';
-          metaDiv.textContent = fullTimeStr;
+          metaDiv.textContent = seg.fullTimeStr;
           if (evtBgColor) {
             var metaTc = evtPerm.textColor
               ? (evtPerm.textColor === '#ffffff' ? 'rgba(255,255,255,0.8)' : '#6b7280')
@@ -3048,10 +3289,9 @@
             metaDiv.style.color = metaTc;
           }
 
-          // NG#6 修正: リサイズハンドルは開始セグメント（dayIdx === hitDayIndices[0]）のみに追加する
-          // 翌日セグメント（span-end）にハンドルを付与すると、見た目は出るが mousedown 未配線で
-          // ユーザーの混乱を招くため、開始日セグメント以外はハンドル自体を DOM に生成しない
-          var isStartSeg = (dayIdx === hitDayIndices[0]);
+          // リサイズハンドルは開始セグメント（hitDayIndices[0] の日）のみ追加
+          // 翌日セグメントにハンドルを付与すると見た目は出るが mousedown 未配線となるため省略
+          var isStartSeg = (domDi === seg.hitDayIndices[0]);
           if (isStartSeg) {
             var topHandle = document.createElement('div');
             topHandle.className = 'kc-resize-handle kc-resize-handle--top';
@@ -3067,9 +3307,9 @@
             div.appendChild(btmHandle);
           }
 
-          div.title = (evt.title || '') + '\n' + fullTimeStr;
+          div.title = (evt.title || '') + '\n' + seg.fullTimeStr;
 
-          // クリック → 編集ポップアップ（全セグメントで同じレコードを開く: AC4.21）
+          // クリック → 新規タブで kintone レコード詳細（AC4.6）
           div.addEventListener('click', (function (capturedEvt) {
             return function (clickEvt) {
               clickEvt.stopPropagation();
@@ -3077,42 +3317,52 @@
             };
           }(evt)));
 
-          segmentEls.push(div);
+          // イベント別セグメント DOM を収集（DnD の allBars 渡し用）
+          if (!evtSegElsMap[evt.id]) { evtSegElsMap[evt.id] = []; }
+          evtSegElsMap[evt.id].push(div);
+
           overlay.appendChild(div);
         });
+      }
 
-        // mousedown → 移動 DnD（開始日セグメントのみ受け付ける）
-        // allBars に全セグメントを渡して薄表示を全体に適用する
-        if (segmentEls.length > 0) {
-          var startSegEl = segmentEls[0];  // 最初のセグメント（開始日）
-          (function (capturedEvt, startEl, allSegs) {
-            startEl.addEventListener('mousedown', function (mdEvt) {
+      // mousedown DnD 配線（開始日セグメントのみ受け付ける）
+      // allBars に全セグメントを渡して薄表示を全体に適用する
+      Object.keys(evtSegElsMap).forEach(function (evtId) {
+        var allSegs = evtSegElsMap[evtId];
+        if (!allSegs || allSegs.length === 0) return;
+        var startEl = allSegs[0];
+
+        // evt オブジェクトは filteredEvents から id 一致で取得する
+        var foundEvt = null;
+        filteredEvents.forEach(function (e) { if (String(e.id) === String(evtId)) { foundEvt = e; } });
+        if (!foundEvt) return;
+
+        (function (capEvt, startDiv, allDivs) {
+          startDiv.addEventListener('mousedown', function (mdEvt) {
+            if (mdEvt.button !== 0) return;
+            if (!KC.LoginContext.getPermission(capEvt).canEdit) return;
+            KC.DnD.startMove(capEvt, mdEvt, startDiv, allDivs);
+          });
+
+          var tHandle = startDiv.querySelector('.kc-resize-handle--top');
+          var bHandle = startDiv.querySelector('.kc-resize-handle--bottom');
+          if (tHandle) {
+            tHandle.addEventListener('mousedown', function (mdEvt) {
               if (mdEvt.button !== 0) return;
-              if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
-              KC.DnD.startMove(capturedEvt, mdEvt, startEl, allSegs);
+              if (!KC.LoginContext.getPermission(capEvt).canEdit) return;
+              mdEvt.stopPropagation();
+              KC.DnD.startResize(capEvt, 'top', mdEvt, startDiv);
             });
-
-            // リサイズハンドルの mousedown 配線（バグ D 修正: AC4.19）
-            var tHandle = startEl.querySelector('.kc-resize-handle--top');
-            var bHandle = startEl.querySelector('.kc-resize-handle--bottom');
-            if (tHandle) {
-              tHandle.addEventListener('mousedown', function (mdEvt) {
-                if (mdEvt.button !== 0) return;
-                if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
-                mdEvt.stopPropagation();
-                KC.DnD.startResize(capturedEvt, 'top', mdEvt, startEl);
-              });
-            }
-            if (bHandle) {
-              bHandle.addEventListener('mousedown', function (mdEvt) {
-                if (mdEvt.button !== 0) return;
-                if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
-                mdEvt.stopPropagation();
-                KC.DnD.startResize(capturedEvt, 'bottom', mdEvt, startEl);
-              });
-            }
-          }(evt, startSegEl, segmentEls));
-        }
+          }
+          if (bHandle) {
+            bHandle.addEventListener('mousedown', function (mdEvt) {
+              if (mdEvt.button !== 0) return;
+              if (!KC.LoginContext.getPermission(capEvt).canEdit) return;
+              mdEvt.stopPropagation();
+              KC.DnD.startResize(capEvt, 'bottom', mdEvt, startDiv);
+            });
+          }
+        }(foundEvt, startEl, allSegs));
       });
     }
 
@@ -3552,6 +3802,93 @@
     }
 
     /**
+     * 日跨ぎ時間予定バー（.kc-month-chip--span）を生成する
+     * chip 風の全面塗り、時刻表示付き。週をまたぐ場合は複数バーに分割される。
+     * @param {Object} ev - 位置情報付き KcEvent（colStart, span, lane, adDateRange を含む）
+     * @returns {HTMLElement}
+     */
+    function buildMonthTimedSpanBar(ev) {
+      var perm    = KC.LoginContext.getPermission(ev);
+      var canEdit = perm.canEdit;
+      var bgColor = perm.bgColor || ev.color || null;
+      var el = document.createElement('div');
+      el.className = 'kc-month-chip--span';
+      if (!canEdit) el.style.cursor = 'pointer';
+      el.dataset.evId    = ev.id;
+      el.dataset.eventId = ev.id;  // SearchFilter プルダウン逆引き用
+
+      // 絶対配置（.kc-month-ad-events 内、終日バー下層）
+      el.style.left   = ((ev.colStart / 7) * 100) + '%';
+      el.style.width  = ((ev.span / 7) * 100) + '%';
+      el.style.top    = (BAR_TOP + ev.lane * (BAR_H + BAR_GAP)) + 'px';
+      el.style.height = BAR_H + 'px';
+      el.style.pointerEvents = 'auto';
+
+      if (bgColor) {
+        el.style.background = bgColor;
+        el.style.color = perm.textColor || (KC.Lanes.isLightColor(bgColor) ? '#1f2937' : '#ffffff');
+      }
+
+      var evStart = new Date(ev.start);
+      var timeStr = KC.Utils.pad2(evStart.getHours()) + ':' + KC.Utils.pad2(evStart.getMinutes());
+      el.title = (ev.title || '(無題)') + '\n' + timeStr + (ev.adDateRange ? '\n' + ev.adDateRange : '');
+
+      var timeSpan = document.createElement('span');
+      timeSpan.className = 'kc-month-chip--span-time';
+      timeSpan.textContent = timeStr;
+
+      var titleSpan = document.createElement('span');
+      titleSpan.className = 'kc-month-chip--span-title';
+      titleSpan.textContent = ev.title || '(無題)';
+
+      el.appendChild(timeSpan);
+      el.appendChild(titleSpan);
+
+      // 左端リサイズハンドル（canEdit の場合のみ機能）
+      var leftHandle = document.createElement('div');
+      leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
+      leftHandle.addEventListener('mousedown', (function (capturedEvt, capturedEl) {
+        return function (mdEvt) {
+          if (mdEvt.button !== 0) return;
+          if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
+          mdEvt.stopPropagation();
+          KC.DnD.startResizeMonthTimedSpan(capturedEvt, 'left', mdEvt, capturedEl);
+        };
+      }(ev, el)));
+
+      // 右端リサイズハンドル（canEdit の場合のみ機能）
+      var rightHandle = document.createElement('div');
+      rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
+      rightHandle.addEventListener('mousedown', (function (capturedEvt, capturedEl) {
+        return function (mdEvt) {
+          if (mdEvt.button !== 0) return;
+          if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
+          mdEvt.stopPropagation();
+          KC.DnD.startResizeMonthTimedSpan(capturedEvt, 'right', mdEvt, capturedEl);
+        };
+      }(ev, el)));
+
+      el.appendChild(leftHandle);
+      el.appendChild(rightHandle);
+
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        KC.Popup.openEdit(ev.id);
+      });
+
+      el.addEventListener('mousedown', (function (capturedEvt, capturedEl) {
+        return function (mdEvt) {
+          if (mdEvt.button !== 0) return;
+          if (!KC.LoginContext.getPermission(capturedEvt).canEdit) return;
+          mdEvt.stopPropagation();
+          KC.DnD.startMoveMonthChip(capturedEvt, mdEvt, capturedEl);
+        };
+      }(ev, el)));
+
+      return el;
+    }
+
+    /**
      * 月ビューの終日イベントを配置する
      * 他月セルを含む全 7 列を対象とする（当月クランプなし）
      * @param {HTMLElement} weekEl - .kc-month-week 要素
@@ -3608,6 +3945,71 @@
       // JS から height を設定すると週全体 laneCount 基準になりセル個別の spacer と不一致になるため廃止
 
       return result;
+    }
+
+    /**
+     * 当週の日跨ぎ時間予定バーを配置する（終日バーと同じ .kc-month-ad-events レイヤ）
+     * 終日バーのレーン数の下に積む（laneOffset）。
+     * @param {HTMLElement} weekEl - .kc-month-week 要素
+     * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
+     * @param {Array} spanEvents - 当週にかかる日跨ぎ時間予定
+     * @param {number} alldayLaneCount - 終日バーのレーン数（下にずらすオフセット）
+     * @returns {{ colLaneCounts: number[] }}
+     *   colLaneCounts: 各列の使用スロット数（終日レーン含む合計）
+     */
+    function placeMonthTimedSpanEvents(weekEl, weekYMD, spanEvents, alldayLaneCount) {
+      var result = { colLaneCounts: [0, 0, 0, 0, 0, 0, 0] };
+      var adLayer = weekEl.querySelector('.kc-month-ad-events');
+      if (!adLayer || !spanEvents || spanEvents.length === 0) {
+        // スパンなしでも終日分を colLaneCounts に反映
+        for (var ci = 0; ci < 7; ci++) result.colLaneCounts[ci] = 0;
+        return result;
+      }
+
+      var weekEvents = _buildTimedSpanWeekEvents(spanEvents, weekYMD);
+      if (weekEvents.length === 0) return result;
+
+      // 終日バーとは独立したレーン割り当て（0 始まり）
+      KC.Lanes.assignLanes(weekEvents);
+
+      // adLayer 内の top は終日バーの下にオフセット
+      weekEvents.forEach(function (ev) {
+        var offsetLane = alldayLaneCount + (ev.lane || 0);
+        var evWithOffset = Object.assign({}, ev, { lane: offsetLane });
+        var bar = buildMonthTimedSpanBar(evWithOffset);
+        adLayer.appendChild(bar);
+        // 各列のスロット数（終日 + span）を更新
+        for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
+          if (ci >= 0 && ci < 7) {
+            result.colLaneCounts[ci] = Math.max(
+              result.colLaneCounts[ci],
+              alldayLaneCount + (ev.lane || 0) + 1
+            );
+          }
+        }
+      });
+
+      return result;
+    }
+
+    /**
+     * spanEvents から weekEvents 配列を構築する（バー位置付与）
+     * @param {Array} spanEvents - 日跨ぎ時間予定配列
+     * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
+     * @returns {Array} colStart/span/adDateRange 付き配列
+     */
+    function _buildTimedSpanWeekEvents(spanEvents, weekYMD) {
+      var weekEvents = [];
+      spanEvents.forEach(function (evt) {
+        var pos = KC.Lanes.timedEventToBarPosition(evt, weekYMD);
+        if (!pos) return;
+        weekEvents.push(Object.assign({}, evt, {
+          colStart:    pos.colStart,
+          span:        pos.span,
+          adDateRange: pos.adDateRange
+        }));
+      });
+      return weekEvents;
     }
 
     /**
@@ -3679,7 +4081,7 @@
 
     /**
      * 月グリッドの各週・各セルにイベントを配置するオーケストレーター
-     * 週行ごとに終日バーを配置 → セルごとに時間予定 chip を配置
+     * 順序: 終日バー → 日跨ぎ時間予定バー → 単日時間予定 chip
      */
     function placeMonthEvents() {
       if (!_monthRoot) return;
@@ -3711,18 +4113,31 @@
         // 終日バーを配置してセルごとのレーン使用数を取得（他月セルも含む）
         var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday);
 
-        // セルごとに時間予定 chip を配置（他月セルも含む）
+        // 当週にかかる日跨ぎ時間予定を抽出（allday=false かつ複数日にまたがるもの）
+        var weekTimedSpan = filteredMonthEvents.filter(function (evt) {
+          if (evt.allday) return false;
+          return KC.Lanes.timedEventToBarPosition(evt, weekYMD) !== null;
+        });
+
+        // 日跨ぎ時間予定バーを終日バーの下層に配置
+        var spanResult = placeMonthTimedSpanEvents(
+          weekEl, weekYMD, weekTimedSpan, alldayResult.laneCount
+        );
+
+        // セルごとに単日時間予定 chip を配置（他月セルも含む）
         var cellEls = Array.from(weekEl.querySelectorAll('.kc-month-cell'));
         cellEls.forEach(function (cellEl, colIdx) {
           var ymd = weekYMD[colIdx];
 
-          // このセルの使用済みスロット数（終日バーのレーン占有数）
-          var usedSlots = alldayResult.colLaneCounts[colIdx] || 0;
+          // このセルの使用済みスロット数（終日バー + 日跨ぎバーのレーン占有数）
+          var usedSlots = spanResult.colLaneCounts[colIdx] || alldayResult.colLaneCounts[colIdx] || 0;
 
-          // このセルの時間予定を抽出（時刻昇順）
+          // このセルの単日時間予定を抽出（開始日 = このセルの日付、かつ日跨ぎなし）
           var dayTimedEvents = filteredMonthEvents.filter(function (evt) {
             if (evt.allday) return false;
-            return U.fmtYMD(new Date(evt.start)) === ymd;
+            if (U.fmtYMD(new Date(evt.start)) !== ymd) return false;
+            // 日跨ぎ予定はバー表示済みなので chip から除外
+            return KC.Lanes.timedEventToBarPosition(evt, weekYMD) === null;
           });
           dayTimedEvents.sort(function (a, b) {
             return (a.start < b.start) ? -1 : (a.start > b.start) ? 1 : 0;
@@ -3781,10 +4196,11 @@
       renderGrid: renderGrid,
       gridRange:  gridRange,
       // Phase 1B-2 実装済み
-      placeMonthAlldayEvents: placeMonthAlldayEvents,
-      placeMonthTimedEvents:  placeMonthTimedEvents,
-      applyOverflow:          applyOverflow,
-      placeMonthEvents:       placeMonthEvents,
+      placeMonthAlldayEvents:    placeMonthAlldayEvents,
+      placeMonthTimedEvents:     placeMonthTimedEvents,
+      placeMonthTimedSpanEvents: placeMonthTimedSpanEvents,
+      applyOverflow:             applyOverflow,
+      placeMonthEvents:          placeMonthEvents,
       _showMonthDOM: _showMonthDOM
     };
   }());
@@ -4008,10 +4424,49 @@
         }
       }
 
-      // ===== 時間イベント配置（当日分のみ・24:00 でクランプ） =====
+      // ===== 時間イベント配置（当日分のみ・24:00 でクランプ + カラム分割）=====
+      // 2パス方式（週ビューと同等のアルゴリズムを日ビュー 1 列に適用）
+      // REQ_overlap-rendering §6.1（設計案 A）準拠
       var dayStart = new Date(ymd + 'T00:00:00');
       var dayEnd   = U.addDays(dayStart, 1);
       var totalMin = 24 * 60;
+
+      /**
+       * セグメント配列（同一日の時間予定）にカラム情報を付与する（貪欲法）
+       * 境界値が接するだけ（a.endMin === b.startMin）は重なりに含めない（§5.1）
+       * @param {Array} segs - { startMin, endMin, ... } を持つオブジェクトの配列（破壊的変更あり）
+       */
+      function _calcOverlapLayoutDay(segs) {
+        segs.sort(function (a, b) {
+          return a.startMin !== b.startMin
+            ? a.startMin - b.startMin
+            : b.endMin - a.endMin;
+        });
+
+        var endTimes = [];
+        segs.forEach(function (seg) {
+          var freeCol = -1;
+          for (var ci = 0; ci < endTimes.length; ci++) {
+            if (endTimes[ci] <= seg.startMin) {
+              freeCol = ci;
+              break;
+            }
+          }
+          if (freeCol >= 0) {
+            seg.colIdx = freeCol;
+            endTimes[freeCol] = seg.endMin;
+          } else {
+            seg.colIdx = endTimes.length;
+            endTimes.push(seg.endMin);
+          }
+        });
+
+        var maxCols = endTimes.length || 1;
+        segs.forEach(function (seg) { seg.maxCols = maxCols; });
+      }
+
+      // 第1パス: 当日にオーバーラップする時間予定のセグメントを収集
+      var daySegs = [];
 
       filteredEvents.forEach(function (evt) {
         if (evt.allday) return;
@@ -4019,7 +4474,6 @@
         var evStart = new Date(evt.start);
         var evEnd   = new Date(evt.end);
 
-        // 当日とオーバーラップするか確認（AC4.13: 24:00 跨ぎは当日分のみ）
         if (evStart >= dayEnd || evEnd <= dayStart) return;
 
         var sTimeStr = U.pad2(evStart.getHours()) + ':' + U.pad2(evStart.getMinutes());
@@ -4031,7 +4485,6 @@
           ? (sDateStr + ' ' + sTimeStr + ' ~ ' + eTimeStr)
           : (sDateStr + ' ' + sTimeStr + ' ~ ' + eDateStr + ' ' + eTimeStr);
 
-        // 当日内でクランプ
         var segStartMs = Math.max(evStart.getTime(), dayStart.getTime());
         var segEndMs   = Math.min(evEnd.getTime(),   dayEnd.getTime());
         var segStartMin = Math.round((segStartMs - dayStart.getTime()) / 60000);
@@ -4040,38 +4493,91 @@
         if (segStartMin < 0) segStartMin = 0;
         if (segEndMin <= segStartMin) return;
 
-        var topPct    = (segStartMin / totalMin) * 100;
-        var heightPct = ((segEndMin - segStartMin) / totalMin) * 100;
+        daySegs.push({
+          evt: evt,
+          fullTimeStr: fullTimeStr,
+          segStartMin: segStartMin,
+          segEndMin: segEndMin,
+          topPct: (segStartMin / totalMin) * 100,
+          heightPct: ((segEndMin - segStartMin) / totalMin) * 100,
+          colIdx: 0,
+          maxCols: 1
+        });
+      });
 
-        var firstHourRow = rows.children[0];
-        if (!firstHourRow) return;
-        var colCell = firstHourRow.children[0];
-        if (!colCell) return;
+      // カラム分割計算（2件以上の場合のみ）
+      if (daySegs.length > 1) {
+        _calcOverlapLayoutDay(daySegs);
+      }
 
-        var overlay = colCell.querySelector('.kc-overlay');
-        if (!overlay) {
-          overlay = document.createElement('div');
-          overlay.className = 'kc-overlay';
-          overlay.style.position = 'relative';
-          overlay.style.height = 'calc(var(--kc-hours) * var(--kc-hour-height))';
-          overlay.style.width = '100%';
-          overlay.style.pointerEvents = 'none';
-          colCell.appendChild(overlay);
+      // overlay は共通なので先に確保する
+      var firstHourRowDay = rows.children[0];
+      var colCellDay = firstHourRowDay ? firstHourRowDay.children[0] : null;
+      var overlayDay = null;
+      if (colCellDay) {
+        overlayDay = colCellDay.querySelector('.kc-overlay');
+        if (!overlayDay) {
+          overlayDay = document.createElement('div');
+          overlayDay.className = 'kc-overlay';
+          overlayDay.style.position = 'relative';
+          overlayDay.style.height = 'calc(var(--kc-hours) * var(--kc-hour-height))';
+          overlayDay.style.width = '100%';
+          overlayDay.style.pointerEvents = 'none';
+          colCellDay.appendChild(overlayDay);
         }
+      }
 
+      // 第2パス: DOM 生成
+      daySegs.forEach(function (seg) {
+        if (!overlayDay) return;
+
+        var evt = seg.evt;
         var evtPerm    = KC.LoginContext.getPermission(evt);
         var evtCanEdit = evtPerm.canEdit;
         var evtBgColor = evtPerm.bgColor || evt.color || null;
+
         var div = document.createElement('div');
-        // 編集権限なし（DnD 不可）はポインターカーソルに変更（クリックでダイアログは全員開ける）
         div.className = 'kc-event';
         if (!evtCanEdit) div.style.cursor = 'pointer';
-        div.dataset.eventId = evt.id;  // SearchFilter プルダウン逆引き用
-        div.style.top    = 'calc(' + topPct + '% + 0px)';
-        div.style.height = 'calc(' + heightPct + '% - 2px)';
+        div.dataset.eventId = evt.id;
+        div.style.top    = 'calc(' + seg.topPct + '% + 0px)';
+        div.style.height = 'calc(' + seg.heightPct + '% - 2px)';
         div.style.pointerEvents = 'auto';
 
-        // 権限ルールにマッチした bgColor を優先し、なければイベント自体の色フィールドを使用
+        // 等分割＋半重ね＋右側余白方式（REQ_overlap-rendering §3.1 FR-1 確定版第6版）
+        // colWidth = usableW / (1 + (N-1) * 0.5)   usableW = overlayWidth - GUTTER - RIGHT_MARGIN_PX
+        // left     = GUTTER + colIdx * colWidth * 0.5
+        // width    = colWidth（全列同幅）
+        // right    = 'auto'（CSS の right:6px を上書き）
+        // z-index  = 10 + colIdx（後方カラムほど前面: AC4.9）
+        // 1件のみ（maxCols===1）はインラインスタイル未設定のため CSS left:6px/right:6px が有効（AC4.4）
+        if (seg.maxCols > 1) {
+          var OVERLAP_RATIO_DAY   = 0.5; // 後発カラムを colWidth の 50% 右にオフセット
+          var RIGHT_MARGIN_PX_DAY = 24;  // 新規追加用の右側余白
+          var GUTTER_DAY          = 6;   // CSS left:6px に対応する左余白（px）
+          var N_DAY               = seg.maxCols;
+          var overlayWDay         = overlayDay.offsetWidth;
+          if (overlayWDay > 0) {
+            // px で計算可能な場合
+            var usableWDay    = overlayWDay - GUTTER_DAY - RIGHT_MARGIN_PX_DAY;
+            var colWidthDay   = usableWDay / (1 + (N_DAY - 1) * OVERLAP_RATIO_DAY);
+            var overlapOffDay = colWidthDay * OVERLAP_RATIO_DAY;
+            div.style.left  = (GUTTER_DAY + seg.colIdx * overlapOffDay) + 'px';
+            div.style.width = colWidthDay + 'px';
+          } else {
+            // overlayWidth が 0 の場合: パーセント近似（RIGHT_MARGIN_PX=24 ≈ 12% / GUTTER=6 ≈ 3%）
+            var RIGHT_MARGIN_PCT_DAY = 12;
+            var GUTTER_PCT_DAY       = 3;
+            var usableWDay_pct       = 100 - GUTTER_PCT_DAY - RIGHT_MARGIN_PCT_DAY; // 85%
+            var colWidthDay_pct      = usableWDay_pct / (1 + (N_DAY - 1) * OVERLAP_RATIO_DAY);
+            var overlapOffDay_pct    = colWidthDay_pct * OVERLAP_RATIO_DAY;
+            div.style.left  = (GUTTER_PCT_DAY + seg.colIdx * overlapOffDay_pct) + '%';
+            div.style.width = colWidthDay_pct + '%';
+          }
+          div.style.right  = 'auto';
+          div.style.zIndex = String(10 + seg.colIdx);
+        }
+
         if (evtBgColor) {
           div.style.backgroundColor = evtBgColor;
           div.style.borderColor     = evtBgColor;
@@ -4084,7 +4590,7 @@
 
         var metaDiv = document.createElement('div');
         metaDiv.className = 'kc-evt-meta';
-        metaDiv.textContent = fullTimeStr;
+        metaDiv.textContent = seg.fullTimeStr;
         if (evtBgColor) {
           var mTc = evtPerm.textColor
             ? (evtPerm.textColor === '#ffffff' ? 'rgba(255,255,255,0.8)' : '#6b7280')
@@ -4102,8 +4608,9 @@
         div.appendChild(metaDiv);
         div.appendChild(btmHandle);
 
-        div.title = (evt.title || '') + '\n' + fullTimeStr;
+        div.title = (evt.title || '') + '\n' + seg.fullTimeStr;
 
+        // クリック → 新規タブで kintone レコード詳細（AC4.6）
         div.addEventListener('click', (function (capturedEvt) {
           return function (clickEvt) {
             clickEvt.stopPropagation();
@@ -4138,7 +4645,7 @@
           }
         }(evt, div));
 
-        overlay.appendChild(div);
+        overlayDay.appendChild(div);
       });
     }
 
@@ -4621,10 +5128,10 @@
     /**
      * 描画後にマッチ候補 DOM 要素へクラスを付与し、activeIndex を適用する。
      * el.title 属性（「タイトル\n時刻」形式）の改行前テキストでマッチ判定する。
-     * 対象セレクタ: .kc-event, .kc-ad-event, .kc-month-chip
+     * 対象セレクタ: .kc-event, .kc-ad-event, .kc-month-chip, .kc-month-chip--span
      */
     applyHighlight: function () {
-      var allEls = Array.from(document.querySelectorAll('.kc-event, .kc-ad-event, .kc-month-chip'));
+      var allEls = Array.from(document.querySelectorAll('.kc-event, .kc-ad-event, .kc-month-chip, .kc-month-chip--span'));
 
       // 既存クラス・スタイルをリセット
       allEls.forEach(function (el) {

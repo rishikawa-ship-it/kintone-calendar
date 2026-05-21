@@ -496,6 +496,10 @@
 /* ==========================================================================
  * 9. Events
  * ========================================================================== */
+/* 等分割＋半重ね＋右側余白方式: JS 側でインラインに left / width / right:auto / z-index を設定する。
+ * top / height は時刻ベース計算のまま（縦オフセットなし）。
+ * 重なりなし（1件のみ）の場合はインラインスタイル未設定のため left:6px / right:6px が有効（AC4.4）。
+ * REQ_overlap-rendering §3.1 FR-1（確定版第6版: 等分割＋半重ね＋右側余白 24px）準拠。 */
 .kc-event {
   position: absolute;
   left: 6px;
@@ -629,6 +633,12 @@
 /* 終日予定バーホバー時にリサイズハンドルを表示 */
 .kc-ad-event:hover .kc-resize-handle--left,
 .kc-ad-event:hover .kc-resize-handle--right {
+  opacity: 1;
+}
+
+/* 月ビュー日跨ぎ時間予定バーホバー時にリサイズハンドルを表示 */
+.kc-month-chip--span:hover .kc-resize-handle--left,
+.kc-month-chip--span:hover .kc-resize-handle--right {
   opacity: 1;
 }
 
@@ -1042,6 +1052,65 @@ body.kc-dnd-active * {
 /* 月ビュー終日バーのホバー: brightness で反応（背景色固定なので filter で対応） */
 .kc-ad-event--month:hover {
   filter: brightness(0.96);
+}
+
+/* ==========================================================================
+ * 17.2 月ビュー日跨ぎ時間予定バー（.kc-month-chip--span）
+ *   - allday=false かつ複数日にまたがる時間予定を chip 風バー表示
+ *   - .kc-month-ad-events 内に絶対配置（終日バーの下層）
+ * ========================================================================== */
+
+/* 日跨ぎ時間予定バー: chip 風全面塗り、角丸あり */
+.kc-month-chip--span {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 16px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: grab;
+  /* デフォルト色（bgColor 未指定時）。JS で上書き */
+  background: #dbeafe;
+  color: #1f2937;
+  /* 終日バー（左線ストライプ型）と視覚区別: 角丸全面塗り */
+}
+.kc-month-chip--span:hover {
+  filter: brightness(0.95);
+}
+
+/* 時刻テキスト */
+.kc-month-chip--span-time {
+  font-size: 16px;
+  flex: 0 0 auto;
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* 件名テキスト */
+.kc-month-chip--span-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ドラッグ中の薄表示 */
+.kc-month-chip--span.kc-event--dragging {
+  opacity: 0.4;
+}
+
+/* 検索ハイライト */
+.kc-month-chip--span.kc-event--match {
+  outline: 2px solid #2563eb;
+}
+.kc-month-chip--span.kc-event--match-active {
+  outline: 3px solid #1d4ed8;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.3);
 }
 
 /* ==========================================================================
