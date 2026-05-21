@@ -4088,6 +4088,27 @@
       var gridEl = _monthRoot.querySelector('.kc-month-grid');
       if (!gridEl) return;
 
+      // 冪等化: 重複呼び出し時に chip が二重描画されないよう、既存要素を事前クリアする。
+      // DnD ゴースト（.kc-event--ghost）は DnD 操作中も視覚的に残す必要があるため除外する。
+      // クリア対象:
+      //   - .kc-month-cell 内の .kc-month-chip（単日時間予定 chip）
+      //   - .kc-month-cell 内の .kc-month-chip-spacer（終日/日跨ぎバー高さ分の余白）
+      //   - .kc-month-cell 内の .kc-month-more（+N more ラベル）
+      //   - .kc-month-ad-events 内の全子要素（終日バー .kc-ad-event、日跨ぎバー .kc-month-chip--span）
+      Array.from(gridEl.querySelectorAll(
+        '.kc-month-cell .kc-month-chip:not(.kc-event--ghost),' +
+        '.kc-month-cell .kc-month-chip-spacer,' +
+        '.kc-month-cell .kc-month-more'
+      )).forEach(function (el) { el.parentNode.removeChild(el); });
+
+      Array.from(gridEl.querySelectorAll('.kc-month-ad-events')).forEach(function (layer) {
+        Array.from(layer.children).forEach(function (el) {
+          if (!el.classList.contains('kc-event--ghost')) {
+            layer.removeChild(el);
+          }
+        });
+      });
+
       // セル実高から表示可能件数を動的計算（画面サイズ・全画面モードに追従）
       var maxItems = _calcMaxItems();
 
