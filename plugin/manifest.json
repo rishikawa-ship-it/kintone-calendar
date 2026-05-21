@@ -7,8 +7,8 @@
     "en": "KC Calendar"
   },
   "description": {
-    "ja": "kintone レコードを Google カレンダー風に表示するプラグイン",
-    "en": "A plugin to display kintone records in a Google Calendar-like view"
+    "ja": "ブシロードグループ社内で開発・運用している kintone カスタマイズ。複数ビュー、DnD、重なり表示に対応。担当: 石川",
+    "en": "A kintone customization developed in-house at Bushiroad Group. Supports multiple views, DnD, and overlapping event display. Author: Ishikawa"
   },
   "icon": "src/image/icon.png",
   "desktop": {
