@@ -885,6 +885,117 @@
     { value: 'view', label: '閲覧者' }
   ];
 
+  /* ====================================================================
+   * ドラッグ & ドロップ 並び替えユーティリティ (REQ_permission-reorder)
+   * ==================================================================== */
+
+  /**
+   * ドラッグハンドル要素を生成して返す
+   * グリップ記号（⠿）を表示するだけの span 要素。
+   * draggable="true" は行全体ではなくこの要素に設定し、
+   * input / select との操作競合を回避する。
+   * @returns {HTMLElement}
+   */
+  function buildDragHandle() {
+    var handle = document.createElement('span');
+    handle.className = 'kc-drag-handle';
+    handle.setAttribute('draggable', 'true');
+    handle.setAttribute('aria-label', '行を並び替え');
+    handle.textContent = '⋮⋮'; // ⋮⋮
+    return handle;
+  }
+
+  /**
+   * 行要素にドラッグ & ドロップ イベントをアタッチする。
+   * dragstart はハンドル要素に、その他は行要素に登録する。
+   * ドロップ時は行を新位置の前/後に insertBefore で挿入する。
+   * 外部ファイルドラッグなど、text/plain データを持たない dragenter は無視する。
+   * @param {HTMLElement} row - .kc-permission-row または .kc-fieldvalue-row 要素
+   * @param {HTMLElement} handle - buildDragHandle() で生成したハンドル要素
+   */
+  function attachRowDragEvents(row, handle) {
+    // dragstart: ハンドルから開始。行を半透明にしてドラッグ元を示す
+    handle.addEventListener('dragstart', function (e) {
+      e.dataTransfer.effectAllowed = 'move';
+      // dataTransfer にマーカーを設定。値は使わないが text/plain が必要
+      e.dataTransfer.setData('text/plain', 'kc-row-drag');
+      // setDragImage でハンドル自体をゴースト画像にする
+      e.dataTransfer.setDragImage(row, 0, 0);
+      // 次のフレームで半透明化（Safari は dragstart 内で即時変更するとゴーストに反映されてしまう）
+      setTimeout(function () { row.classList.add('kc-dragging'); }, 0);
+    });
+
+    // dragend: ドラッグ終了時にクリーンアップ
+    handle.addEventListener('dragend', function () {
+      row.classList.remove('kc-dragging');
+      // 全行のハイライトクラスを除去
+      var container = row.parentNode;
+      if (container) {
+        var allRows = container.querySelectorAll('.kc-permission-row, .kc-fieldvalue-row');
+        allRows.forEach(function (r) {
+          r.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
+        });
+      }
+    });
+
+    // dragover: デフォルト動作を preventDefault してドロップを許可し、挿入線を表示
+    row.addEventListener('dragover', function (e) {
+      // text/plain を持たないドラッグ（外部ファイルなど）は無視
+      if (!e.dataTransfer.types || e.dataTransfer.types.indexOf('text/plain') === -1) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      var rect = row.getBoundingClientRect();
+      var isUpperHalf = e.clientY < rect.top + rect.height / 2;
+      row.classList.toggle('kc-drag-over-top', isUpperHalf);
+      row.classList.toggle('kc-drag-over-bottom', !isUpperHalf);
+    });
+
+    // dragenter: 外部ドラッグを弾く（dragover と同条件）
+    row.addEventListener('dragenter', function (e) {
+      if (!e.dataTransfer.types || e.dataTransfer.types.indexOf('text/plain') === -1) return;
+      e.preventDefault();
+    });
+
+    // dragleave: 挿入線を消す（子要素へ移動した場合は relatedTarget で判定）
+    row.addEventListener('dragleave', function (e) {
+      if (!row.contains(e.relatedTarget)) {
+        row.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
+      }
+    });
+
+    // drop: ドラッグ元行を新位置に移動する
+    row.addEventListener('drop', function (e) {
+      // text/plain を持たないドラッグは無視
+      if (!e.dataTransfer.types || e.dataTransfer.types.indexOf('text/plain') === -1) return;
+      e.preventDefault();
+      var container = row.parentNode;
+      if (!container) return;
+
+      // ドラッグ中クラスを持つ行がドラッグ元
+      var draggingRow = container.querySelector('.kc-dragging');
+      if (!draggingRow || draggingRow === row) {
+        row.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
+        return;
+      }
+
+      var isUpperHalf = row.classList.contains('kc-drag-over-top');
+      row.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
+
+      if (isUpperHalf) {
+        // ドロップ先行の前に挿入
+        container.insertBefore(draggingRow, row);
+      } else {
+        // ドロップ先行の後に挿入
+        var nextSibling = row.nextSibling;
+        if (nextSibling) {
+          container.insertBefore(draggingRow, nextSibling);
+        } else {
+          container.appendChild(draggingRow);
+        }
+      }
+    });
+  }
+
   /**
    * 1 行の権限エントリ要素を生成する（USER_SELECT フィールドのみ表示）
    *
@@ -900,6 +1011,10 @@
   function buildPermissionRow(rule) {
     var row = document.createElement('div');
     row.className = 'kc-permission-row';
+
+    // ドラッグハンドル（ハンドル部分だけを draggable にして input/select との競合を回避）
+    var handle = buildDragHandle();
+    attachRowDragEvents(row, handle);
 
     // フィールド選択ドロップダウン（USER_SELECT 型のみ）
     var fieldSel = buildPermissionFieldSelect(rule);
@@ -925,6 +1040,10 @@
     });
 
     // 各カラムを wrapper div で包んでヘッダーと grid 位置を揃える
+    var cellHandle = document.createElement('div');
+    cellHandle.className = 'kc-permission-cell';
+    cellHandle.appendChild(handle);
+
     var cellField = document.createElement('div');
     cellField.className = 'kc-permission-cell';
     cellField.appendChild(fieldSel);
@@ -945,6 +1064,7 @@
     cellAction.className = 'kc-permission-cell';
     cellAction.appendChild(delBtn);
 
+    row.appendChild(cellHandle);
     row.appendChild(cellField);
     row.appendChild(cellPerm);
     row.appendChild(cellBgColor);
@@ -1144,6 +1264,10 @@
     var row = document.createElement('div');
     row.className = 'kc-fieldvalue-row';
 
+    // ドラッグハンドル（ハンドル部分だけを draggable にして input/select との競合を回避）
+    var handle = buildDragHandle();
+    attachRowDragEvents(row, handle);
+
     var fieldSel = buildFieldValueFieldSelect(rule);
     var valueSel = buildFieldValueValueSelect(rule, fieldSel);
     var permSel  = buildFieldValuePermSelect(rule);
@@ -1161,6 +1285,7 @@
       row.parentNode && row.parentNode.removeChild(row);
     });
 
+    var cellHandle  = wrapCell(handle);
     var cellField   = wrapCell(fieldSel);
     var cellValue   = wrapCell(valueSel);
     var cellPerm    = wrapCell(permSel);
@@ -1168,6 +1293,7 @@
     var cellText    = wrapCellCenter('kc-fieldvalue-col-textcolor', textWidget);
     var cellAction  = wrapCell(delBtn);
 
+    row.appendChild(cellHandle);
     row.appendChild(cellField);
     row.appendChild(cellValue);
     row.appendChild(cellPerm);

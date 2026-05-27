@@ -495,10 +495,10 @@ body {
   margin-bottom: 10px;
 }
 
-/* カラムヘッダー行 */
+/* カラムヘッダー行 (ハンドル列追加: 24px + 既存 5 列) */
 .kc-permission-header {
   display: grid;
-  grid-template-columns: 2fr 1fr 44px 44px 40px;
+  grid-template-columns: 24px 2fr 1fr 44px 44px 40px;
   gap: 8px;
   align-items: center;
   background: #e8ecf1;
@@ -541,10 +541,10 @@ body {
   background: #fff;
 }
 
-/* 1 行のエントリ（フィールド選択 / 権限選択 / 背景色 / 文字色 / 削除ボタン） */
+/* 1 行のエントリ（ハンドル / フィールド選択 / 権限選択 / 背景色 / 文字色 / 削除ボタン） */
 .kc-permission-row {
   display: grid;
-  grid-template-columns: 2fr 1fr 44px 44px 40px;
+  grid-template-columns: 24px 2fr 1fr 44px 44px 40px;
   gap: 8px;
   align-items: center;
   padding: 6px 8px;
@@ -552,7 +552,7 @@ body {
   transition: background 0.1s;
 }
 
-.kc-permission-row:last-child {
+.kc-permission-row:last-child:not(.kc-drag-over-bottom) {
   border-bottom: none;
 }
 
@@ -827,10 +827,10 @@ body {
   margin-bottom: 10px;
 }
 
-/* カラムヘッダー行 (6列: フィールド / 値 / 権限 / 背景 / 文字 / 操作) */
+/* カラムヘッダー行 (7列: ハンドル / フィールド / 値 / 権限 / 背景 / 文字 / 操作) */
 .kc-fieldvalue-header {
   display: grid;
-  grid-template-columns: 2fr 1.5fr 1fr 44px 44px 40px;
+  grid-template-columns: 24px 2fr 1.5fr 1fr 44px 44px 40px;
   gap: 8px;
   align-items: center;
   background: #e8ecf1;
@@ -854,10 +854,10 @@ body {
   background: #fff;
 }
 
-/* 1 行のエントリ (6列) */
+/* 1 行のエントリ (7列: ハンドル / フィールド / 値 / 権限 / 背景 / 文字 / 操作) */
 .kc-fieldvalue-row {
   display: grid;
-  grid-template-columns: 2fr 1.5fr 1fr 44px 44px 40px;
+  grid-template-columns: 24px 2fr 1.5fr 1fr 44px 44px 40px;
   gap: 8px;
   align-items: center;
   padding: 6px 8px;
@@ -865,7 +865,7 @@ body {
   transition: background 0.1s;
 }
 
-.kc-fieldvalue-row:last-child {
+.kc-fieldvalue-row:last-child:not(.kc-drag-over-bottom) {
   border-bottom: none;
 }
 
@@ -1171,4 +1171,51 @@ body {
 .kc-config-checkbox-label:has(input[type="checkbox"]:disabled) {
   color: #aaa;
   cursor: not-allowed;
+}
+
+/* ====================================================================
+ * ドラッグ & ドロップ 並び替え (REQ_permission-reorder)
+ * ==================================================================== */
+
+/* ドラッグハンドル */
+.kc-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  cursor: grab;
+  color: #aaa;
+  font-size: 14px;
+  line-height: 1;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+}
+
+.kc-drag-handle:hover {
+  color: #555;
+  cursor: grab;
+}
+
+.kc-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* ドラッグ中の行: 半透明化 */
+.kc-permission-row.kc-dragging,
+.kc-fieldvalue-row.kc-dragging {
+  opacity: 0.4;
+}
+
+/* ドロップ位置の挿入線: 上 */
+.kc-permission-row.kc-drag-over-top,
+.kc-fieldvalue-row.kc-drag-over-top {
+  border-top: 2px solid #0078d4;
+}
+
+/* ドロップ位置の挿入線: 下 */
+.kc-permission-row.kc-drag-over-bottom,
+.kc-fieldvalue-row.kc-drag-over-bottom {
+  border-bottom: 2px solid #0078d4;
 }

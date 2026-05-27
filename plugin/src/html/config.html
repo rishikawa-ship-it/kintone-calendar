@@ -243,10 +243,11 @@
             ==================================================== -->
             <div class="kc-fieldvalue-section">
               <h3 class="kc-config-subsection-title">権限フィールド設定</h3>
-              <p class="kc-hint">フィールド値やステータスで権限を制御します（ユーザー権限より優先）。</p>
+              <p class="kc-hint">フィールド値やステータスで権限を制御します（ユーザー権限より優先）。上の行ほど優先されます。</p>
 
               <div class="kc-fieldvalue-table">
                 <div class="kc-fieldvalue-header">
+                  <div class="kc-fieldvalue-header-col kc-fieldvalue-col-handle"></div>
                   <div class="kc-fieldvalue-header-col kc-fieldvalue-col-field">フィールド</div>
                   <div class="kc-fieldvalue-header-col kc-fieldvalue-col-value">値</div>
                   <div class="kc-fieldvalue-header-col kc-fieldvalue-col-perm">権限</div>
@@ -275,10 +276,12 @@
               <p class="kc-config-section-desc">
                 予定の表示色と編集権限を管理するユーザーをフィールド単位で設定します。
                 0 件の場合は全員が編集可能です（既存挙動との後方互換）。
+                上の行ほど色の優先順位が高くなります。権限は複数マッチ時に最高権限が適用されます。
               </p>
 
               <div class="kc-permission-table">
                 <div class="kc-permission-header">
+                  <div class="kc-permission-header-col kc-permission-col-handle"></div>
                   <div class="kc-permission-header-col kc-permission-col-field">フィールド</div>
                   <div class="kc-permission-header-col kc-permission-col-perm">権限</div>
                   <div class="kc-permission-header-col kc-permission-col-bgcolor">背景</div>
