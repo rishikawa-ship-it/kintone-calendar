@@ -591,6 +591,10 @@
    * KC.Api — kintone REST API ラッパー
    * ==================================================================== */
   KC.Api = {
+    // in-flight ガード: 前リクエスト完了前の重複 GET を防ぐ
+    _loading: false,
+    _loadingPromise: null,
+
     /** kintoneレコード → KcEvent 変換 */
     /** フィールドの値を安全に読み取る（フィールドが存在しない場合は空文字） */
     _safeVal: function (rec, fieldCode, defaultVal) {
@@ -677,7 +681,7 @@
     },
 
     /**
-     * 一覧取得（cursor API: 500件超も全件取得）
+     * 一覧取得（通常 GET /records.json: 最大 500 件）
      * @param {string} isoStart - 表示期間の開始日時 (ISO8601)
      * @param {string} isoEnd   - 表示期間の終了日時 (ISO8601)
      * @returns {Promise<Array>} イベントオブジェクトの配列
@@ -687,107 +691,120 @@
      *   2. kintone.app.getQueryCondition() で kintone 一覧の絞り込み条件を取得する
      *      非空文字の場合は AND で結合する (AC26 / AC27)
      *      null または空文字の場合はスキップし期間絞り込みのみで動作する
-     *   3. order by 句を末尾に付与する
+     *   3. order by 句を末尾に付与し、limit 500 を付与する
+     *
+     * 変更履歴:
+     *   cursor API から通常 GET に切替（REQ_cursor-error-and-notify 案 B）。
+     *   運用レコード件数が 500 件以内であることを前提とする。
+     *   500 件に達した場合はバナーで超過を通知する（自動ページングは将来課題）。
      */
-    loadEvents: async function (isoStart, isoEnd) {
-      var F = KC.Config.FIELD;
+    loadEvents: function (isoStart, isoEnd) {
+      // in-flight ガード: 前リクエストが完了していない場合は進行中の Promise を返す
+      // 短時間に複数の refresh() が呼ばれても GET リクエストは 1 本に集約される
+      if (this._loading) {
+        console.log('[KC.Api.loadEvents] 前リクエスト進行中のためスキップ（同 Promise を返す）');
+        return this._loadingPromise;
+      }
+
+      this._loading = true;
       var self = this;
 
-      // DATE型の場合は "YYYY-MM-DD" 形式でクエリを組む
-      var qStart = isoStart;
-      var qEnd = isoEnd;
-      if (KC.Config.START_FIELD_TYPE === 'DATE') {
-        qStart = isoStart.substring(0, 10);
-        qEnd = isoEnd.substring(0, 10);
-      }
+      this._loadingPromise = (async function () {
+        try {
+          var F = KC.Config.FIELD;
 
-      // クエリ構築（動的。cursor API では limit 句は不要）
-      var conditions = [];
-      conditions.push('(' + F.start + ' < "' + qEnd + '")');
-      // ">=" を使う理由:
-      // 【DATE 型】kintone の end RAW 値 "YYYY-MM-DD" が qStart（同形式）と等しい
-      // 当日限りのイベント（例: 5/1 単日終日）を含めるため。
-      // クエリ構築時点では _recordToEvent による翌日変換は適用されておらず、
-      // kintone への問い合わせは RAW 値同士の文字列比較となるため "> qStart" では
-      // 当日終日イベントが除外されてしまう。
-      // 【DATETIME 型】現運用アプリは DATE 型のため実機未検証。
-      // eventToBarPosition の getDate()-1 処理によって誤表示は生じない想定だが、
-      // DATETIME 型運用が発生した際に挙動を実機確認し、本コメントに追記すること。
-      conditions.push('(' + F.end + ' >= "' + qStart + '")');
-
-      // kintone 一覧の絞り込み条件を AND 結合する (Phase 8: AC26/AC27)
-      // getQueryCondition() はビュー非表示時や絞り込み未設定時に null または空文字を返す
-      var userCondition = kintone.app.getQueryCondition();
-      if (userCondition) {
-        conditions.push('(' + userCondition + ')');
-      }
-
-      var query = conditions.join(' and ') + ' order by ' + F.start + ' asc';
-
-      // fields パラメータ（存在するフィールドのみ）
-      // $created はシステムフィールドのため FIELD オブジェクトに含まれず明示追加
-      var fieldList = ['$id', '$revision', '$created'];
-      for (var key in F) {
-        if (F[key]) fieldList.push(F[key]);
-      }
-      // 権限判定用フィールドを取得対象に追加（重複は後で除去）
-      var permRules = KC.Config.PERMISSION_RULES || [];
-      for (var pri = 0; pri < permRules.length; pri++) {
-        var pfc = permRules[pri].fieldCode;
-        if (pfc && fieldList.indexOf(pfc) === -1) {
-          fieldList.push(pfc);
-        }
-      }
-
-      // フィールド値権限判定用フィールドを取得対象に追加（重複は除去）
-      // $status は kintone のシステムフィールドのため fields パラメータに含めることで取得可能（未検証）
-      var fvRulesForField = KC.Config.FIELDVALUE_RULES || [];
-      for (var fvri = 0; fvri < fvRulesForField.length; fvri++) {
-        var fvfc = fvRulesForField[fvri].fieldCode;
-        if (fvfc && fieldList.indexOf(fvfc) === -1) {
-          fieldList.push(fvfc);
-        }
-      }
-
-      var cursorUrl = kintone.api.url('/k/v1/records/cursor.json', true);
-      var createParams = {
-        app:    KC.Config.getAppId(),
-        query:  query,
-        fields: fieldList,
-        size:   500
-      };
-
-      // cursor API による全件取得（kintone-rules.md §3 準拠）
-      var cursorId = null;
-      try {
-        var createResp = await kintone.api(cursorUrl, 'POST', createParams);
-        cursorId = createResp.id;
-
-        var allRecords = [];
-        var hasNext = true;
-        while (hasNext) {
-          var getResp = await kintone.api(cursorUrl, 'GET', { id: cursorId });
-          allRecords = allRecords.concat(getResp.records || []);
-          hasNext = getResp.next;
-          // レート制限緩衝: 次の GET まで 50ms 待機（req: §3.10）
-          if (hasNext) {
-            await new Promise(function (r) { setTimeout(r, 50); });
+          // DATE型の場合は "YYYY-MM-DD" 形式でクエリを組む
+          var qStart = isoStart;
+          var qEnd = isoEnd;
+          if (KC.Config.START_FIELD_TYPE === 'DATE') {
+            qStart = isoStart.substring(0, 10);
+            qEnd = isoEnd.substring(0, 10);
           }
-        }
 
-        return allRecords.map(function (r) { return self._recordToEvent(r); });
-      } catch (err) {
-        // cursor リソースリーク防止: エラー時に cursor を破棄する
-        if (cursorId) {
-          try {
-            await kintone.api(cursorUrl, 'DELETE', { id: cursorId });
-          } catch (e2) {
-            console.error('[KC.Api.loadEvents] cursor DELETE 失敗:', e2);
+          // クエリ構築（動的）
+          var conditions = [];
+          conditions.push('(' + F.start + ' < "' + qEnd + '")');
+          // ">=" を使う理由:
+          // 【DATE 型】kintone の end RAW 値 "YYYY-MM-DD" が qStart（同形式）と等しい
+          // 当日限りのイベント（例: 5/1 単日終日）を含めるため。
+          // クエリ構築時点では _recordToEvent による翌日変換は適用されておらず、
+          // kintone への問い合わせは RAW 値同士の文字列比較となるため "> qStart" では
+          // 当日終日イベントが除外されてしまう。
+          // 【DATETIME 型】現運用アプリは DATE 型のため実機未検証。
+          // eventToBarPosition の getDate()-1 処理によって誤表示は生じない想定だが、
+          // DATETIME 型運用が発生した際に挙動を実機確認し、本コメントに追記すること。
+          conditions.push('(' + F.end + ' >= "' + qStart + '")');
+
+          // kintone 一覧の絞り込み条件を AND 結合する (Phase 8: AC26/AC27)
+          // getQueryCondition() はビュー非表示時や絞り込み未設定時に null または空文字を返す
+          var userCondition = kintone.app.getQueryCondition();
+          if (userCondition) {
+            conditions.push('(' + userCondition + ')');
           }
+
+          // limit 500 を末尾に付与する（通常 GET の上限値）
+          var query = conditions.join(' and ') + ' order by ' + F.start + ' asc limit 500';
+
+          // fields パラメータ（存在するフィールドのみ）
+          // $created はシステムフィールドのため FIELD オブジェクトに含まれず明示追加
+          var fieldList = ['$id', '$revision', '$created'];
+          for (var key in F) {
+            if (F[key]) fieldList.push(F[key]);
+          }
+          // 権限判定用フィールドを取得対象に追加（重複は後で除去）
+          var permRules = KC.Config.PERMISSION_RULES || [];
+          for (var pri = 0; pri < permRules.length; pri++) {
+            var pfc = permRules[pri].fieldCode;
+            if (pfc && fieldList.indexOf(pfc) === -1) {
+              fieldList.push(pfc);
+            }
+          }
+
+          // フィールド値権限判定用フィールドを取得対象に追加（重複は除去）
+          // $status は kintone のシステムフィールドのため fields パラメータに含めることで取得可能（未検証）
+          var fvRulesForField = KC.Config.FIELDVALUE_RULES || [];
+          for (var fvri = 0; fvri < fvRulesForField.length; fvri++) {
+            var fvfc = fvRulesForField[fvri].fieldCode;
+            if (fvfc && fieldList.indexOf(fvfc) === -1) {
+              fieldList.push(fvfc);
+            }
+          }
+
+          var recordsUrl = kintone.api.url('/k/v1/records.json', true);
+          var params = {
+            app:    KC.Config.getAppId(),
+            query:  query,
+            fields: fieldList
+          };
+
+          // 通常 GET によるレコード取得（表示期間内は 500 件以内を前提とする）
+          var resp = await kintone.api(recordsUrl, 'GET', params);
+          var records = resp.records || [];
+
+          // 500 件到達時は表示件数上限に達した可能性をバナーで通知する
+          if (records.length >= 500) {
+            KC.Banner.show(
+              '表示件数が上限（500件）に達しました。期間を絞るか管理者にお問い合わせください。',
+              { hideReload: false }
+            );
+          }
+
+          return records.map(function (r) { return self._recordToEvent(r); });
+        } catch (err) {
+          console.error('[KC.Api.loadEvents] GET /records.json エラー:', err);
+          // 429 Too Many Requests を検知してフラグを付与（呼び出し元で判別用）
+          if (err && (err.status === 429 || err.code === 'CB_AU01')) {
+            err._isRateLimited = true;
+          }
+          throw err;
+        } finally {
+          // リクエスト完了後（成功・失敗問わず）フラグをリセット
+          self._loading = false;
+          self._loadingPromise = null;
         }
-        console.error('[KC.Api.loadEvents] cursor API エラー:', err);
-        throw err;
-      }
+      })();
+
+      return this._loadingPromise;
     },
 
     /** 作成 */
@@ -891,54 +908,518 @@
   };
 
   /* ====================================================================
-   * KC.Popup — kintone標準画面をポップアップで開く
+   * KC.Popup — kintone標準画面をモーダル（iframe埋め込み）で開く
+   *
+   * 変更履歴:
+   *   旧実装: window.open による別ウィンドウポップアップ（背面落ち問題あり）
+   *   新実装: 同一 DOM 内 iframe オーバーレイモーダル（REQ_popup-behavior-fix §3 案 B-1）
    * ==================================================================== */
   KC.Popup = {
     /**
-     * 画面幅の 80%（最大 1400px）・画面高の 85%（最大 900px）を基準にポップアップを開く。
-     * 画面中央に配置する共通ヘルパー。
-     * @param {string} url - 開く URL
-     * @returns {Window|null}
+     * モーダル静的 DOM キャッシュ（シングルトン）。
+     * backdrop/modal/header/closeBtn/loading/body は初回のみ生成して使い回す。
+     * iframe だけは開くたびに新規生成・閉じるたびに DOM から削除する（無限ループ防止）。
      */
-    _openWindow: function (url) {
-      var width  = Math.min(1400, Math.floor(window.screen.availWidth * 0.8));
-      var height = Math.min(900, Math.floor(window.screen.availHeight * 0.85));
-      var left   = Math.max(0, Math.floor((window.screen.availWidth - width) / 2));
-      var top    = Math.max(0, Math.floor((window.screen.availHeight - height) / 2));
-      var features = 'width=' + width + ',height=' + height +
-                     ',left=' + left + ',top=' + top +
-                     ',scrollbars=yes,resizable=yes';
-      return window.open(url, 'kc_edit', features);
-    },
+    _backdrop: null,
+    _modal: null,
+    _body: null,
+    _loading: null,
+    _iframe: null,
+    /** ESC キーハンドラ（addEventListener/removeEventListener で同一参照を使うため保持） */
+    _onKeydown: null,
+    /** URL ポーリング監視タイマー ID（SPA 遷移検知用。null = 停止中） */
+    _urlWatcher: null,
+    /**
+     * キャンセルボタン検知用 MutationObserver（動的生成対応。null = 未使用 or 停止済み）。
+     * _close() 時に disconnect() してリークを防ぐ。
+     */
+    _cancelObserver: null,
+    /**
+     * 保存ボタンがクリックされた（保存処理を通過中）ことを示すフラグ。
+     * true の間は load/ポーリングで保存成功 URL を検知してモーダルを閉じる。
+     * _show() でリセット、_close() でもリセット。
+     */
+    _savePending: false,
+    /**
+     * 保存ボタン検知用 MutationObserver（動的生成対応。null = 未使用 or 停止済み）。
+     * _close() 時に disconnect() してリークを防ぐ。
+     */
+    _saveObserver: null,
 
-    /** 新規作成ポップアップを開く */
-    openCreate: function (options) {
-      // options: { date, hour, minute, allday }
-      sessionStorage.setItem('KC_CREATE_CONTEXT', JSON.stringify(options));
-      // 親ウィンドウで検出済みの FIELD 設定を保存（ポップアップ側の detectFields 未完了を補完）
-      sessionStorage.setItem('KC_FIELD_CONFIG', JSON.stringify(KC.Config.FIELD));
-      // START_FIELD_TYPE（DATE / DATETIME）も保存する（ポップアップ側で値フォーマットの判定に使用）
-      sessionStorage.setItem('KC_START_FIELD_TYPE', KC.Config.START_FIELD_TYPE || 'DATETIME');
-      // ALLDAY_LABEL（終日チェックボックスのラベル文字列）も保存する
-      // ポップアップ側では KC.Config.ALLDAY_LABEL がデフォルト値のままになるケースがあり、
-      // アプリで設定されたラベルと不一致だと終日 ON が反映されない（DATETIME + 終日 不具合）
-      sessionStorage.setItem('KC_ALLDAY_LABEL', KC.Config.ALLDAY_LABEL || '終日');
-      // メールアドレス初期値設定フラグをポップアップへ渡す
-      sessionStorage.setItem('KC_MAIL_LOGIN_USER_DEFAULT', KC.Config.MAIL_LOGIN_USER_DEFAULT ? '1' : '0');
-      var appId = KC.Config.getAppId();
-      var url = '/k/' + appId + '/edit';
-      var popup = this._openWindow(url);
-      if (popup) {
-        var checkClosed = setInterval(function () {
-          if (popup.closed) {
-            clearInterval(checkClosed);
-            KC.Render.refresh();
-          }
-        }, 500);
+    /**
+     * sandbox 化した iframe 内の kintone「キャンセル」ボタンを検知してモーダルを閉じる。
+     *
+     * sandbox の allow-top-navigation 除外により kintone のキャンセル（history.back() 等）が
+     * ブロックされ、ボタンが無反応になる問題への対処。
+     * allow-same-origin + same-origin（同一 cybozu.com）なので contentDocument へのアクセスが可能。
+     *
+     * 【実機未検証】
+     * 動的生成される DOM への MutationObserver の適用タイミングや、
+     * キャンセルボタンの textContent が「キャンセル」以外の場合（英語ロケール等）は未確認。
+     *
+     * @param {HTMLIFrameElement} iframe - 対象の iframe 要素
+     */
+    _attachCancelHandler: function (iframe) {
+      var doc;
+      try {
+        doc = iframe.contentDocument;
+      } catch (e) {
+        // cross-origin 例外（通常は発生しないが念のため）
+        console.warn('[KC.Popup._attachCancelHandler] contentDocument アクセス不可:', e);
+        return;
+      }
+      if (!doc || !doc.body) return;
+
+      // キャンセルボタンを探してクリックリスナーを付与する。
+      // kintone のキャンセルボタンは a タグまたは button タグでテキストが「キャンセル」。
+      // capture phase（true）で kintone 自身のハンドラより先に実行し、
+      // history.back() 等を e.preventDefault() で阻止した上でモーダルを閉じる。
+      var bindCancelButtons = function () {
+        var allEls = doc.querySelectorAll('a, button');
+        var found = false;
+        for (var i = 0; i < allEls.length; i++) {
+          var el = allEls[i];
+          if ((el.textContent || '').trim() !== 'キャンセル') continue;
+          if (el.__kcCancelBound) { found = true; continue; }
+          el.__kcCancelBound = true;
+          found = true;
+          el.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[KC.Popup] キャンセルボタンを検知、モーダルを閉じます');
+            KC.Popup._close();
+          }, true); // capture phase
+        }
+        return found;
+      };
+
+      // 即時試行
+      if (!bindCancelButtons()) {
+        // DOM がまだ構築されていない場合は MutationObserver で動的生成を監視
+        var obs = new MutationObserver(function () {
+          bindCancelButtons();
+          // ボタンが見つかっても監視を継続する（SPAナビゲーションで再生成される場合に対応）
+        });
+        obs.observe(doc.body, { childList: true, subtree: true });
+        KC.Popup._cancelObserver = obs;
       }
     },
 
-    /** 編集（レコード詳細）ポップアップを開く */
+    /**
+     * iframe 内の kintone「保存」ボタンを検知して _savePending フラグを立てる。
+     *
+     * キャンセルハンドラと異なり、保存処理は kintone に通す（preventDefault しない）。
+     * 保存成功時は iframe が詳細画面（show#record=N、mode=edit なし）へ遷移するので、
+     * その遷移を load ハンドラ / URL ポーリングで検知してモーダルを閉じる。
+     *
+     * バリデーションエラー時は画面遷移が発生しないため、_savePending が true のまま残るが
+     * _close() は呼ばれず、ユーザーが修正して再度保存 → 遷移 → 閉じるという正しい動作になる。
+     *
+     * 【実機未検証】
+     * kintone の保存ボタンのテキストは「保存」で固定だが、英語ロケール等では異なる可能性がある。
+     *
+     * @param {HTMLIFrameElement} iframe - 対象の iframe 要素
+     */
+    _attachSaveHandler: function (iframe) {
+      var doc;
+      try {
+        doc = iframe.contentDocument;
+      } catch (e) {
+        console.warn('[KC.Popup._attachSaveHandler] contentDocument アクセス不可:', e);
+        return;
+      }
+      if (!doc || !doc.body) return;
+
+      // 保存ボタン（テキストが「保存」の button/a タグ）にフラグ立てリスナーを付与する。
+      // capture phase で登録するがキャンセルと違い preventDefault は行わない。
+      var bindSaveButtons = function () {
+        var allEls = doc.querySelectorAll('a, button');
+        var found = false;
+        for (var i = 0; i < allEls.length; i++) {
+          var el = allEls[i];
+          if ((el.textContent || '').trim() !== '保存') continue;
+          if (el.__kcSaveBound) { found = true; continue; }
+          el.__kcSaveBound = true;
+          found = true;
+          el.addEventListener('click', function () {
+            console.log('[KC.Popup] 保存ボタンを検知、保存待ちフラグを立てます');
+            KC.Popup._savePending = true;
+          }, true); // capture phase（kintone ハンドラより前に実行されるが処理は通す）
+        }
+        return found;
+      };
+
+      // 即時試行（DOM 構築済みの場合）
+      if (!bindSaveButtons()) {
+        // DOM がまだ構築されていない場合は MutationObserver で動的生成を監視する
+        // キャンセルと共用するのではなく独立した処理として登録する
+        var obs = new MutationObserver(function () {
+          bindSaveButtons();
+        });
+        obs.observe(doc.body, { childList: true, subtree: true });
+        // MutationObserver は _cancelObserver とは別管理。_close() で disconnect は不要
+        // （iframe が DOM から削除されると自動的に無効化されるため）。
+        // ただし明示的に解放したい場合は _saveObserver として管理する。
+        KC.Popup._saveObserver = obs;
+      }
+    },
+
+    /**
+     * iframe の現在の URL が「保存成功」後の詳細表示状態かどうかを判定する。
+     *
+     * 保存成功の条件:
+     *   - pathname が /k/{appId}/show である
+     *   - hash に record=数字 が含まれる
+     *   - hash に mode=edit が含まれない（編集モードでない）
+     *
+     * 新規作成保存: /k/{appId}/edit → /k/{appId}/show#record=N
+     * 編集保存:     /k/{appId}/show#record=N&mode=edit → /k/{appId}/show#record=N
+     * バリデーションエラー: 遷移なし（edit のまま or show#record=N&mode=edit のまま）
+     *
+     * @param {Location} loc - iframe.contentWindow.location オブジェクト
+     * @returns {boolean} 保存成功後の詳細表示であれば true
+     */
+    _isSaveSuccessUrl: function (loc) {
+      var appId = kintone.app.getId();
+      var p = loc.pathname;
+      var h = loc.hash;
+      // pathname が /k/{appId}/show かつ hash に record=数字 があり mode=edit がない
+      return (
+        p === '/k/' + appId + '/show' &&
+        /[#&]record=\d+/.test(h) &&
+        !/mode=edit/.test(h)
+      );
+    },
+
+    /**
+     * iframe 内の遷移先 URL が許可されているかどうかを判定する。
+     * 許可対象: 現在の appId に限定した詳細・編集・新規追加・アプリ設定画面。
+     *
+     * 判定仕様（§8.7）:
+     * - 詳細/編集（show 形式）: pathname === /k/{appId}/show かつ hash に record=数字 を含む
+     * - 新規/編集（edit 形式）: pathname === /k/{appId}/edit（query/hash 任意）
+     * - アプリ設定: pathname が /k/admin/app/{appId}/ で始まる
+     * - フロー設定: pathname === /k/admin/app/flow かつ search に app={appId} を含む
+     * - 上記以外（一覧 /show?view= で record hash なし、ルート、他アプリ等）は不許可
+     *
+     * 一覧 URL (/k/{appId}/show?view=...) はこの判定で意図的に弾く。
+     * 旧実装の前方一致 ^/k/{appId}/show では一覧も許可されてしまい、
+     * 「追加→キャンセル→一覧遷移」でモーダルが閉じない不具合の原因だった。
+     *
+     * @param {Location} loc - iframe.contentWindow.location オブジェクト
+     * @returns {boolean} 許可されていれば true
+     */
+    _isAllowedUrl: function (loc) {
+      var appId = kintone.app.getId();
+      var p = loc.pathname;
+      var h = loc.hash;
+      var s = loc.search;
+      // 詳細・編集（show 形式）: pathname 完全一致 かつ hash に record=数字
+      if (p === '/k/' + appId + '/show' && /[#&]record=\d+/.test(h)) return true;
+      // 新規・編集（edit 形式）: pathname 完全一致（query/hash は問わない）
+      if (p === '/k/' + appId + '/edit') return true;
+      // アプリ設定: pathname 前方一致
+      if (p.indexOf('/k/admin/app/' + appId + '/') === 0) return true;
+      // フロー設定: pathname 完全一致 かつ search に app={appId}
+      if (p === '/k/admin/app/flow' && s.indexOf('app=' + appId) !== -1) return true;
+      return false;
+    },
+
+    /**
+     * モーダル静的 DOM（backdrop/modal/loading）を生成して body に追加する。
+     * 初回呼び出し時のみ実行。iframe はここでは生成しない（_show() で毎回生成）。
+     */
+    _init: function () {
+      if (this._backdrop) return; // 既に初期化済み
+
+      // backdrop
+      var backdrop = document.createElement('div');
+      backdrop.id = 'kc-modal-backdrop';
+      backdrop.className = 'kc-modal-backdrop';
+      backdrop.setAttribute('hidden', '');
+
+      // モーダル本体
+      var modal = document.createElement('div');
+      modal.id = 'kc-modal';
+      modal.className = 'kc-modal';
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-modal', 'true');
+      modal.setAttribute('aria-label', 'レコード詳細');
+
+      // ヘッダー（×ボタン）
+      var header = document.createElement('div');
+      header.className = 'kc-modal-header';
+
+      var closeBtn = document.createElement('button');
+      closeBtn.className = 'kc-modal-close';
+      closeBtn.setAttribute('aria-label', '閉じる');
+      closeBtn.textContent = '×';
+      header.appendChild(closeBtn);
+
+      // モーダルボディ（iframe の親。_show で iframe をここに追加する）
+      var body = document.createElement('div');
+      body.className = 'kc-modal-body';
+
+      // ローディング表示
+      var loading = document.createElement('div');
+      loading.id = 'kc-modal-loading';
+      loading.className = 'kc-modal-loading';
+      loading.textContent = '読み込み中...';
+
+      body.appendChild(loading);
+      modal.appendChild(header);
+      modal.appendChild(body);
+      backdrop.appendChild(modal);
+      document.body.appendChild(backdrop);
+
+      // backdrop クリック（モーダル外の暗い領域のみ）で閉じる
+      backdrop.addEventListener('click', function (e) {
+        if (e.target === backdrop) {
+          KC.Popup._close();
+        }
+      });
+
+      // ×ボタンクリックで閉じる
+      closeBtn.addEventListener('click', function () {
+        KC.Popup._close();
+      });
+
+      // ESC キーハンドラを保持（開閉のたびに add/remove するため参照を保存）
+      this._onKeydown = function (e) {
+        if (e.key === 'Escape') {
+          KC.Popup._close();
+        }
+      };
+
+      this._backdrop = backdrop;
+      this._modal = modal;
+      this._body = body;
+      this._loading = loading;
+    },
+
+    /**
+     * iframe を新規生成してモーダルを表示する。
+     * 開くたびに iframe を生成し、閉じるたびに DOM から削除する方式とすることで、
+     * _close() 後に about:blank への load イベントが発火しなくなり無限ループを防ぐ。
+     * @param {string} url - iframe に読み込む URL
+     */
+    _show: function (url) {
+      this._init();
+
+      // モーダルを開くときに保存待ちフラグをリセット（前回の状態が残らないようにする）
+      this._savePending = false;
+
+      // 既に iframe が残っている場合は削除してからやり直す（連続クリック対応）
+      if (this._iframe && this._iframe.parentNode) {
+        this._body.removeChild(this._iframe);
+        this._iframe = null;
+      }
+
+      // ローディング表示にリセット
+      this._loading.style.display = '';
+
+      // iframe を新規生成（開くたびに作り直すことで閉じ後の load 発火を原理的に排除）
+      var iframe = document.createElement('iframe');
+      iframe.className = 'kc-modal-iframe';
+      iframe.title = 'レコード詳細';
+      iframe.style.visibility = 'hidden';
+
+      // --- frame busting 対策: sandbox 属性 ---
+      // allow-top-navigation を除外することで、iframe 内から window.top.location を変更する
+      // 操作（frame busting）をブロックする。
+      //
+      // 【重要・実機未検証】
+      // kintone 標準の「キャンセル」は history.back() を呼ぶ。
+      // history.back() がセッション履歴を top-level（親ウィンドウ）まで遡るかどうかは
+      // ブラウザ実装依存であり、sandbox の allow-top-navigation 除外だけで防げるかは
+      // 不確定。必ず実機で動作確認すること。
+      //
+      // また sandbox によって kintone の一部機能（下記）が壊れる可能性がある。
+      // 実機確認必須の機能:
+      //   - レコード保存（allow-forms が必要）
+      //   - 添付ファイルのプレビュー / ダウンロード（allow-popups / allow-downloads が必要）
+      //   - ルックアップ・ユーザー選択などのポップアップ（allow-popups が必要）
+      //   - alert / confirm ダイアログ（allow-modals が必要）
+      //   - SAML 認証セッション（allow-same-origin が必要）
+      iframe.setAttribute(
+        'sandbox',
+        'allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads'
+      );
+
+      var loading = this._loading;
+
+      // iframe ロード完了: ローディング非表示 + 遷移先 URL 監視 + キャンセルボタン検知
+      iframe.addEventListener('load', function () {
+        // この iframe が既に DOM から切り離されている場合は処理しない
+        if (!iframe.parentNode) return;
+
+        loading.style.display = 'none';
+        iframe.style.visibility = 'visible';
+
+        // sandbox でブロックされたキャンセルボタンをキャプチャして代替クローズ処理を登録
+        // ページロードのたびに再バインドする（SPA ナビゲーションでも対応）
+        KC.Popup._attachCancelHandler(iframe);
+
+        // 保存ボタンを検知してフラグを立てるハンドラを登録
+        // ページロードのたびに再バインドする（SPA ナビゲーションでも対応）
+        KC.Popup._attachSaveHandler(iframe);
+
+        // 遷移先 URL が許可パターン外なら自動クローズ
+        try {
+          var loc = iframe.contentWindow.location;
+
+          // 保存成功の検知（_savePending が true の状態で詳細表示 URL に遷移した場合）
+          // キャンセル検知・一覧遷移検知より先に評価する
+          if (KC.Popup._savePending && KC.Popup._isSaveSuccessUrl(loc)) {
+            console.log('[KC.Popup] 保存成功を検知、カレンダー再描画してモーダルを閉じます:', loc.pathname + loc.hash);
+            KC.Popup._savePending = false;
+            if (KC.Render && typeof KC.Render._refreshImmediate === 'function') {
+              KC.Render._refreshImmediate();
+            }
+            KC.Popup._close();
+            return;
+          }
+
+          if (!KC.Popup._isAllowedUrl(loc)) {
+            console.log('[KC.Popup] 許可外 URL への遷移を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
+            KC.Popup._close();
+          }
+        } catch (e) {
+          // cross-origin 例外: 想定外ドメインへ遷移した（ログイン画面等）→ 閉じる
+          console.log('[KC.Popup] cross-origin 遷移を検知、モーダルを閉じます:', e);
+          KC.Popup._close();
+        }
+      });
+
+      // CSP frame-ancestors などによる読み込み失敗の検知
+      iframe.addEventListener('error', function () {
+        console.error('[KC.Popup] iframe の読み込みに失敗しました。CSP の frame-ancestors 制約を確認してください。');
+      });
+
+      iframe.src = url;
+      this._body.appendChild(iframe);
+      this._iframe = iframe;
+
+      // backdrop 表示
+      this._backdrop.removeAttribute('hidden');
+
+      // body スクロール禁止（アクセシビリティ §8.6）
+      document.body.style.overflow = 'hidden';
+
+      // ESC キーリスナー登録（モーダル表示中のみ有効）
+      document.addEventListener('keydown', this._onKeydown);
+
+      // URL ポーリング監視を開始（SPA 的遷移で load が発火しないケースを補完）
+      // kintone の一覧⇔詳細⇔編集の遷移は pushState / hashchange で完結することがあり、
+      // load イベントだけでは一覧遷移（キャンセル等）を取りこぼす場合がある（実機未検証）。
+      // ポーリングは iframe.contentWindow.location を読むだけで API リクエストは発生しない。
+      KC.Popup._urlWatcher = setInterval(function () {
+        var iframe = KC.Popup._iframe;
+        // iframe が DOM から切り離されていれば既に閉じ済みなので何もしない
+        if (!iframe || !iframe.parentNode) return;
+        try {
+          var loc = iframe.contentWindow.location;
+
+          // 保存成功の検知（SPA 遷移で load が発火しないケースを補完）
+          if (KC.Popup._savePending && KC.Popup._isSaveSuccessUrl(loc)) {
+            console.log('[KC.Popup] ポーリング: 保存成功を検知、カレンダー再描画してモーダルを閉じます:', loc.pathname + loc.hash);
+            KC.Popup._savePending = false;
+            if (KC.Render && typeof KC.Render._refreshImmediate === 'function') {
+              KC.Render._refreshImmediate();
+            }
+            KC.Popup._close();
+            return;
+          }
+
+          if (!KC.Popup._isAllowedUrl(loc)) {
+            console.log('[KC.Popup] ポーリング: 許可外 URL を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
+            KC.Popup._close();
+          }
+        } catch (e) {
+          // cross-origin 例外: 想定外ドメインへ遷移した（ログイン画面等）→ 閉じる
+          console.log('[KC.Popup] ポーリング: cross-origin 遷移を検知、モーダルを閉じます:', e);
+          KC.Popup._close();
+        }
+      }, 500);
+    },
+
+    /**
+     * モーダルを閉じ、カレンダーを再描画する。
+     * iframe を DOM から削除することで about:blank の load イベントが発火しなくなり、
+     * 遷移監視ハンドラが再帰的に呼ばれる無限ループを原理的に防ぐ。
+     * ×ボタン・ESC・backdrop クリック・許可外 URL 遷移の共通クローズ処理。
+     */
+    _close: function () {
+      if (!this._backdrop) return;
+
+      // ポーリング監視を停止（先に停止してから iframe 削除）。
+      // clearInterval を先に行うことで、削除後にポーリングが走り続けるリークを防ぐ。
+      clearInterval(KC.Popup._urlWatcher);
+      KC.Popup._urlWatcher = null;
+
+      // キャンセルボタン検知の MutationObserver を解除
+      if (KC.Popup._cancelObserver) {
+        KC.Popup._cancelObserver.disconnect();
+        KC.Popup._cancelObserver = null;
+      }
+
+      // 保存ボタン検知の MutationObserver を解除
+      if (KC.Popup._saveObserver) {
+        KC.Popup._saveObserver.disconnect();
+        KC.Popup._saveObserver = null;
+      }
+
+      // 保存待ちフラグをリセット（閉じたので保留中の保存状態はクリア）
+      KC.Popup._savePending = false;
+
+      // iframe を DOM から削除（これにより以降の load イベントは発火しない）
+      if (this._iframe && this._iframe.parentNode) {
+        this._body.removeChild(this._iframe);
+      }
+      this._iframe = null;
+
+      // backdrop 非表示
+      this._backdrop.setAttribute('hidden', '');
+
+      // body スクロール禁止を解除
+      document.body.style.overflow = '';
+
+      // ESC キーリスナー解除
+      document.removeEventListener('keydown', this._onKeydown);
+
+      // カレンダー再描画（方法 X: 閉じる時に再描画）
+      KC.Render.refresh();
+    },
+
+    /**
+     * 新規作成モーダルを開く。
+     * sessionStorage へのコンテキスト書き込みは既存ロジックをそのまま維持し、
+     * 開く手段のみ window.open からモーダルに変更する。
+     * @param {{ date: string, hour: number, minute: number, allday: boolean }} options
+     */
+    openCreate: function (options) {
+      // options: { date, hour, minute, allday }
+      sessionStorage.setItem('KC_CREATE_CONTEXT', JSON.stringify(options));
+      // 親ウィンドウで検出済みの FIELD 設定を保存（iframe 側の detectFields 未完了を補完）
+      sessionStorage.setItem('KC_FIELD_CONFIG', JSON.stringify(KC.Config.FIELD));
+      // START_FIELD_TYPE（DATE / DATETIME）も保存する（iframe 側で値フォーマットの判定に使用）
+      sessionStorage.setItem('KC_START_FIELD_TYPE', KC.Config.START_FIELD_TYPE || 'DATETIME');
+      // ALLDAY_LABEL（終日チェックボックスのラベル文字列）も保存する
+      // iframe 側では KC.Config.ALLDAY_LABEL がデフォルト値のままになるケースがあり、
+      // アプリで設定されたラベルと不一致だと終日 ON が反映されない（DATETIME + 終日 不具合）
+      sessionStorage.setItem('KC_ALLDAY_LABEL', KC.Config.ALLDAY_LABEL || '終日');
+      // メールアドレス初期値設定フラグを iframe へ渡す
+      sessionStorage.setItem('KC_MAIL_LOGIN_USER_DEFAULT', KC.Config.MAIL_LOGIN_USER_DEFAULT ? '1' : '0');
+      var appId = KC.Config.getAppId();
+      var url = '/k/' + appId + '/edit';
+      this._show(url);
+    },
+
+    /**
+     * 編集（レコード詳細）モーダルを開く。
+     * URL 組み立てロジックは旧 openEdit から流用し、開く手段のみモーダルに変更する。
+     * @param {string|number} recordId - kintone レコード ID
+     */
     openEdit: function (recordId) {
       if (recordId === undefined || recordId === null || recordId === '') {
         console.error('[KC.Popup.openEdit] recordId が取得できていません:', recordId);
@@ -947,16 +1428,8 @@
       }
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/show#record=' + recordId;
-      console.log('[KC.Popup.openEdit] open:', url);
-      var popup = this._openWindow(url);
-      if (popup) {
-        var checkClosed = setInterval(function () {
-          if (popup.closed) {
-            clearInterval(checkClosed);
-            KC.Render.refresh();
-          }
-        }, 500);
-      }
+      console.log('[KC.Popup.openEdit] open modal:', url);
+      this._show(url);
     }
   };
 
@@ -3395,11 +3868,21 @@
       var isoEnd   = toISO(U.addDays(range.end, 1));
 
       try {
+        KC.Banner.hide();
         S.events = await KC.Api.loadEvents(isoStart, isoEnd);
         KC.Render.renderGrid();
         KC.Render.refreshTitle();
       } catch (err) {
         console.error('[KC] loadEvents error:', err);
+        var msg;
+        if (err && err._isRateLimited) {
+          msg = 'アクセスが集中しています。しばらく待ってから再読み込みしてください。';
+        } else if (err && err.code === 'GAIA_TM12') {
+          msg = 'カーソルの上限に達しました。しばらく待ってから再読み込みしてください。';
+        } else {
+          msg = 'データの読み込みに失敗しました。再読み込みしてください。';
+        }
+        KC.Banner.show(msg);
       }
     }
 
@@ -4198,6 +4681,7 @@
       var isoEnd   = toISO(U.addDays(range.end, 1));
 
       try {
+        KC.Banner.hide();
         S.events = await KC.Api.loadEvents(isoStart, isoEnd);
         // グリッドを再描画してからイベントを配置する（Phase 1B-2）
         renderGrid();
@@ -4209,6 +4693,15 @@
         });
       } catch (err) {
         console.error('[KC.RenderMonth] loadEvents error:', err);
+        var msg;
+        if (err && err._isRateLimited) {
+          msg = 'アクセスが集中しています。しばらく待ってから再読み込みしてください。';
+        } else if (err && err.code === 'GAIA_TM12') {
+          msg = 'カーソルの上限に達しました。しばらく待ってから再読み込みしてください。';
+        } else {
+          msg = 'データの読み込みに失敗しました。再読み込みしてください。';
+        }
+        KC.Banner.show(msg);
       }
     }
 
@@ -4700,11 +5193,21 @@
       var isoEnd   = toISO(range.end);  // 翌日 0:00（open-end: dayRange が addDays(start,1) を返す）
 
       try {
+        KC.Banner.hide();
         S.events = await KC.Api.loadEvents(isoStart, isoEnd);
         KC.Render.renderGrid();
         KC.Render.refreshTitle();
       } catch (err) {
         console.error('[KC.RenderDay] loadEvents error:', err);
+        var msg;
+        if (err && err._isRateLimited) {
+          msg = 'アクセスが集中しています。しばらく待ってから再読み込みしてください。';
+        } else if (err && err.code === 'GAIA_TM12') {
+          msg = 'カーソルの上限に達しました。しばらく待ってから再読み込みしてください。';
+        } else {
+          msg = 'データの読み込みに失敗しました。再読み込みしてください。';
+        }
+        KC.Banner.show(msg);
       }
     }
 
@@ -4715,6 +5218,92 @@
       placeEvents: placeEvents
     };
   }());
+
+  /* ====================================================================
+   * KC.Banner — エラー通知バナー（REQ_cursor-error-and-notify §3 FR-2）
+   *
+   * カレンダー上部に固定表示するシングルトンバナー。
+   * loadEvents 失敗時に show()、成功時に hide() を呼ぶ。
+   * 再読み込みボタン: KC.Render.refresh() を再実行し、成功したら自動消去。
+   * ==================================================================== */
+  KC.Banner = {
+    /**
+     * バナーを表示する（既存バナーがある場合はメッセージだけ更新する）
+     * @param {string} message - 表示するエラーメッセージ
+     * @param {Object} [opts]
+     * @param {boolean} [opts.hideReload=false] - true のとき「再読み込み」ボタンを非表示にする
+     */
+    show: function (message, opts) {
+      var hideReload = opts && opts.hideReload === true;
+      var root = document.getElementById('kc-root');
+      if (!root) return;
+
+      // シングルトン: 既存バナーを更新する
+      var existing = root.querySelector('.kc-error-banner');
+      if (existing) {
+        var msgEl = existing.querySelector('.kc-error-banner__msg');
+        if (msgEl) msgEl.textContent = message;
+        return;
+      }
+
+      // バナー DOM 構築
+      var banner = document.createElement('div');
+      banner.className = 'kc-error-banner';
+      banner.setAttribute('role', 'alert');
+
+      var msgSpan = document.createElement('span');
+      msgSpan.className = 'kc-error-banner__msg';
+      msgSpan.textContent = message;
+      banner.appendChild(msgSpan);
+
+      var actions = document.createElement('span');
+      actions.className = 'kc-error-banner__actions';
+
+      // 「再読み込み」ボタン
+      if (!hideReload) {
+        var reloadBtn = document.createElement('button');
+        reloadBtn.className = 'kc-error-banner__btn kc-error-banner__btn--reload';
+        reloadBtn.type = 'button';
+        reloadBtn.textContent = '再読み込み';
+        reloadBtn.addEventListener('click', function () {
+          // in-flight 中は無効（loadEvents が進行中のためスキップ）
+          if (KC.Api && KC.Api._loading) return;
+          // 連打防止: クリック後 3 秒間ボタンを無効化する
+          reloadBtn.disabled = true;
+          setTimeout(function () { reloadBtn.disabled = false; }, 3000);
+          // _refreshImmediate を直接呼ぶ（debounce を経由せず即座にリロード）
+          if (KC.Render && typeof KC.Render._refreshImmediate === 'function') {
+            KC.Render._refreshImmediate();
+          }
+        });
+        actions.appendChild(reloadBtn);
+      }
+
+      // 「×」閉じるボタン
+      var closeBtn = document.createElement('button');
+      closeBtn.className = 'kc-error-banner__btn kc-error-banner__btn--close';
+      closeBtn.type = 'button';
+      closeBtn.setAttribute('aria-label', 'バナーを閉じる');
+      closeBtn.textContent = '×';
+      closeBtn.addEventListener('click', function () {
+        KC.Banner.hide();
+      });
+      actions.appendChild(closeBtn);
+
+      banner.appendChild(actions);
+
+      // .kc-root の先頭に挿入する
+      root.insertBefore(banner, root.firstChild);
+    },
+
+    /** バナーを除去する */
+    hide: function () {
+      var root = document.getElementById('kc-root');
+      if (!root) return;
+      var banner = root.querySelector('.kc-error-banner');
+      if (banner) banner.parentNode.removeChild(banner);
+    }
+  };
 
   /* ====================================================================
    * KC.Render — レンダラーファサード
@@ -4761,8 +5350,27 @@
       return KC.RenderWeek;
     },
 
-    /** 共通 refresh 入口 */
-    refresh: async function () {
+    /**
+     * 共通 refresh 入口（debounce ラッパー）
+     * 300ms 以内の連続呼び出しは 1 回に集約し、GET リクエストの連発を防ぐ。
+     * モーダル閉じ直後など即時反映が必要な箇所は refresh.immediate() を呼ぶこと。
+     */
+    refresh: function () {
+      var self = this;
+      clearTimeout(self._refreshTimer);
+      self._refreshTimer = setTimeout(function () {
+        self._refreshImmediate();
+      }, 300);
+    },
+
+    /** debounce タイマー（内部管理用） */
+    _refreshTimer: null,
+
+    /**
+     * refresh の即時実行版。debounce を経由せず直ちに描画・データ取得を行う。
+     * 通常の UI イベントからは refresh() を使うこと。
+     */
+    _refreshImmediate: async function () {
       var root = document.getElementById('kc-root');
       if (!root) return;
 
@@ -6381,8 +6989,9 @@
    * グローバルにリフレッシュ関数を公開（ポップアップから呼ばれる）
    * ==================================================================== */
   window.KC_REFRESH = function () {
-    if (KC && KC.Render && KC.Render.refresh) {
-      KC.Render.refresh();
+    // ポップアップ保存後の即時更新: debounce を経由せず直ちに描画する
+    if (KC && KC.Render && typeof KC.Render._refreshImmediate === 'function') {
+      KC.Render._refreshImmediate();
     }
   };
 

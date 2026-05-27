@@ -1055,3 +1055,150 @@ body.kc-dnd-active * {
 /* CSS 変数での条件分岐は不可のため JS で kc-day--day-view クラスを付与する代わりに
    col-count が 1 のときは改行を許可するよう上書きする */
 /* 注: 日ビューでは列幅が広いため既存 CSS のまま問題ない場合が多い（必要に応じて有効化） */
+
+/* ==========================================================================
+ * 20. Record Modal（iframe埋め込みモーダル）— REQ_popup-behavior-fix §3 案 B-1
+ * ========================================================================== */
+
+/* backdrop: 全画面を覆う半透明黒オーバーレイ
+ * z-index 10000: .kc-root.kc-expanded（9999）・.kc-event--ghost（9999）より前面 */
+.kc-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* hidden 属性で非表示（JS が removeAttribute('hidden') で表示） */
+.kc-modal-backdrop[hidden] {
+  display: none;
+}
+
+/* モーダル本体: 固定マージン方式（画面いっぱい） */
+.kc-modal {
+  position: fixed;
+  inset: 32px 8vw;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  z-index: 10001;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* モーダルヘッダー（×ボタン行） */
+.kc-modal-header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  flex: 0 0 auto;
+}
+
+/* ×ボタン */
+.kc-modal-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  color: #6b7280;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+.kc-modal-close:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+/* ==========================================================================
+ * エラー通知バナー（REQ_cursor-error-and-notify FR-2）
+ * ========================================================================== */
+.kc-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  margin: 6px 0;
+  font-size: 13px;
+  color: #991b1b;
+  line-height: 1.4;
+}
+
+.kc-error-banner__msg {
+  flex: 1 1 auto;
+}
+
+.kc-error-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.kc-error-banner__btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+  background: #fff;
+  color: #991b1b;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.kc-error-banner__btn:hover {
+  background: #fca5a5;
+  color: #7f1d1d;
+}
+
+.kc-error-banner__btn--close {
+  padding: 3px 7px;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+/* モーダルボディ（ローディング + iframe を格納） */
+.kc-modal-body {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+}
+
+/* ローディング表示 */
+.kc-modal-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #6b7280;
+  background: #fff;
+  z-index: 1;
+}
+
+/* iframe: ボディ全体を覆う。ロード完了まで visibility:hidden で非表示（JS 制御） */
+.kc-modal-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+  visibility: hidden;
+}
