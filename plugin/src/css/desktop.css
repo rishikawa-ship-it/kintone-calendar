@@ -399,7 +399,7 @@
   gap: 4px;
   white-space: nowrap;
   border-top: 1px solid var(--kc-border);
-  background: transparent;
+  background: var(--kc-surface);
   box-sizing: border-box;
   z-index: 2;   /* .kc-ad-events (z-index: 1) より前面 */
 }

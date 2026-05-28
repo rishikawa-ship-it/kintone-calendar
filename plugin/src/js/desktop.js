@@ -1512,7 +1512,7 @@
      * @param {number} lane - レーン番号（元バーの lane）
      */
     function _positionAlldayGhost(ghost, colStart, span, lane, colCount) {
-      var BAR_H   = 22;
+      var BAR_H   = 24;
       var BAR_GAP = 3;
       var BAR_TOP = 4;
       var cc = colCount || _getWeekYMDs().length || 7;
@@ -3157,7 +3157,7 @@
      */
     function buildAlldayBar(ev, locator) {
       var colCount = (locator && locator.colCount > 0) ? locator.colCount : 7;
-      var BAR_H   = 22;
+      var BAR_H   = 24;
       var BAR_GAP = 3;
       var BAR_TOP = 4;
 
@@ -3518,7 +3518,7 @@
       // ===== 行高の動的制御（AC 4.10・4.11・4.12 対応）=====
       if (alldayWrap) {
         // 高さ計算定数（CSS 変数と同値）
-        var BAR_H    = 22;   /* --kc-ad-bar-h */
+        var BAR_H    = 24;   /* --kc-ad-bar-h */
         var BAR_GAP  = 3;    /* --kc-ad-bar-gap */
         var BAR_TOP  = 4;    /* --kc-ad-bar-top */
         var BAR_BTM  = 4;    /* 下部パディング */
@@ -4104,7 +4104,7 @@
     }
 
     // バー高さ定数（週ビューの buildAlldayBar と同値）
-    var BAR_H   = 22;  /* --kc-ad-bar-h */
+    var BAR_H   = 24;  /* --kc-ad-bar-h */
     var BAR_GAP = 3;   /* --kc-ad-bar-gap */
     // BAR_TOP: .kc-month-ad-events の top が CSS で --kc-month-dateline-h (28px) に設定されたため
     // adLayer 自体が dateline の下から始まる。バー個別の top オフセットは 0 で OK。
@@ -4132,7 +4132,7 @@
       var dateHeadH = 28;        // 日付ヘッダー（dateline）高: --kc-month-dateline-h と同値
       var padding   = 4;         // セル padding 上下合計（CSS: padding 2px）
       var moreH     = 16;        // +N more 行高
-      var itemH     = BAR_H + BAR_GAP; // 1 件あたりの高さ（25px）
+      var itemH     = BAR_H + BAR_GAP; // 1 件あたりの高さ（27px）
       var available = cellH - dateHeadH - padding - moreH;
       var max = Math.floor(available / itemH);
       return Math.max(1, Math.min(max, 10));
@@ -4918,7 +4918,7 @@
       });
 
       if (alldayWrap) {
-        var BAR_H    = 22;
+        var BAR_H    = 24;
         var BAR_GAP  = 3;
         var BAR_TOP  = 4;
         var BAR_BTM  = 4;
