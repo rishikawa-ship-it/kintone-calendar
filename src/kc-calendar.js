@@ -4090,15 +4090,22 @@
 
     /**
      * +N more 要素を追加する
-     * @param {HTMLElement} cellEl - .kc-month-cell 要素
-     * @param {number} remaining - 非表示件数
+     * @param {HTMLElement} cellEl       - .kc-month-cell 要素
+     * @param {number}      remaining    - 非表示件数
+     * @param {Array}       hiddenEvents - 非表示予定オブジェクト配列（終日・時間予定混在）
      */
-    function applyOverflow(cellEl, remaining) {
+    function applyOverflow(cellEl, remaining, hiddenEvents) {
       if (remaining <= 0) return;
       var more = document.createElement('div');
       more.className = 'kc-month-more';
       more.textContent = '+' + remaining + ' more';
-      // Phase 1: クリック挙動なし（Phase 2 でポップオーバー接続）
+      var ymd = cellEl.dataset.date;
+      // クロージャで hiddenEvents を捕捉し、クリック時にポップオーバーを開く
+      var eventsForPopup = hiddenEvents || [];
+      more.addEventListener('click', function (e) {
+        e.stopPropagation();
+        KC.MonthOverflowPopup.open(more, ymd, eventsForPopup);
+      });
       cellEl.appendChild(more);
     }
 
@@ -4110,6 +4117,9 @@
       if (!_monthRoot) return;
       var gridEl = _monthRoot.querySelector('.kc-month-grid');
       if (!gridEl) return;
+
+      // 月ビュー再描画前にポップオーバーを閉じる（ポップオーバーが開いていない場合は冪等）
+      if (KC.MonthOverflowPopup) KC.MonthOverflowPopup.close();
 
       // 冪等化: 重複呼び出し時に chip が二重描画されないよう、既存要素を事前クリアする。
       // DnD ゴースト（.kc-event--ghost）は DnD 操作中も視覚的に残す必要があるため除外する。
@@ -4178,11 +4188,12 @@
           var chipsAdded = placeMonthTimedEvents(cellEl, dayTimedEvents, usedSlots, maxItems);
 
           // 非表示件数を計算して +N more を表示
-          var totalItems = usedSlots + dayTimedEvents.length;
-          var displayed  = usedSlots + chipsAdded;
-          var hiddenCount = totalItems - displayed;
+          // hiddenCount は時間予定（chip）の非表示分のみを対象とする
+          // 終日バー / 日跨ぎバーの超過は本要件のスコープ外（別フェーズで対応）
+          var hiddenCount = dayTimedEvents.length - chipsAdded;
           if (hiddenCount > 0) {
-            applyOverflow(cellEl, hiddenCount);
+            var hiddenTimed = dayTimedEvents.slice(chipsAdded);
+            applyOverflow(cellEl, hiddenCount, hiddenTimed);
           }
         });
       });
@@ -5173,6 +5184,357 @@
       this._patched = true;
     }
   };
+
+  /* ====================================================================
+   * KC.MonthOverflowPopup — 月ビュー +N more ポップオーバー
+   * +N more クリックで非表示予定をフローティングポップオーバーに一覧表示する
+   * ==================================================================== */
+  KC.MonthOverflowPopup = (function () {
+    // 現在表示中のポップオーバー要素（null = 非表示）
+    var _popupEl = null;
+    // 現在表示中の日付 YMD（同日トグル判定用）
+    var _anchorYMD = null;
+    // リサイズリスナー参照（close 時に解除）
+    var _onResize = null;
+    // 外側クリックリスナー参照（close 時に解除）
+    var _onDocClick = null;
+    // ESC キーリスナー参照（close 時に解除）
+    var _onKeydown = null;
+    // リサイズ debounce タイマー（close 時にクリア可能なようモジュールスコープに置く）
+    var _resizeTimer = null;
+
+    /**
+     * 'YYYY-MM-DD' を「水, 5月28日」形式に変換する
+     * @param {string} dateYMD
+     * @returns {string}
+     */
+    function _formatDateHeader(dateYMD) {
+      var parts = dateYMD.split('-');
+      var d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+      var days = ['日', '月', '火', '水', '木', '金', '土'];
+      var dow = days[d.getDay()];
+      return dow + ', ' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
+    }
+
+    /**
+     * Date オブジェクトを「HH:MM」形式に変換する
+     * @param {Date} dateObj
+     * @returns {string}
+     */
+    function _formatTime(dateObj) {
+      var h = dateObj.getHours();
+      var m = dateObj.getMinutes();
+      return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+    }
+
+    /**
+     * 期間ラベル「5/26 – 5/30」を生成する（同年なら年省略、年跨ぎ時のみ年表示）
+     * @param {string} startYMD - 'YYYY-MM-DD'
+     * @param {string} endYMD   - 'YYYY-MM-DD'
+     * @returns {string}
+     */
+    function _formatSpanLabel(startYMD, endYMD) {
+      var sp = startYMD.split('-');
+      var ep = endYMD.split('-');
+      var sy = parseInt(sp[0], 10);
+      var ey = parseInt(ep[0], 10);
+      var sm = parseInt(sp[1], 10);
+      var em = parseInt(ep[1], 10);
+      var sd = parseInt(sp[2], 10);
+      var ed = parseInt(ep[2], 10);
+      var startStr = (sy !== ey) ? (sy + '/' + sm + '/' + sd) : (sm + '/' + sd);
+      var endStr   = (sy !== ey) ? (ey + '/' + em + '/' + ed) : (em + '/' + ed);
+      return startStr + ' – ' + endStr;
+    }
+
+    /**
+     * イベントの予定色を返す（KC.Config 互換）
+     * @param {Object} evt - KcEvent オブジェクト
+     * @returns {string} CSS カラー文字列
+     */
+    function _getEventColor(evt) {
+      var perm = KC.LoginContext && typeof KC.LoginContext.getPermission === 'function'
+        ? KC.LoginContext.getPermission(evt)
+        : null;
+      if (perm && perm.bgColor) return perm.bgColor;
+      return evt.color || '#4285f4';
+    }
+
+    /**
+     * ポップオーバーの DOM ツリーを生成して返す
+     * @param {string} dateYMD
+     * @param {Array}  eventsList - 非表示予定オブジェクト配列（終日・時間予定混在）
+     * @returns {HTMLElement}
+     */
+    function _buildDOM(dateYMD, eventsList) {
+      var popup = document.createElement('div');
+      popup.className = 'kc-month-overflow-popup';
+      popup.setAttribute('role', 'dialog');
+      popup.setAttribute('aria-modal', 'false');
+      popup.setAttribute('aria-labelledby', 'kc-mop-header-label');
+
+      // ヘッダー
+      var header = document.createElement('div');
+      header.className = 'kc-month-overflow-header';
+
+      var headerLabel = document.createElement('span');
+      headerLabel.className = 'kc-month-overflow-header-label';
+      headerLabel.id = 'kc-mop-header-label';
+      headerLabel.textContent = _formatDateHeader(dateYMD);
+
+      var closeBtn = document.createElement('button');
+      closeBtn.className = 'kc-month-overflow-close';
+      closeBtn.setAttribute('aria-label', '閉じる');
+      closeBtn.textContent = '×';
+
+      header.appendChild(headerLabel);
+      header.appendChild(closeBtn);
+      popup.appendChild(header);
+
+      // 予定一覧
+      var list = document.createElement('div');
+      list.className = 'kc-month-overflow-list';
+
+      // 終日 → 時間順に並べる（要件 §3.2）
+      var alldayEvents = eventsList.filter(function (e) { return e.allday; });
+      var timedEvents  = eventsList.filter(function (e) { return !e.allday; });
+      timedEvents.sort(function (a, b) {
+        return (a.start < b.start) ? -1 : (a.start > b.start) ? 1 : 0;
+      });
+
+      alldayEvents.forEach(function (evt) {
+        var item = document.createElement('div');
+        item.className = 'kc-month-overflow-item kc-month-overflow-item--allday';
+
+        var bar = document.createElement('div');
+        bar.className = 'kc-month-overflow-bar';
+        bar.style.backgroundColor = _getEventColor(evt);
+        bar.textContent = evt.title || '(無題)';
+        item.appendChild(bar);
+
+        // 複数日 span の場合は期間ラベルを追加
+        var startYMD = KC.Utils.fmtYMD(new Date(evt.start));
+        var endYMD   = KC.Utils.fmtYMD(new Date(evt.end));
+        if (startYMD !== endYMD) {
+          var spanLabel = document.createElement('div');
+          spanLabel.className = 'kc-month-overflow-span-label';
+          spanLabel.textContent = _formatSpanLabel(startYMD, endYMD);
+          item.appendChild(spanLabel);
+        }
+
+        item.addEventListener('click', function (e) {
+          e.stopPropagation();
+          close();
+          KC.Popup.openEdit(evt.id);
+        });
+
+        list.appendChild(item);
+      });
+
+      timedEvents.forEach(function (evt) {
+        var item = document.createElement('div');
+        item.className = 'kc-month-overflow-item kc-month-overflow-item--timed';
+
+        var dot = document.createElement('span');
+        dot.className = 'kc-month-overflow-dot';
+        dot.style.backgroundColor = _getEventColor(evt);
+
+        var timeSpan = document.createElement('span');
+        timeSpan.className = 'kc-month-overflow-time';
+        timeSpan.textContent = _formatTime(new Date(evt.start));
+
+        var titleSpan = document.createElement('span');
+        titleSpan.className = 'kc-month-overflow-title';
+        titleSpan.textContent = evt.title || '(無題)';
+
+        item.appendChild(dot);
+        item.appendChild(timeSpan);
+        item.appendChild(titleSpan);
+
+        item.addEventListener('click', function (e) {
+          e.stopPropagation();
+          close();
+          KC.Popup.openEdit(evt.id);
+        });
+
+        list.appendChild(item);
+      });
+
+      popup.appendChild(list);
+
+      // ヘッダーラベルクリック: 日ビューへ遷移
+      headerLabel.addEventListener('click', function (e) {
+        e.stopPropagation();
+        close();
+        var parts = dateYMD.split('-');
+        KC.State.current = new Date(
+          parseInt(parts[0], 10),
+          parseInt(parts[1], 10) - 1,
+          parseInt(parts[2], 10)
+        );
+        KC.State.view = 'day';
+        KC.Render.refresh();
+      });
+
+      // × ボタンクリック
+      closeBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        close();
+      });
+
+      return popup;
+    }
+
+    /**
+     * アンカー要素の位置からポップオーバーの top/left を計算する
+     * flip → clamp → 中央フォールバック の順で処理する
+     * @param {HTMLElement} anchorEl
+     * @param {HTMLElement} popupEl
+     * @returns {{ top: number, left: number }}
+     */
+    function _calcPosition(anchorEl, popupEl) {
+      try {
+        var ar = anchorEl.getBoundingClientRect();
+        var vw = window.innerWidth;
+        var vh = window.innerHeight;
+        var pw = popupEl.offsetWidth  || 320;
+        var ph = popupEl.offsetHeight || 200;
+        var MARGIN = 4;
+
+        // デフォルト: アンカー直下
+        var top  = ar.bottom + MARGIN;
+        var left = ar.left;
+
+        // 右端 flip
+        if (left + pw > vw - MARGIN) {
+          left = ar.right - pw;
+        }
+
+        // 下端 flip
+        if (top + ph > vh - MARGIN) {
+          top = ar.top - ph - MARGIN;
+        }
+
+        // clamp
+        if (left < MARGIN) left = MARGIN;
+        if (left + pw > vw - MARGIN) left = vw - pw - MARGIN;
+        if (top < MARGIN) top = MARGIN;
+        if (top + ph > vh - MARGIN) top = vh - ph - MARGIN;
+
+        // 中央フォールバック: clamp 後もはみ出す場合
+        var tooWide = pw > vw - MARGIN * 2;
+        var tooTall = ph > vh - MARGIN * 2;
+        if (tooWide || tooTall) {
+          return { fallback: true };
+        }
+
+        return { top: top, left: left, fallback: false };
+      } catch (err) {
+        return { fallback: true };
+      }
+    }
+
+    /**
+     * 計算した位置をポップオーバーに適用する（中央フォールバック含む）
+     * @param {HTMLElement} anchorEl
+     */
+    function _applyPosition(anchorEl) {
+      if (!_popupEl) return;
+      var pos = _calcPosition(anchorEl, _popupEl);
+      if (pos.fallback) {
+        _popupEl.style.top  = '50%';
+        _popupEl.style.left = '50%';
+        _popupEl.style.transform = 'translate(-50%, -50%)';
+      } else {
+        _popupEl.style.top  = pos.top  + 'px';
+        _popupEl.style.left = pos.left + 'px';
+        _popupEl.style.transform = '';
+      }
+    }
+
+    /**
+     * ESC / 外側クリック / リサイズ の各イベントリスナーを設定する
+     * @param {HTMLElement} anchorEl
+     */
+    function _bindEvents(anchorEl) {
+      _onKeydown = function (e) {
+        if (e.key === 'Escape' || e.keyCode === 27) {
+          close();
+        }
+      };
+
+      // 外側クリック: ポップオーバー内クリックは stopPropagation で到達しない
+      _onDocClick = function () {
+        close();
+      };
+
+      _onResize = function () {
+        // debounce 100ms
+        if (_resizeTimer) clearTimeout(_resizeTimer);
+        _resizeTimer = setTimeout(function () {
+          if (_popupEl && _anchorYMD) _applyPosition(anchorEl);
+        }, 100);
+      };
+
+      document.addEventListener('keydown', _onKeydown);
+      document.addEventListener('click', _onDocClick);
+      window.addEventListener('resize', _onResize);
+    }
+
+    /**
+     * ポップオーバーを開く
+     * @param {HTMLElement} anchorEl  - .kc-month-more 要素
+     * @param {string}      dateYMD   - 'YYYY-MM-DD'
+     * @param {Array}       eventsList - 非表示予定オブジェクト配列
+     */
+    function open(anchorEl, dateYMD, eventsList) {
+      // 同日再クリック: トグル（閉じる）
+      if (_anchorYMD === dateYMD) {
+        close();
+        return;
+      }
+
+      // 別日クリック: 既存を閉じる
+      close();
+
+      var popup = _buildDOM(dateYMD, eventsList);
+      // ポップオーバー内クリックが外側クリックハンドラに到達しないよう伝播を止める
+      popup.addEventListener('click', function (e) {
+        e.stopPropagation();
+      });
+
+      document.body.appendChild(popup);
+      _popupEl    = popup;
+      _anchorYMD  = dateYMD;
+
+      // DOM に追加してから位置計算（offsetWidth/Height が確定するため）
+      _applyPosition(anchorEl);
+      _bindEvents(anchorEl);
+    }
+
+    /**
+     * ポップオーバーを閉じる（冪等: 既に閉じていても安全）
+     */
+    function close() {
+      if (!_popupEl) return;
+
+      if (_popupEl.parentNode) {
+        _popupEl.parentNode.removeChild(_popupEl);
+      }
+      _popupEl   = null;
+      _anchorYMD = null;
+
+      if (_onKeydown)  { document.removeEventListener('keydown', _onKeydown); _onKeydown = null; }
+      if (_onDocClick) { document.removeEventListener('click', _onDocClick);   _onDocClick = null; }
+      if (_onResize)   { window.removeEventListener('resize', _onResize);      _onResize = null; }
+      if (_resizeTimer) { clearTimeout(_resizeTimer); _resizeTimer = null; }
+    }
+
+    return {
+      open:  open,
+      close: close
+    };
+  }());
 
   /* ====================================================================
    * KC.EventFilter — イベントフィルタリングユーティリティ

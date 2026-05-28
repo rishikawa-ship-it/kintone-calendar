@@ -948,7 +948,7 @@ body.kc-dnd-active * {
   font-size: 12px;
   color: var(--kc-subtext);
   padding: 1px 4px;
-  cursor: default;
+  cursor: pointer;
   flex: 0 0 auto;
   margin-top: 1px;
   position: relative;
@@ -1201,4 +1201,142 @@ body.kc-dnd-active * {
   border: none;
   display: block;
   visibility: hidden;
+}
+
+/* ==========================================================================
+ * 月ビュー: +N more オーバーフロー ポップオーバー（KC.MonthOverflowPopup）
+ * ========================================================================== */
+
+@keyframes kc-mop-fadein {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ポップオーバールート */
+.kc-month-overflow-popup {
+  position: fixed;
+  width: 320px;
+  max-height: 400px;
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  padding: 12px;
+  z-index: 800;
+  box-sizing: border-box;
+  animation: kc-mop-fadein 150ms ease;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ヘッダー行（日付ラベル + × ボタン） */
+.kc-month-overflow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 8px 0;
+  flex: 0 0 auto;
+}
+
+/* 日付テキスト（クリックで日ビュー遷移） */
+.kc-month-overflow-header-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  cursor: pointer;
+}
+
+.kc-month-overflow-header-label:hover {
+  text-decoration: underline;
+}
+
+/* × 閉じるボタン */
+.kc-month-overflow-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: #6b7280;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.kc-month-overflow-close:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+/* 予定一覧コンテナ */
+.kc-month-overflow-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+/* 1予定分の行ラッパー */
+.kc-month-overflow-item {
+  cursor: pointer;
+  border-radius: 4px;
+  margin-bottom: 2px;
+}
+
+.kc-month-overflow-item:hover {
+  background: #f9fafb;
+}
+
+/* 終日予定行 */
+.kc-month-overflow-item--allday {
+  margin-bottom: 4px;
+}
+
+/* 終日予定の色付きバー本体 */
+.kc-month-overflow-bar {
+  font-size: 13px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 複数日 span 終日予定の期間ラベル */
+.kc-month-overflow-span-label {
+  font-size: 11px;
+  color: #6b7280;
+  padding: 1px 6px 2px;
+}
+
+/* 時間予定行 */
+.kc-month-overflow-item--timed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+}
+
+/* 色付き円ドット */
+.kc-month-overflow-dot {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* 開始時刻 */
+.kc-month-overflow-time {
+  font-size: 12px;
+  color: #6b7280;
+  flex: 0 0 auto;
+}
+
+/* 予定タイトル */
+.kc-month-overflow-title {
+  font-size: 12px;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
