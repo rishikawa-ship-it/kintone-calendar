@@ -954,6 +954,19 @@ body.kc-dnd-active * {
   position: relative;
   z-index: 2;  /* .kc-month-ad-events (z-index: 1) より前面に表示 */
   border-radius: 4px;
+  /* セル空白 hover 時にセル親の背景色変化が透過しないよう通常時背景を明示する */
+  background: var(--kc-bg, #fff);
+}
+
+/* 土曜セル内 more は土曜通常背景色に揃える */
+.kc-month-cell--sat .kc-month-more {
+  background: rgba(26, 115, 232, 0.03);
+}
+
+/* 日曜・祝日セル内 more は日祝通常背景色に揃える */
+.kc-month-cell--sun .kc-month-more,
+.kc-month-cell--holiday .kc-month-more {
+  background: rgba(229, 62, 62, 0.03);
 }
 
 /* +N more にホバー時: more ラベル自体の背景だけ変化させる */
