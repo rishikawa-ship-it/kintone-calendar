@@ -5200,8 +5200,11 @@
     var _resizeTimer = null;
     // .kc-month-more 要素 → 非表示予定配列 のマッピング（WeakMap: 要素 GC 時に自動解放）
     var _hiddenEventsMap = new WeakMap();
-    // document への capture phase 委譲リスナーが登録済みかどうかのフラグ
-    var _docDelegateBound = false;
+    // 委譲リスナーを登録済みの document 集合（WeakSet: document 破棄時に entry が自動解放される）
+    var _boundDocs = new WeakSet();
+    // open() 時に登録した document / window の参照（close() で同じオブジェクトから remove するために保持）
+    var _listenerDoc = null;
+    var _listenerWin = null;
 
     /**
      * 'YYYY-MM-DD' を「水, 5月28日」形式に変換する
@@ -5395,8 +5398,9 @@
     function _calcPosition(anchorEl, popupEl) {
       try {
         var ar = anchorEl.getBoundingClientRect();
-        var vw = window.innerWidth;
-        var vh = window.innerHeight;
+        var ownerWin = (anchorEl && anchorEl.ownerDocument && anchorEl.ownerDocument.defaultView) || window;
+        var vw = ownerWin.innerWidth;
+        var vh = ownerWin.innerHeight;
         var pw = popupEl.offsetWidth  || 320;
         var ph = popupEl.offsetHeight || 200;
         var MARGIN = 4;
@@ -5460,18 +5464,21 @@
      */
     function registerHiddenEvents(moreEl, hiddenEvents) {
       _hiddenEventsMap.set(moreEl, hiddenEvents);
-      _bindDocDelegateOnce();
+      _bindDocDelegateOnce(moreEl);
     }
 
     /**
      * document への capture phase クリック委譲リスナーを 1 回だけ登録する
      * 拡張機能が .kc-month-more の直接リスナーを消しても、
      * document 側のリスナーは消えないため影響を受けない
+     * 全画面表示時は anchorEl.ownerDocument 経由で正しい document を取得する
+     * @param {HTMLElement} referenceEl - ownerDocument 取得に使う参照要素
      */
-    function _bindDocDelegateOnce() {
-      if (_docDelegateBound) return;
-      _docDelegateBound = true;
-      document.addEventListener('click', _onDocClickDelegate, true); // capture phase
+    function _bindDocDelegateOnce(referenceEl) {
+      var doc = (referenceEl && referenceEl.ownerDocument) || document;
+      if (_boundDocs.has(doc)) return;
+      _boundDocs.add(doc);
+      doc.addEventListener('click', _onDocClickDelegate, true); // capture phase
     }
 
     /**
@@ -5494,6 +5501,7 @@
 
     /**
      * ESC / 外側クリック / リサイズ の各イベントリスナーを設定する
+     * 全画面表示時は anchorEl.ownerDocument / defaultView 経由で正しい context に登録する
      * @param {HTMLElement} anchorEl
      */
     function _bindEvents(anchorEl) {
@@ -5516,9 +5524,9 @@
         }, 100);
       };
 
-      document.addEventListener('keydown', _onKeydown);
-      document.addEventListener('click', _onDocClick);
-      window.addEventListener('resize', _onResize);
+      _listenerDoc.addEventListener('keydown', _onKeydown);
+      _listenerDoc.addEventListener('click', _onDocClick);
+      _listenerWin.addEventListener('resize', _onResize);
     }
 
     /**
@@ -5543,7 +5551,10 @@
         e.stopPropagation();
       });
 
-      document.body.appendChild(popup);
+      // 全画面表示時は anchorEl.ownerDocument / defaultView 経由で正しい context を取得する
+      _listenerDoc = (anchorEl && anchorEl.ownerDocument) || document;
+      _listenerWin = _listenerDoc.defaultView || window;
+      _listenerDoc.body.appendChild(popup);
       _popupEl    = popup;
       _anchorYMD  = dateYMD;
 
@@ -5564,9 +5575,18 @@
       _popupEl   = null;
       _anchorYMD = null;
 
-      if (_onKeydown)  { document.removeEventListener('keydown', _onKeydown); _onKeydown = null; }
-      if (_onDocClick) { document.removeEventListener('click', _onDocClick);   _onDocClick = null; }
-      if (_onResize)   { window.removeEventListener('resize', _onResize);      _onResize = null; }
+      if (_listenerDoc) {
+        if (_onKeydown)  { _listenerDoc.removeEventListener('keydown', _onKeydown); }
+        if (_onDocClick) { _listenerDoc.removeEventListener('click', _onDocClick); }
+      }
+      if (_listenerWin) {
+        if (_onResize)   { _listenerWin.removeEventListener('resize', _onResize); }
+      }
+      _onKeydown  = null;
+      _onDocClick = null;
+      _onResize   = null;
+      _listenerDoc = null;
+      _listenerWin = null;
       if (_resizeTimer) { clearTimeout(_resizeTimer); _resizeTimer = null; }
     }
 

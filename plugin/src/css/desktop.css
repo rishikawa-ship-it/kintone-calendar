@@ -961,6 +961,24 @@ body.kc-dnd-active * {
   margin-top: 1px;
   position: relative;
   z-index: 2;  /* .kc-month-ad-events (z-index: 1) より前面に表示 */
+  border-radius: 4px;
+}
+
+/* +N more にホバー時: more ラベル自体の背景だけ変化させる */
+.kc-month-more:hover {
+  background: var(--kc-muted);
+}
+
+/* +N more にホバー中はセル全体の hover 背景変化を抑制する（:has() Chrome 105+/Edge 105+/Safari 15.4+ 対応）*/
+.kc-month-cell:has(.kc-month-more:hover) {
+  background: transparent;
+}
+
+/* 土日祝セル: +N more にホバー中は曜日専用背景色も抑制 */
+.kc-month-cell--sat:has(.kc-month-more:hover),
+.kc-month-cell--sun:has(.kc-month-more:hover),
+.kc-month-cell--holiday:has(.kc-month-more:hover) {
+  background: transparent;
 }
 
 /* 全画面モード時の月グリッド高（REQ_month-view §7.2）*/
