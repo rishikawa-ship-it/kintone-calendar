@@ -4099,14 +4099,10 @@
       var more = document.createElement('div');
       more.className = 'kc-month-more';
       more.textContent = '+' + remaining + ' more';
-      var ymd = cellEl.dataset.date;
-      // クロージャで hiddenEvents を捕捉し、クリック時にポップオーバーを開く
-      var eventsForPopup = hiddenEvents || [];
-      more.addEventListener('click', function (e) {
-        e.stopPropagation();
-        KC.MonthOverflowPopup.open(more, ymd, eventsForPopup);
-      });
+      // click リスナーは document capture phase の委譲ハンドラで処理する
+      // （拡張機能の DOM mutation で直接リスナーが消えるバグを回避）
       cellEl.appendChild(more);
+      KC.MonthOverflowPopup.registerHiddenEvents(more, hiddenEvents || []);
     }
 
     /**
@@ -5202,6 +5198,10 @@
     var _onKeydown = null;
     // リサイズ debounce タイマー（close 時にクリア可能なようモジュールスコープに置く）
     var _resizeTimer = null;
+    // .kc-month-more 要素 → 非表示予定配列 のマッピング（WeakMap: 要素 GC 時に自動解放）
+    var _hiddenEventsMap = new WeakMap();
+    // document への capture phase 委譲リスナーが登録済みかどうかのフラグ
+    var _docDelegateBound = false;
 
     /**
      * 'YYYY-MM-DD' を「水, 5月28日」形式に変換する
@@ -5453,6 +5453,46 @@
     }
 
     /**
+     * .kc-month-more 要素と非表示予定配列を WeakMap に登録し、
+     * document への capture phase 委譲リスナーを初回のみ設定する
+     * @param {HTMLElement} moreEl       - .kc-month-more 要素
+     * @param {Array}       hiddenEvents - 非表示予定オブジェクト配列
+     */
+    function registerHiddenEvents(moreEl, hiddenEvents) {
+      _hiddenEventsMap.set(moreEl, hiddenEvents);
+      _bindDocDelegateOnce();
+    }
+
+    /**
+     * document への capture phase クリック委譲リスナーを 1 回だけ登録する
+     * 拡張機能が .kc-month-more の直接リスナーを消しても、
+     * document 側のリスナーは消えないため影響を受けない
+     */
+    function _bindDocDelegateOnce() {
+      if (_docDelegateBound) return;
+      _docDelegateBound = true;
+      document.addEventListener('click', _onDocClickDelegate, true); // capture phase
+    }
+
+    /**
+     * document の capture phase クリックハンドラ（委譲）
+     * .kc-month-more がクリックされた場合のみ open を呼ぶ
+     * @param {MouseEvent} e
+     */
+    function _onDocClickDelegate(e) {
+      var moreEl = e.target && typeof e.target.closest === 'function'
+        ? e.target.closest('.kc-month-more')
+        : null;
+      if (!moreEl) return;
+      e.stopPropagation();
+      e.preventDefault();
+      var cellEl = moreEl.parentElement;
+      var ymd = cellEl ? cellEl.dataset.date : null;
+      var hiddenEvents = _hiddenEventsMap.get(moreEl) || [];
+      if (ymd) open(moreEl, ymd, hiddenEvents);
+    }
+
+    /**
      * ESC / 外側クリック / リサイズ の各イベントリスナーを設定する
      * @param {HTMLElement} anchorEl
      */
@@ -5531,8 +5571,9 @@
     }
 
     return {
-      open:  open,
-      close: close
+      open:                open,
+      close:               close,
+      registerHiddenEvents: registerHiddenEvents
     };
   }());
 
