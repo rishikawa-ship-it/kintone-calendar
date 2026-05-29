@@ -1252,7 +1252,10 @@ body.kc-dnd-active * {
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   padding: 12px;
-  z-index: 800;
+  /* 全画面モード時 kintone overlay（数千〜数万オーダー）より前面に出るため大幅引き上げ。
+   * .kc-modal-backdrop (10000) / .kc-modal (10001) より上だが、
+   * 予定クリック時に本 popup は即 close されるため同時表示にならず競合なし。 */
+  z-index: 99999;
   box-sizing: border-box;
   animation: kc-mop-fadein 150ms ease;
   overflow: hidden;
