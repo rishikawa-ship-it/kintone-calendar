@@ -140,6 +140,36 @@
         </section>
 
         <!-- ====================================================
+          セクション 1.5: 検索対象フィールド設定 (REQ_search-bar v3)
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">検索対象フィールド設定</h2>
+          <p class="kc-config-section-desc">
+            カレンダー検索欄で検索するフィールドを設定します。タイトルフィールドは常に検索対象です。
+          </p>
+
+          <div class="kc-search-target-section">
+            <p class="kc-hint">※ タイトルフィールドは常に検索対象です</p>
+
+            <div class="kc-search-target-table">
+              <div class="kc-search-target-header">
+                <div class="kc-search-target-header-col kc-search-target-col-field">フィールド</div>
+                <div class="kc-search-target-header-col kc-search-target-col-action"></div>
+              </div>
+              <div id="kc-search-target-rows" class="kc-search-target-rows">
+                <!-- 検索対象フィールド行を JavaScript で動的追加 -->
+              </div>
+            </div>
+
+            <div class="kc-search-target-add-row">
+              <button type="button" id="kc-search-target-add" class="kc-config-btn kc-config-btn-secondary">
+                + 行を追加
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================================================
           セクション 2: ビュー個別設定 (統合版: Phase 7 + Phase 9)
         ==================================================== -->
         <section class="kc-config-section" id="kc-per-view-section">

@@ -268,13 +268,18 @@
       // v5 以前の設定では fieldValueRules が存在しないため空配列として初期化する（§8.3 後方互換）
       KC.Config.FIELDVALUE_RULES = Array.isArray(config.fieldValueRules) ? config.fieldValueRules : [];
 
+      // 検索対象フィールド設定 (version 7 以降) を適用
+      // v6 以前の設定では searchTargets が存在しないため空配列として初期化する（Phase 1 互換フォールバック）
+      KC.Config.SEARCH_TARGETS = Array.isArray(config.searchTargets) ? config.searchTargets : [];
+
       // メールアドレス初期値設定 (fieldMapping.mailLoginUserDefault が存在しない場合は false: 後方互換デフォルト)
       KC.Config.MAIL_LOGIN_USER_DEFAULT =
         (config.fieldMapping && config.fieldMapping.mailLoginUserDefault === true);
 
       console.log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD,
         'PERMISSION_RULES:', KC.Config.PERMISSION_RULES,
-        'FIELDVALUE_RULES:', KC.Config.FIELDVALUE_RULES);
+        'FIELDVALUE_RULES:', KC.Config.FIELDVALUE_RULES,
+        'SEARCH_TARGETS:', KC.Config.SEARCH_TARGETS);
     }
   };
 
@@ -294,6 +299,12 @@
    * @type {Array<{fieldCode: string, fieldType: string, value: string, permission: string, bgColor: string, textColor: string}>}
    */
   KC.Config.FIELDVALUE_RULES = [];
+  /**
+   * 検索対象フィールド配列 (REQ_search-bar v3 §6.1)
+   * loadFromPluginConfig で上書きされる。初期値は空配列 = タイトルのみ検索（Phase 1 互換フォールバック）
+   * @type {Array<{fieldCode: string}>}
+   */
+  KC.Config.SEARCH_TARGETS = [];
   /**
    * メールアドレス初期値設定フラグ
    * loadFromPluginConfig で上書きされる。初期値は false（後方互換デフォルト）
@@ -654,7 +665,8 @@
         account:          F.account && rec[F.account] ? ((rec[F.account].value || [])[0]?.code || '') : '',
         memo:             self._safeVal(rec, F.memo),
         permissionFields: permissionFields, /* 権限ユーザー判定用フィールド値（REQ §6.2） */
-        valueFields:      valueFields        /* フィールド値権限判定用フィールド値（REQ v6 §6.2） */
+        valueFields:      valueFields,       /* フィールド値権限判定用フィールド値（REQ v6 §6.2） */
+        record:           rec               /* 元 kintone レコード（Phase 2 追加フィールド検索用） */
       };
 
       if (KC.Config.START_FIELD_TYPE === 'DATE') {
@@ -5390,6 +5402,21 @@
       } else if (m && typeof m.renderGrid === 'function') {
         m.renderGrid();
       }
+
+      // REFERENCE_TABLE の関連レコードをキャッシュ取得する（FR-15）
+      // データ取得後・ハイライト適用前に実行し、キャッシュ更新後に applyHighlight が呼ばれるようにする
+      if (KC.SearchFilter._searchTargets.length > 0) {
+        try {
+          await KC.SearchFilter.loadRelatedRecords();
+        } catch (err) {
+          console.error('[KC Render] loadRelatedRecords 失敗:', err);
+        }
+        // キャッシュ更新後に再度ハイライトを適用する
+        if (KC.SearchFilter.query) {
+          KC.SearchFilter.applyHighlight();
+        }
+      }
+
       this.refreshTitle();
       // view 切替後も aria-label が正しい単位を示すよう更新する（REQ_day-view §3.6）
       if (KC.Boot && typeof KC.Boot._updateNavAriaLabels === 'function') {
@@ -6107,8 +6134,8 @@
   };
 
   /* ====================================================================
-   * KC.SearchFilter — 検索欄フィルタ（Phase A: REQ_search-bar v2）
-   * ヘッダー右側に検索入力欄を追加し、タイトルキーワードで予定を絞り込む
+   * KC.SearchFilter — 検索欄フィルタ（Phase 2: REQ_search-bar v3）
+   * ヘッダー右側に検索入力欄を追加し、タイトル + 追加フィールドのキーワードで予定を絞り込む
    * ==================================================================== */
   KC.SearchFilter = {
     /** 現在の検索クエリ（空文字 = 無効） */
@@ -6121,6 +6148,18 @@
     activeIndex: -1,
     /** 現在のマッチ候補 DOM 要素リスト（表示順） */
     _matchList: [],
+
+    // Phase 2 追加プロパティ
+    /** 関連レコードキャッシュ: { [fieldCode]: { [recordId]: kintoneRecord } } */
+    _relatedRecordsCache: {},
+    /** プラグイン設定から読み込んだ検索対象フィールド一覧 */
+    _searchTargets: [],
+    /** REFERENCE_TABLE フィールド定義キャッシュ: { [fieldCode]: { appId, displayFields } } */
+    _refTableDefs: {},
+    /** _loadRefTableDefs 完了フラグ（二重取得防止） */
+    _refTableDefsLoaded: false,
+    /** matchField で一度 warn 済みのフィールドコード（コンソール汚染防止: 初回のみ出力） */
+    _warnedFields: new Set(),
 
     /**
      * 検索クエリを設定し、再描画をトリガーする
@@ -6155,14 +6194,89 @@
     },
 
     /**
-     * 1件の予定がトークン配列に全てマッチするか判定する
-     * @param {Object} evt - KcEvent
+     * kintone レコードの指定フィールドから検索対象テキストを取得する（Phase 2 新規）
+     * フィールド型に応じて以下のように処理する:
+     *   - SINGLE_LINE_TEXT / MULTI_LINE_TEXT / RICH_TEXT: value をそのまま返す
+     *   - USER_SELECT: 各エントリの name と code を結合して返す（OR 検索対応）
+     *   - REFERENCE_TABLE: _relatedRecordsCache から該当レコードの displayFields 値を結合して返す
+     * @param {Object} record - kintone 元レコードオブジェクト
+     * @param {string} fieldCode - フィールドコード
+     * @returns {string} 検索対象文字列
+     */
+    matchField: function (record, fieldCode) {
+      var field = record[fieldCode];
+      if (!field) {
+        if (!this._warnedFields.has(fieldCode)) {
+          this._warnedFields.add(fieldCode);
+          console.warn('[KC.SearchFilter] searchTargets フィールド未存在: ' + fieldCode);
+        }
+        return '';
+      }
+
+      if (field.type === 'USER_SELECT') {
+        if (!Array.isArray(field.value) || field.value.length === 0) return '';
+        return field.value.map(function (u) {
+          return (u.name || '') + ' ' + (u.code || '');
+        }).join(' ');
+      }
+
+      if (field.type === 'REFERENCE_TABLE') {
+        var def = this._refTableDefs[fieldCode];
+        if (!def || !def.displayFields || def.displayFields.length === 0) return '';
+        var cache = this._relatedRecordsCache[fieldCode];
+        if (!cache) return '';
+
+        var rows = field.value || [];
+        return rows.map(function (row) {
+          var rowRecord = row.record;
+          if (!rowRecord || !rowRecord.$id) return '';
+          var relRecord = cache[rowRecord.$id.value];
+          if (!relRecord) return '';
+          return def.displayFields.map(function (df) {
+            var f = relRecord[df.fieldCode];
+            return f ? (f.value || '') : '';
+          }).join(' ');
+        }).join(' ');
+      }
+
+      // SINGLE_LINE_TEXT / MULTI_LINE_TEXT / RICH_TEXT / LOOKUP (元フィールド型) 等
+      return field.value || '';
+    },
+
+    /**
+     * 1件の予定が全トークンにマッチするか判定する（フィールド間 OR、トークン間 AND）（Phase 2 更新）
+     * searchTargets に設定されたフィールド + タイトルフィールドのいずれかにトークンが含まれれば一致とする
+     * @param {Object} evt - KcEvent（record プロパティで元の kintone レコードを参照）
      * @param {string[]} tokens
      * @returns {boolean}
      */
     _matchesTokens: function (evt, tokens) {
-      var title = (evt.title || '').toLowerCase();
-      return tokens.every(function (t) { return title.indexOf(t) !== -1; });
+      var self = this;
+
+      // 検索対象フィールドのテキストを収集する（タイトル固定 + searchTargets）
+      var titleCode = KC.Config.FIELD.title;
+      var fieldTexts = [];
+
+      // タイトルは常に対象（record から取得できない場合は evt.title にフォールバック）
+      if (evt.record && titleCode && evt.record[titleCode]) {
+        fieldTexts.push((evt.record[titleCode].value || '').toLowerCase());
+      } else {
+        fieldTexts.push((evt.title || '').toLowerCase());
+      }
+
+      // searchTargets の各フィールドテキストを収集する
+      self._searchTargets.forEach(function (target) {
+        if (!evt.record) return;
+        var text = self.matchField(evt.record, target.fieldCode);
+        fieldTexts.push(text.toLowerCase());
+      });
+
+      // トークン間 AND、フィールド間 OR
+      return tokens.every(function (token) {
+        return fieldTexts.some(function (text) {
+          return text.indexOf(token) !== -1;
+        });
+      });
     },
 
     /**
@@ -6178,8 +6292,153 @@
     },
 
     /**
+     * /k/v1/app/form/fields.json から REFERENCE_TABLE フィールド定義を取得して _refTableDefs に格納する
+     * searchTargets に REFERENCE_TABLE が含まれる場合に呼ばれる
+     * @returns {Promise<void>}
+     */
+    _loadRefTableDefs: async function () {
+      if (this._refTableDefsLoaded) return;
+
+      if (this._searchTargets.length === 0) {
+        this._refTableDefsLoaded = true;
+        return;
+      }
+
+      try {
+        var resp = await kintone.api(
+          kintone.api.url('/k/v1/app/form/fields', true),
+          'GET',
+          { app: kintone.app.getId() }
+        );
+        var props = resp.properties || {};
+
+        this._refTableDefs = {};
+        Object.keys(props).forEach(function (code) {
+          var field = props[code];
+          if (field.type !== 'REFERENCE_TABLE') return;
+          var refTable = field.referenceTable;
+          if (!refTable) return;
+          var displayFields = Array.isArray(refTable.displayFields)
+            ? refTable.displayFields
+            : [];
+          this._refTableDefs[code] = {
+            appId: refTable.relatedApp && refTable.relatedApp.app
+              ? String(refTable.relatedApp.app)
+              : null,
+            displayFields: displayFields
+          };
+        }.bind(this));
+
+        this._refTableDefsLoaded = true;
+        console.log('[KC SearchFilter] _refTableDefs 取得完了:', this._refTableDefs);
+      } catch (err) {
+        console.error('[KC SearchFilter] フィールド定義取得失敗:', err);
+        this._refTableDefsLoaded = true;
+      }
+    },
+
+    /**
+     * 全 REFERENCE_TABLE フィールドの関連先レコードをカーソル API で一括取得してキャッシュする
+     * - 権限のない関連先アプリは除外して警告ログを出力する（AC-P2-8）
+     * - ビュー切替・月送り時にも呼び出す（FR-15）
+     * @returns {Promise<void>}
+     */
+    loadRelatedRecords: async function () {
+      // searchTargets のうち REFERENCE_TABLE 型のフィールドを特定する
+      var refTargets = this._searchTargets.filter(function (t) {
+        var def = this._refTableDefs[t.fieldCode];
+        return def && def.appId && def.displayFields.length > 0;
+      }.bind(this));
+
+      if (refTargets.length === 0) return;
+
+      // 最大 10 並列（kintone レート制限考慮）でチャンク処理
+      var CHUNK_SIZE = 10;
+      var self = this;
+
+      for (var i = 0; i < refTargets.length; i += CHUNK_SIZE) {
+        var chunk = refTargets.slice(i, i + CHUNK_SIZE);
+        await Promise.all(chunk.map(function (target) {
+          return self._fetchAllRelatedRecords(target.fieldCode);
+        }));
+      }
+    },
+
+    /**
+     * 指定 REFERENCE_TABLE フィールドの関連先アプリの全レコードをカーソル API で取得する
+     * @param {string} fieldCode - REFERENCE_TABLE フィールドコード
+     * @returns {Promise<void>}
+     */
+    _fetchAllRelatedRecords: async function (fieldCode) {
+      var def = this._refTableDefs[fieldCode];
+      if (!def || !def.appId) return;
+
+      var cursorId = null;
+      var records = [];
+
+      try {
+        // カーソル作成
+        var createResp = await kintone.api(
+          kintone.api.url('/k/v1/records/cursor', true),
+          'POST',
+          {
+            app: def.appId,
+            size: 500,
+            fields: def.displayFields.map(function (df) { return df.fieldCode; }).concat(['$id'])
+          }
+        );
+        cursorId = createResp.id;
+
+        // 全件取得（ページング）
+        while (true) {
+          var fetchResp = await kintone.api(
+            kintone.api.url('/k/v1/records/cursor', true),
+            'GET',
+            { id: cursorId }
+          );
+          records = records.concat(fetchResp.records);
+          if (!fetchResp.next) break;
+        }
+
+        // Record ID をキーにしたマップとして格納する
+        var recordMap = {};
+        records.forEach(function (r) {
+          var id = r.$id && r.$id.value;
+          if (id) recordMap[String(id)] = r;
+        });
+        this._relatedRecordsCache[fieldCode] = recordMap;
+        console.log('[KC SearchFilter] ' + fieldCode + ' 関連レコード取得完了: ' + records.length + '件');
+
+        // カーソルは取得完了後に自動破棄されるが、明示的に DELETE して確実にリソース解放する
+        // next=false で終了後は API が既に破棄済みのため 404 が返る可能性がある点に注意
+        try {
+          await kintone.api(kintone.api.url('/k/v1/records/cursor', true), 'DELETE', { id: cursorId });
+        } catch (delErr) {
+          // DELETE 失敗はキャッシュ側に影響しないため警告のみ
+          console.warn('[KC.SearchFilter] カーソル DELETE 失敗（取得は成功）:', delErr.message);
+        }
+      } catch (err) {
+        console.warn('[KC SearchFilter] REFERENCE_TABLE "' + fieldCode + '" のキャッシュ取得失敗:', err);
+        // 失敗した場合はキャッシュを空にして、そのフィールドを検索対象外とする
+        this._relatedRecordsCache[fieldCode] = {};
+        // カーソルが残存している場合は破棄を試みる
+        if (cursorId) {
+          try {
+            await kintone.api(
+              kintone.api.url('/k/v1/records/cursor', true),
+              'DELETE',
+              { id: cursorId }
+            );
+          } catch (delErr) {
+            // 既に破棄済みの場合は無視する
+          }
+        }
+      }
+    },
+
+    /**
      * 描画後にマッチ候補 DOM 要素へクラスを付与し、activeIndex を適用する。
-     * el.title 属性（「タイトル\n時刻」形式）の改行前テキストでマッチ判定する。
+     * data-event-id 属性で KC.State.events から KcEvent を逆引きして追加フィールドのマッチ判定を行う。
      * 対象セレクタ: .kc-event, .kc-ad-event, .kc-month-chip, .kc-month-chip--span
      */
     applyHighlight: function () {
@@ -6215,17 +6474,22 @@
         if (el.classList.contains('kc-event--dragging')) return;
         if (el.classList.contains('kc-ad-event--dragging')) return;
 
-        // タイトル取得: el.title 属性（"タイトル\n時刻"形式）の改行前を使用。
-        // .kc-month-chip は title 属性を持たないため .kc-month-chip-title の textContent にフォールバック。
-        var rawTitle = '';
-        if (el.title) {
-          rawTitle = el.title.split('\n')[0];
-        } else {
-          var titleSpan = el.querySelector('.kc-month-chip-title, .kc-ad-evt-title, .kc-evt-title');
-          rawTitle = titleSpan ? titleSpan.textContent : '';
-        }
+        var matched = false;
 
-        var matched = tokens.every(function (t) { return rawTitle.toLowerCase().indexOf(t) !== -1; });
+        // data-event-id から KcEvent を逆引きして追加フィールドのマッチ判定を行う（Phase 2 拡張）
+        var evtId = el.dataset.eventId;
+        if (evtId) {
+          var evt = self._evtFromId(evtId);
+          if (evt) {
+            matched = self._matchesTokens(evt, tokens);
+          } else {
+            // KcEvent が見つからない場合は DOM テキストでフォールバック判定する
+            matched = self._matchByDomText(el, tokens);
+          }
+        } else {
+          // data-event-id がない要素は DOM テキストでフォールバック判定する
+          matched = self._matchByDomText(el, tokens);
+        }
 
         if (matched) {
           el.classList.add('kc-event--match');
@@ -6251,6 +6515,25 @@
       // プルダウン一覧を更新し、アクティブ行を同期する
       this._renderDropdown();
       this._updateDropdownActive();
+    },
+
+    /**
+     * DOM テキストによるタイトルマッチ判定（data-event-id がない要素のフォールバック）
+     * el.title 属性（"タイトル\n時刻"形式）の改行前テキストでマッチ判定する
+     * @param {HTMLElement} el - イベント DOM 要素
+     * @param {string[]} tokens
+     * @returns {boolean}
+     */
+    _matchByDomText: function (el, tokens) {
+      var rawTitle = '';
+      if (el.title) {
+        rawTitle = el.title.split('\n')[0];
+      } else {
+        var titleSpan = el.querySelector('.kc-month-chip-title, .kc-ad-evt-title, .kc-evt-title');
+        rawTitle = titleSpan ? titleSpan.textContent : '';
+      }
+      var lower = rawTitle.toLowerCase();
+      return tokens.every(function (t) { return lower.indexOf(t) !== -1; });
     },
 
     /**
@@ -7227,6 +7510,25 @@
       // プラグイン設定を読み込み KC.Config を上書きする（detectFields より前に呼ぶ）
       // 設定なし / 必須フィールド未入力の場合はハードコード値を維持し、detectFields でフォールバック
       KC.Config.loadFromPluginConfig();
+
+      // SearchFilter の検索対象フィールドをプラグイン設定から初期化する（Phase 2）
+      // searchTargets が未設定の場合は空配列 = タイトルのみ検索（Phase 1 互換フォールバック）
+      KC.SearchFilter._searchTargets = KC.Config.SEARCH_TARGETS || [];
+      // REFERENCE_TABLE フィールド定義は非同期で取得するため、フォールバック用にリセットしておく
+      KC.SearchFilter._refTableDefsLoaded = false;
+      KC.SearchFilter._refTableDefs = {};
+      KC.SearchFilter._relatedRecordsCache = {};
+
+      // REFERENCE_TABLE が searchTargets に含まれる場合はフィールド定義を先行取得する
+      // await して完了後に初期描画へ進むことで、初回描画時に _refTableDefs が空のまま
+      // matchField が呼ばれる問題を防ぐ。失敗してもカレンダー表示には影響しない
+      if (KC.SearchFilter._searchTargets.length > 0) {
+        try {
+          await KC.SearchFilter._loadRefTableDefs();
+        } catch (err) {
+          console.warn('[KC.Boot] _loadRefTableDefs 失敗（継続）:', err);
+        }
+      }
 
       // フィールド自動検出（KC_プレフィックスのフィールドを探す）
       // プラグイン設定で必須フィールドが設定済みの場合もフィールド型の検出（START_FIELD_TYPE）に使用

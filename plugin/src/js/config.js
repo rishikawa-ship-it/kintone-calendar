@@ -1,15 +1,19 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (v6: 権限フィールド設定追加)
+ * KC Calendar プラグイン設定画面スクリプト (v7: 検索対象フィールド設定追加)
  *
- * 保存形式 (version 6):
+ * 保存形式 (version 7):
  *   {
- *     version: 6,
+ *     version: 7,
  *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ... },
  *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, bgColor, textColor }, ... ],
  *     fieldValueRules: [ { fieldCode, fieldType, value, permission, bgColor, textColor }, ... ],
+ *     searchTargets: [ { fieldCode: "memo" }, { fieldCode: "relatedMeetings" }, ... ],
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
+ * v7 変更点:
+ *   - searchTargets 配列を追加（検索対象フィールドの管理者設定）
+ *   - v6→v7 マイグレーション: searchTargets: [] を追加
  * v6 変更点:
  *   - fieldValueRules 配列を追加（DROP_DOWN/RADIO_BUTTON/CHECK_BOX/STATUS ベースの権限判定）
  *   - 「編集権限設定」を「権限ユーザー設定」にリネーム
@@ -85,6 +89,9 @@
   /** メモフィールドとして選択可能な型 */
   var MEMO_FIELD_TYPES = ['MULTI_LINE_TEXT', 'RICH_TEXT', 'SINGLE_LINE_TEXT'];
 
+  /** 検索対象フィールドとして選択可能な型（REQ_search-bar v3 §3.1） */
+  var SEARCH_TARGET_TYPES = ['SINGLE_LINE_TEXT', 'MULTI_LINE_TEXT', 'RICH_TEXT', 'REFERENCE_TABLE', 'USER_SELECT'];
+
   /* ====================================================================
    * ユーティリティ
    * ==================================================================== */
@@ -117,14 +124,15 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 6)
-   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, views: Object }}
+   * setConfig で保存する全体設定オブジェクト (version 7)
+   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, views: Object }}
    */
   var currentConfig = {
-    version: 6,
+    version: 7,
     fieldMapping: {},
     permissionRules: [],
     fieldValueRules: [],
+    searchTargets: [],
     views: {}
   };
 
@@ -140,6 +148,13 @@
    * @type {Array<{code: string, label: string, type: string, options: Object}>}
    */
   var fieldValueFieldOptions = [];
+
+  /**
+   * 検索対象フィールド設定 UI で使用するフィールド一覧（SEARCH_TARGET_TYPES でフィルタ済み）
+   * loadFields 後に設定される。タイトルフィールドは除外済み。
+   * @type {Array<{code: string, label: string, type: string}>}
+   */
+  var searchTargetFieldOptions = [];
 
   /**
    * 権限フィールド設定で使用するプロセス管理ステータス一覧
@@ -191,6 +206,10 @@
   /* --- 権限フィールド設定 (v6 新規) --- */
   var elFieldValueRows = document.getElementById('kc-fieldvalue-rows');
   var elFieldValueAdd  = document.getElementById('kc-fieldvalue-add');
+
+  /* --- 検索対象フィールド設定 (v7 新規) --- */
+  var elSearchTargetRows = document.getElementById('kc-search-target-rows');
+  var elSearchTargetAdd  = document.getElementById('kc-search-target-add');
 
   /* --- マッピング設定内メール初期値チェックボックス --- */
   var elMailLoginUserDefault = document.getElementById('kc-mail-login-user-default');
@@ -1486,6 +1505,113 @@
     });
   }
 
+  /* ====================================================================
+   * 検索対象フィールド設定 UI（REQ_search-bar v3 §5.7）
+   * ==================================================================== */
+
+  /**
+   * 検索対象フィールド設定の 1 行 DOM を生成する
+   * @param {string} [selectedCode] - 保存済みのフィールドコード（新規行の場合は省略）
+   * @returns {HTMLElement} .kc-search-target-row 要素
+   */
+  function buildSearchTargetRow(selectedCode) {
+    var row = document.createElement('div');
+    row.className = 'kc-search-target-row';
+
+    // フィールド選択セル
+    var fieldCell = document.createElement('div');
+    fieldCell.className = 'kc-search-target-cell kc-search-target-col-field';
+
+    var select = document.createElement('select');
+    select.className = 'kc-config-select kc-search-target-field-select';
+
+    // プレースホルダー option
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- フィールドを選択 --';
+    select.appendChild(emptyOpt);
+
+    // 検索対象として選択可能なフィールドを列挙する
+    searchTargetFieldOptions.forEach(function (item) {
+      var opt = document.createElement('option');
+      opt.value = item.code;
+      opt.textContent = item.label + ' (' + item.code + ')';
+      select.appendChild(opt);
+    });
+
+    // 保存済みコードを選択状態にする（フィールドが削除された場合は末尾に追加）
+    if (selectedCode) {
+      var found = false;
+      for (var i = 0; i < select.options.length; i++) {
+        if (select.options[i].value === selectedCode) {
+          select.selectedIndex = i;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        var missingOpt = document.createElement('option');
+        missingOpt.value = selectedCode;
+        missingOpt.textContent = selectedCode + ' (フィールドが見つかりません)';
+        missingOpt.className = 'kc-option-missing';
+        select.appendChild(missingOpt);
+        select.value = selectedCode;
+      }
+    }
+
+    syncSelectEmptyClass(select);
+    select.addEventListener('change', function () { syncSelectEmptyClass(select); });
+
+    fieldCell.appendChild(select);
+
+    // 削除ボタンセル
+    var actionCell = document.createElement('div');
+    actionCell.className = 'kc-search-target-cell kc-search-target-col-action';
+
+    var deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'kc-config-btn kc-config-btn-danger kc-search-target-delete';
+    deleteBtn.textContent = '削除';
+    deleteBtn.addEventListener('click', function () {
+      row.remove();
+    });
+
+    actionCell.appendChild(deleteBtn);
+
+    row.appendChild(fieldCell);
+    row.appendChild(actionCell);
+
+    return row;
+  }
+
+  /**
+   * 検索対象フィールド設定テーブルの各行からフィールドコードを収集して配列を返す
+   * @returns {Array<{fieldCode: string}>}
+   */
+  function collectSearchTargets() {
+    if (!elSearchTargetRows) return [];
+    var selects = elSearchTargetRows.querySelectorAll('.kc-search-target-field-select');
+    var result = [];
+    selects.forEach(function (sel) {
+      var code = sel.value;
+      if (code) result.push({ fieldCode: code });
+    });
+    return result;
+  }
+
+  /**
+   * 保存済み searchTargets をフォームに反映する
+   * @param {Array<{fieldCode: string}>} targets - 保存済みの searchTargets 配列
+   */
+  function applySearchTargets(targets) {
+    if (!elSearchTargetRows) return;
+    elSearchTargetRows.innerHTML = '';
+    if (!Array.isArray(targets) || targets.length === 0) return;
+    targets.forEach(function (target) {
+      elSearchTargetRows.appendChild(buildSearchTargetRow(target.fieldCode));
+    });
+  }
+
   /**
    * ビュー個別設定セクションの DOM から { calendarTitle, defaultView } を収集する
    * @returns {{ calendarTitle: string, defaultView: string }}
@@ -1767,10 +1893,11 @@
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
       currentConfig = {
-        version: 6,
+        version: 7,
         fieldMapping: {},
         permissionRules: [],
         fieldValueRules: [],
+        searchTargets: [],
         views: {}
       };
       return;
@@ -1790,6 +1917,15 @@
       parsed = migrateRuleV5toV6(parsed);
     }
 
+    // version 6 → 7 マイグレーション（searchTargets 追加）
+    if (Number(parsed.version) < 7) {
+      console.log('[KC Config] version 6 → 7 へマイグレーション実行');
+      if (!Array.isArray(parsed.searchTargets)) {
+        parsed.searchTargets = [];
+      }
+      parsed.version = 7;
+    }
+
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
@@ -1804,10 +1940,11 @@
     }
 
     currentConfig = {
-      version:         6,
+      version:         7,
       fieldMapping:    fm,
       permissionRules: rules,
       fieldValueRules: Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
+      searchTargets:   Array.isArray(parsed.searchTargets) ? parsed.searchTargets : [],
       views:           parsed.views || {}
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
@@ -1870,6 +2007,29 @@
         }
       });
       fieldValueFieldOptions.sort(function (a, b) {
+        if (a.label < b.label) return -1;
+        if (a.label > b.label) return 1;
+        return 0;
+      });
+
+      // 検索対象フィールド設定の選択肢を収集する（SEARCH_TARGET_TYPES のみ、タイトルフィールドは除外）
+      // loadFields の時点では elFieldTitle に値が入っていないため、currentConfig.fieldMapping を参照する
+      var titleFieldCode = (currentConfig.fieldMapping && currentConfig.fieldMapping.fieldTitle) || '';
+      searchTargetFieldOptions = [];
+      Object.keys(props).forEach(function (code) {
+        var field = props[code];
+        // LOOKUP の場合は元のフィールド型で判定する（lookup.fieldType は存在しないため type で判定）
+        var ftype = field.type;
+        if (SEARCH_TARGET_TYPES.indexOf(ftype) === -1) return;
+        // タイトルフィールドは常に検索対象のため UI 上は除外する（暗黙的に有効）
+        if (code === titleFieldCode) return;
+        searchTargetFieldOptions.push({
+          code:  code,
+          label: field.label || code,
+          type:  ftype
+        });
+      });
+      searchTargetFieldOptions.sort(function (a, b) {
         if (a.label < b.label) return -1;
         if (a.label > b.label) return 1;
         return 0;
@@ -2239,6 +2399,9 @@
     // 権限フィールド設定を収集して currentConfig.fieldValueRules を更新
     currentConfig.fieldValueRules = collectFieldValueRules();
 
+    // 検索対象フィールド設定を収集して currentConfig.searchTargets を更新
+    currentConfig.searchTargets = collectSearchTargets();
+
     // 現在の編集中ビューの個別設定を保存 (新規作成時は後で ID 確定後に保存)
     if (currentViewId) {
       currentConfig.views[currentViewId] = collectViewConfig();
@@ -2348,12 +2511,13 @@
         mailLoginUserDefault: mailLoginUserDefault
       });
 
-      // 最終的な保存オブジェクト (version 6 形式: permissionRules + fieldValueRules を含む)
+      // 最終的な保存オブジェクト (version 7 形式: permissionRules + fieldValueRules + searchTargets を含む)
       var finalConfig = {
-        version: 6,
+        version: 7,
         fieldMapping:    updatedFieldMapping,
         permissionRules: currentConfig.permissionRules || [],
         fieldValueRules: currentConfig.fieldValueRules || [],
+        searchTargets:   currentConfig.searchTargets || [],
         views:           mergedViews
       };
 
@@ -2531,6 +2695,10 @@
     // loadFields + loadStatuses 完了後に呼ぶこと
     applyFieldValueRules(currentConfig.fieldValueRules || []);
 
+    // 3.65. 検索対象フィールド設定 (searchTargets) をフォームに反映
+    // loadFields 完了後に呼ぶこと（searchTargetFieldOptions が確定している必要があるため）
+    applySearchTargets(currentConfig.searchTargets || []);
+
     // 3.7. メールアドレス初期値チェックボックスを設定値から反映し disabled 状態を更新する
     if (elMailLoginUserDefault) {
       var savedMail = currentConfig.fieldMapping && currentConfig.fieldMapping.mailLoginUserDefault;
@@ -2609,6 +2777,15 @@
     if (elFieldValueAdd) {
       elFieldValueAdd.addEventListener('click', function () {
         elFieldValueRows.appendChild(buildFieldValueRow(null));
+      });
+    }
+
+    // 検索対象フィールド設定 − 行追加ボタン
+    if (elSearchTargetAdd) {
+      elSearchTargetAdd.addEventListener('click', function () {
+        if (elSearchTargetRows) {
+          elSearchTargetRows.appendChild(buildSearchTargetRow());
+        }
       });
     }
 

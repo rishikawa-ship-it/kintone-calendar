@@ -945,6 +945,80 @@ body {
 }
 
 /* ====================================================================
+ * 検索対象フィールド設定テーブル (REQ_search-bar v3 §5.7)
+ * ==================================================================== */
+
+.kc-search-target-section {
+  margin-top: 8px;
+}
+
+.kc-search-target-section .kc-hint {
+  font-size: 13px;
+  color: #777;
+  margin-bottom: 8px;
+}
+
+.kc-search-target-table {
+  border: 1px solid #d1d9e0;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.kc-search-target-header {
+  display: flex;
+  align-items: center;
+  background: #f0f4f8;
+  border-bottom: 1px solid #d1d9e0;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #444;
+}
+
+.kc-search-target-header-col,
+.kc-search-target-cell {
+  padding: 0 4px;
+}
+
+.kc-search-target-col-field {
+  flex: 1;
+}
+
+.kc-search-target-col-action {
+  width: 60px;
+  text-align: center;
+}
+
+.kc-search-target-rows {
+  min-height: 8px;
+}
+
+.kc-search-target-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #e8ecf0;
+}
+
+.kc-search-target-row:last-child {
+  border-bottom: none;
+}
+
+.kc-search-target-row:hover {
+  background: #fafbfc;
+}
+
+.kc-search-target-field-select {
+  width: 100%;
+  min-width: 200px;
+}
+
+.kc-search-target-add-row {
+  margin-top: 0;
+}
+
+/* ====================================================================
  * ビュー個別設定: サブセクション (REQ_view-config-popup v2 §3.4)
  * ==================================================================== */
 
