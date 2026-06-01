@@ -986,7 +986,7 @@ body {
 }
 
 .kc-search-target-col-action {
-  width: 60px;
+  width: 40px;
   text-align: center;
 }
 
@@ -1016,6 +1016,35 @@ body {
 
 .kc-search-target-add-row {
   margin-top: 0;
+}
+
+/* 削除ボタン（権限ユーザー設定の .kc-permission-del-btn と同スタイル） */
+.kc-search-target-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin: 0 auto;
+  font-size: 18px;
+  font-weight: bold;
+  line-height: 1;
+  color: #fff;
+  background-color: #d93025;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+
+.kc-search-target-delete:hover {
+  background-color: #b3261e;
+  box-shadow: 0 2px 6px rgba(211, 48, 37, 0.4);
+}
+
+.kc-search-target-delete:active {
+  background-color: #8c1c16;
 }
 
 /* ====================================================================

@@ -151,7 +151,7 @@
 
   /**
    * 検索対象フィールド設定 UI で使用するフィールド一覧（SEARCH_TARGET_TYPES でフィルタ済み）
-   * loadFields 後に設定される。タイトルフィールドは除外済み。
+   * loadFields 後に設定される。タイトルフィールドも含む（テーブルで明示的に管理するため）。
    * @type {Array<{code: string, label: string, type: string}>}
    */
   var searchTargetFieldOptions = [];
@@ -1570,8 +1570,8 @@
 
     var deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
-    deleteBtn.className = 'kc-config-btn kc-config-btn-danger kc-search-target-delete';
-    deleteBtn.textContent = '削除';
+    deleteBtn.className = 'kc-search-target-delete';
+    deleteBtn.textContent = '−';
     deleteBtn.addEventListener('click', function () {
       row.remove();
     });
@@ -1921,7 +1921,9 @@
     if (Number(parsed.version) < 7) {
       console.log('[KC Config] version 6 → 7 へマイグレーション実行');
       if (!Array.isArray(parsed.searchTargets)) {
-        parsed.searchTargets = [];
+        // 既存 v6 ユーザーの挙動を継続するためタイトルフィールドを初期値に設定する
+        var titleCode = (parsed.fieldMapping && parsed.fieldMapping.fieldTitle) || '';
+        parsed.searchTargets = titleCode ? [{ fieldCode: titleCode }] : [];
       }
       parsed.version = 7;
     }
@@ -2012,17 +2014,14 @@
         return 0;
       });
 
-      // 検索対象フィールド設定の選択肢を収集する（SEARCH_TARGET_TYPES のみ、タイトルフィールドは除外）
-      // loadFields の時点では elFieldTitle に値が入っていないため、currentConfig.fieldMapping を参照する
-      var titleFieldCode = (currentConfig.fieldMapping && currentConfig.fieldMapping.fieldTitle) || '';
+      // 検索対象フィールド設定の選択肢を収集する（SEARCH_TARGET_TYPES のみ）
+      // タイトルフィールドも候補に含める（テーブルで明示的に管理するため）
       searchTargetFieldOptions = [];
       Object.keys(props).forEach(function (code) {
         var field = props[code];
         // LOOKUP の場合は元のフィールド型で判定する（lookup.fieldType は存在しないため type で判定）
         var ftype = field.type;
         if (SEARCH_TARGET_TYPES.indexOf(ftype) === -1) return;
-        // タイトルフィールドは常に検索対象のため UI 上は除外する（暗黙的に有効）
-        if (code === titleFieldCode) return;
         searchTargetFieldOptions.push({
           code:  code,
           label: field.label || code,
@@ -2697,7 +2696,18 @@
 
     // 3.65. 検索対象フィールド設定 (searchTargets) をフォームに反映
     // loadFields 完了後に呼ぶこと（searchTargetFieldOptions が確定している必要があるため）
-    applySearchTargets(currentConfig.searchTargets || []);
+    // searchTargets が undefined の場合のみ補完する（初回セットアップ時）。
+    // 空配列 [] はユーザーが意図的に削除した状態なので補完しない。
+    // v6 → v7 マイグレーション時の補完は loadInitialConfig 内で実施済みのため、
+    // ここで補完されるのは新規インストール直後など保存前の状態に限られる。
+    var searchTargetsForApply = currentConfig.searchTargets !== undefined
+      ? currentConfig.searchTargets
+      : [];
+    if (currentConfig.searchTargets === undefined && currentConfig.fieldMapping && currentConfig.fieldMapping.fieldTitle) {
+      searchTargetsForApply = [{ fieldCode: currentConfig.fieldMapping.fieldTitle }];
+      currentConfig.searchTargets = searchTargetsForApply.slice();
+    }
+    applySearchTargets(searchTargetsForApply);
 
     // 3.7. メールアドレス初期値チェックボックスを設定値から反映し disabled 状態を更新する
     if (elMailLoginUserDefault) {

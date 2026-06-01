@@ -269,7 +269,8 @@
       KC.Config.FIELDVALUE_RULES = Array.isArray(config.fieldValueRules) ? config.fieldValueRules : [];
 
       // 検索対象フィールド設定 (version 7 以降) を適用
-      // v6 以前の設定では searchTargets が存在しないため空配列として初期化する（Phase 1 互換フォールバック）
+      // v6 以前の設定では searchTargets が存在しないため空配列として初期化する
+      // v7 マイグレーション済みの場合はタイトルフィールドが含まれるため、タイトル検索は継続する
       KC.Config.SEARCH_TARGETS = Array.isArray(config.searchTargets) ? config.searchTargets : [];
 
       // メールアドレス初期値設定 (fieldMapping.mailLoginUserDefault が存在しない場合は false: 後方互換デフォルト)
@@ -301,7 +302,8 @@
   KC.Config.FIELDVALUE_RULES = [];
   /**
    * 検索対象フィールド配列 (REQ_search-bar v3 §6.1)
-   * loadFromPluginConfig で上書きされる。初期値は空配列 = タイトルのみ検索（Phase 1 互換フォールバック）
+   * loadFromPluginConfig で上書きされる。初期値は空配列 = 何もマッチしない（検索無効化に近い動作）。
+   * v7 以降は config.js のマイグレーションでタイトルフィールドが初期値として設定される。
    * @type {Array<{fieldCode: string}>}
    */
   KC.Config.SEARCH_TARGETS = [];
@@ -6245,7 +6247,9 @@
 
     /**
      * 1件の予定が全トークンにマッチするか判定する（フィールド間 OR、トークン間 AND）（Phase 2 更新）
-     * searchTargets に設定されたフィールド + タイトルフィールドのいずれかにトークンが含まれれば一致とする
+     * searchTargets に設定されたフィールドのいずれかにトークンが含まれれば一致とする。
+     * タイトルフィールドは searchTargets に含まれていれば対象になる（暗黙的な特別扱いを廃止）。
+     * searchTargets が空の場合は何もマッチしない（検索無効化に近い動作）。
      * @param {Object} evt - KcEvent（record プロパティで元の kintone レコードを参照）
      * @param {string[]} tokens
      * @returns {boolean}
@@ -6253,18 +6257,11 @@
     _matchesTokens: function (evt, tokens) {
       var self = this;
 
-      // 検索対象フィールドのテキストを収集する（タイトル固定 + searchTargets）
-      var titleCode = KC.Config.FIELD.title;
-      var fieldTexts = [];
-
-      // タイトルは常に対象（record から取得できない場合は evt.title にフォールバック）
-      if (evt.record && titleCode && evt.record[titleCode]) {
-        fieldTexts.push((evt.record[titleCode].value || '').toLowerCase());
-      } else {
-        fieldTexts.push((evt.title || '').toLowerCase());
-      }
+      // searchTargets が空 = 検索対象なし → 何もマッチしない
+      if (self._searchTargets.length === 0) return false;
 
       // searchTargets の各フィールドテキストを収集する
+      var fieldTexts = [];
       self._searchTargets.forEach(function (target) {
         if (!evt.record) return;
         var text = self.matchField(evt.record, target.fieldCode);
@@ -7512,7 +7509,7 @@
       KC.Config.loadFromPluginConfig();
 
       // SearchFilter の検索対象フィールドをプラグイン設定から初期化する（Phase 2）
-      // searchTargets が未設定の場合は空配列 = タイトルのみ検索（Phase 1 互換フォールバック）
+      // searchTargets が空の場合は何もマッチしない動作になる（v7 以降はタイトルが初期値として設定済み）
       KC.SearchFilter._searchTargets = KC.Config.SEARCH_TARGETS || [];
       // REFERENCE_TABLE フィールド定義は非同期で取得するため、フォールバック用にリセットしておく
       KC.SearchFilter._refTableDefsLoaded = false;
