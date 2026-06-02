@@ -5406,16 +5406,16 @@
       }
 
       // REFERENCE_TABLE の関連レコードをキャッシュ取得する（FR-15）
-      // データ取得後・ハイライト適用前に実行し、キャッシュ更新後に applyHighlight が呼ばれるようにする
+      // データ取得後・マッチリスト更新前に実行し、キャッシュ更新後に _computeMatchList が呼ばれるようにする
       if (KC.SearchFilter._searchTargets.length > 0) {
         try {
           await KC.SearchFilter.loadRelatedRecords();
         } catch (err) {
           console.error('[KC Render] loadRelatedRecords 失敗:', err);
         }
-        // キャッシュ更新後に再度ハイライトを適用する
+        // キャッシュ更新後にフローティング一覧を再構築する
         if (KC.SearchFilter.query) {
-          KC.SearchFilter.applyHighlight();
+          KC.SearchFilter._computeMatchList();
         }
       }
 
@@ -5438,12 +5438,12 @@
       if (KC.State.view === 'month' && KC.RenderMonth) {
         requestAnimationFrame(function () {
           KC.RenderMonth.placeMonthEvents();
-          // 月ビューは placeMonthEvents 完了後にハイライトを適用する
-          KC.SearchFilter.applyHighlight();
+          // 月ビューは placeMonthEvents 完了後にフローティング一覧を更新する
+          KC.SearchFilter._computeMatchList();
         });
       } else {
-        // 週ビュー・日ビューは同期的にハイライトを適用する
-        KC.SearchFilter.applyHighlight();
+        // 週ビュー・日ビューは同期的にフローティング一覧を更新する
+        KC.SearchFilter._computeMatchList();
       }
       this.refreshTitle();
     },
@@ -6148,8 +6148,10 @@
     _composing: false,
     /** アクティブ候補の index（-1 = 未選択） */
     activeIndex: -1,
-    /** 現在のマッチ候補 DOM 要素リスト（表示順） */
+    /** 現在のマッチ候補 KcEvent オブジェクト配列（開始日時昇順） */
     _matchList: [],
+    /** document 外側クリックリスナー登録済みフラグ（多重登録防止） */
+    _outsideClickBound: false,
 
     // Phase 2 追加プロパティ
     /** 関連レコードキャッシュ: { [fieldCode]: { [recordId]: kintoneRecord } } */
@@ -6169,15 +6171,15 @@
      */
     setQuery: function (q) {
       this.query = q;
-      this._syncClearBtn();
+      this._syncClearBtn(q);
       this.activeIndex = -1;
       KC.Render.renderGrid();
     },
 
     /**
-     * events 配列をそのまま返す（フィルタしない）。
-     * 非マッチ予定の視覚化は applyHighlight() の opacity 制御で行うため、
-     * ここで配列を絞り込むと DOM に非マッチ要素が存在せず半透明表示が機能しない。
+     * events 配列をそのまま返す（カレンダー表示はフィルタしない）。
+     * マッチ結果はフローティング一覧（#kc-search-dropdown）のみで表示するため、
+     * カレンダー DOM への予定配置は変更しない。
      * @param {Array} events - KcEvent 配列
      * @returns {Array} 入力をそのまま返す
      */
@@ -6434,19 +6436,11 @@
     },
 
     /**
-     * 描画後にマッチ候補 DOM 要素へクラスを付与し、activeIndex を適用する。
-     * data-event-id 属性で KC.State.events から KcEvent を逆引きして追加フィールドのマッチ判定を行う。
-     * 対象セレクタ: .kc-event, .kc-ad-event, .kc-month-chip, .kc-month-chip--span
+     * KC.State.events をスキャンしてマッチ候補 KcEvent 配列を構築し、
+     * フローティング一覧（#kc-search-dropdown）を更新する。
+     * カレンダー DOM（.kc-event 等）には一切手を加えない。
      */
-    applyHighlight: function () {
-      var allEls = Array.from(document.querySelectorAll('.kc-event, .kc-ad-event, .kc-month-chip, .kc-month-chip--span'));
-
-      // 既存クラス・スタイルをリセット
-      allEls.forEach(function (el) {
-        el.classList.remove('kc-event--match', 'kc-event--match-active');
-        el.style.opacity = '';
-      });
-
+    _computeMatchList: function () {
       if (!this.query) {
         this._matchList = [];
         this.activeIndex = -1;
@@ -6456,47 +6450,30 @@
       }
 
       var tokens = this._getTokens();
-      this._matchList = [];
-      var self = this;
 
       if (tokens.length === 0) {
+        this._matchList = [];
         this._updateEmptyMsg(false, '');
         this._renderDropdown();
         return;
       }
 
-      allEls.forEach(function (el) {
-        // ゴースト・dragging 要素はスキップ
-        if (el.classList.contains('kc-event--ghost')) return;
-        if (el.classList.contains('kc-event--dragging')) return;
-        if (el.classList.contains('kc-ad-event--dragging')) return;
+      var self = this;
+      var events = KC.State.events || [];
 
-        var matched = false;
-
-        // data-event-id から KcEvent を逆引きして追加フィールドのマッチ判定を行う（Phase 2 拡張）
-        var evtId = el.dataset.eventId;
-        if (evtId) {
-          var evt = self._evtFromId(evtId);
-          if (evt) {
-            matched = self._matchesTokens(evt, tokens);
-          } else {
-            // KcEvent が見つからない場合は DOM テキストでフォールバック判定する
-            matched = self._matchByDomText(el, tokens);
-          }
-        } else {
-          // data-event-id がない要素は DOM テキストでフォールバック判定する
-          matched = self._matchByDomText(el, tokens);
-        }
-
-        if (matched) {
-          el.classList.add('kc-event--match');
-          self._matchList.push(el);
-        } else {
-          el.style.opacity = '0.25';
-        }
+      // マッチする KcEvent を収集して開始日時昇順にソートする
+      var matched = events.filter(function (evt) {
+        return self._matchesTokens(evt, tokens);
+      });
+      matched.sort(function (a, b) {
+        var ta = a.start ? new Date(a.start).getTime() : 0;
+        var tb = b.start ? new Date(b.start).getTime() : 0;
+        return ta - tb;
       });
 
-      var count = this._matchList.length;
+      this._matchList = matched;
+
+      var count = matched.length;
       this._updateEmptyMsg(count === 0, this.query);
 
       if (count === 0) {
@@ -6505,55 +6482,22 @@
         this.activeIndex = 0;
       }
 
-      if (this.activeIndex >= 0) {
-        this._matchList[this.activeIndex].classList.add('kc-event--match-active');
-      }
-
-      // プルダウン一覧を更新し、アクティブ行を同期する
       this._renderDropdown();
       this._updateDropdownActive();
     },
 
     /**
-     * DOM テキストによるタイトルマッチ判定（data-event-id がない要素のフォールバック）
-     * el.title 属性（"タイトル\n時刻"形式）の改行前テキストでマッチ判定する
-     * @param {HTMLElement} el - イベント DOM 要素
-     * @param {string[]} tokens
-     * @returns {boolean}
-     */
-    _matchByDomText: function (el, tokens) {
-      var rawTitle = '';
-      if (el.title) {
-        rawTitle = el.title.split('\n')[0];
-      } else {
-        var titleSpan = el.querySelector('.kc-month-chip-title, .kc-ad-evt-title, .kc-evt-title');
-        rawTitle = titleSpan ? titleSpan.textContent : '';
-      }
-      var lower = rawTitle.toLowerCase();
-      return tokens.every(function (t) { return lower.indexOf(t) !== -1; });
-    },
-
-    /**
-     * activeIndex を変更してアクティブ候補クラスを切り替え、必要ならスクロールする
+     * activeIndex を変更してフローティング一覧のアクティブ行を切り替える。
      * @param {number} newIndex - 新しい activeIndex
      */
     _activateAt: function (newIndex) {
       var count = this._matchList.length;
       if (count === 0) return;
-
-      // 既存のアクティブクラスを外す
-      this._matchList.forEach(function (el) { el.classList.remove('kc-event--match-active'); });
-
       this.activeIndex = newIndex;
-      var el = this._matchList[this.activeIndex];
-      el.classList.add('kc-event--match-active');
-      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-
-      // プルダウン側のアクティブ行も同期する
       this._updateDropdownActive();
     },
 
-    /** Enter または ↓ キー押下時: 次候補に移動（循環あり） */
+    /** ↓ キー押下時: フローティング一覧内で次候補に移動（循環あり） */
     focusNext: function () {
       var count = this._matchList.length;
       if (count === 0) return;
@@ -6561,12 +6505,23 @@
       this._activateAt(next);
     },
 
-    /** ↑ キー押下時: 前候補に移動（循環あり） */
+    /** ↑ キー押下時: フローティング一覧内で前候補に移動（循環あり） */
     focusPrev: function () {
       var count = this._matchList.length;
       if (count === 0) return;
       var prev = (this.activeIndex - 1 + count) % count;
       this._activateAt(prev);
+    },
+
+    /**
+     * Enter キー押下時: アクティブ候補の予定詳細モーダルを開く
+     */
+    _openActive: function () {
+      if (this.activeIndex < 0 || this.activeIndex >= this._matchList.length) return;
+      var evt = this._matchList[this.activeIndex];
+      if (!evt || !evt.id) return;
+      this._hideDropdown();
+      KC.Popup.openEdit(evt.id);
     },
 
     /**
@@ -6586,11 +6541,14 @@
       }
     },
 
-    /** クリアボタンの表示/非表示を同期する */
-    _syncClearBtn: function () {
+    /**
+     * クリアボタンの表示/非表示を同期する
+     * @param {string} val - 判定に使う文字列（空文字なら非表示）
+     */
+    _syncClearBtn: function (val) {
       var btn = document.getElementById('kc-search-clear');
       if (!btn) return;
-      if (this.query) {
+      if (val) {
         btn.removeAttribute('hidden');
       } else {
         btn.setAttribute('hidden', '');
@@ -6602,6 +6560,9 @@
      * @param {HTMLElement} headRight - .kc-head-right 要素
      */
     buildDOM: function (headRight) {
+      // searchTargets が未設定の場合は検索欄を生成しない（イベント登録もスキップ）
+      if (this._searchTargets.length === 0) return;
+
       // 多重挿入防止
       if (document.getElementById('kc-search')) return;
 
@@ -6708,7 +6669,7 @@
 
       // 通常入力（デバウンス）
       input.addEventListener('input', function () {
-        self._syncClearBtn2(input.value);
+        self._syncClearBtn(input.value);
         if (self._composing) return;
         self._scheduleSearch(input.value);
       });
@@ -6718,15 +6679,18 @@
         if (e.key === 'Enter') {
           if (self._composing) return;
           e.preventDefault();
-          self.focusNext();
+          // Enter: アクティブ候補の予定詳細モーダルを開く
+          self._openActive();
         } else if (e.key === 'ArrowDown') {
           e.preventDefault();
+          // ↓: フローティング一覧内の次候補に移動
           self.focusNext();
         } else if (e.key === 'ArrowUp') {
           e.preventDefault();
+          // ↑: フローティング一覧内の前候補に移動
           self.focusPrev();
         } else if (e.key === 'Escape') {
-          // ESC: クエリ全クリア + プルダウン閉じる + フォーカスを外す
+          // ESC: フローティング一覧を閉じる（クエリはそのまま維持しない → クリア）
           input.value = '';
           self.setQuery('');
           self._hideDropdown();
@@ -6745,20 +6709,6 @@
         self.setQuery('');
         input.focus();
       });
-    },
-
-    /**
-     * input値に応じてクリアボタンの表示を同期する（input イベント用）
-     * @param {string} val - 現在の input.value
-     */
-    _syncClearBtn2: function (val) {
-      var btn = document.getElementById('kc-search-clear');
-      if (!btn) return;
-      if (val) {
-        btn.removeAttribute('hidden');
-      } else {
-        btn.setAttribute('hidden', '');
-      }
     },
 
     /**
@@ -6809,8 +6759,8 @@
     },
 
     /**
-     * プルダウンの内容を _matchList から再構築して表示/非表示を切り替える
-     * クエリが空、または matchList が空（0件）の場合の処理も含む
+     * プルダウンの内容を _matchList（KcEvent 配列）から再構築して表示/非表示を切り替える。
+     * クエリが空、または matchList が空（0件）の場合の処理も含む。
      */
     _renderDropdown: function () {
       var dd = document.getElementById('kc-search-dropdown');
@@ -6835,28 +6785,23 @@
       }
 
       var self = this;
-      this._matchList.forEach(function (el, idx) {
-        var item = self._buildDropdownItem(el, idx);
+      this._matchList.forEach(function (evt, idx) {
+        var item = self._buildDropdownItem(evt, idx);
         dd.appendChild(item);
       });
     },
 
     /**
      * プルダウンの 1 行 DOM を生成する
-     * @param {HTMLElement} el - .kc-event / .kc-ad-event / .kc-month-chip 要素
+     * @param {Object} evt - KcEvent オブジェクト
      * @param {number} idx - _matchList 内のインデックス
      * @returns {HTMLElement}
      */
-    _buildDropdownItem: function (el, idx) {
-      var evtId = el.dataset.eventId;
-      var evt = evtId ? this._evtFromId(evtId) : null;
-
+    _buildDropdownItem: function (evt, idx) {
       // 予定の bgColor を決定（permissionRules → evt.color → デフォルト）
       var markerColor = '#818cf8';
-      if (evt) {
-        var perm = KC.LoginContext.getPermission(evt);
-        markerColor = perm.bgColor || evt.color || '#818cf8';
-      }
+      var perm = KC.LoginContext.getPermission(evt);
+      markerColor = perm.bgColor || evt.color || '#818cf8';
 
       var item = document.createElement('div');
       item.className = 'kc-search-dropdown-item';
@@ -6875,13 +6820,11 @@
       // 日時行（日付+曜日部分を span で囲んで土日祝色を適用）
       var dateEl = document.createElement('div');
       dateEl.className = 'kc-search-dropdown-item-date';
-      if (evt) {
-        this._buildDateContent(dateEl, evt);
-      }
+      this._buildDateContent(dateEl, evt);
 
       var titleEl = document.createElement('div');
       titleEl.className = 'kc-search-dropdown-item-title';
-      titleEl.textContent = evt ? (evt.title || '(無題)') : '(無題)';
+      titleEl.textContent = evt.title || '(無題)';
 
       bodyEl.appendChild(dateEl);
       bodyEl.appendChild(titleEl);
@@ -6892,8 +6835,9 @@
       var self = this;
       item.addEventListener('click', function () {
         self._activateAt(idx);
-        // 項目選択後はプルダウンのみ閉じる（クエリ・ハイライトは維持）
         self._hideDropdown();
+        // フローティング一覧のアイテムクリック → 予定詳細モーダルを開く
+        KC.Popup.openEdit(evt.id);
       });
 
       return item;
@@ -7730,7 +7674,7 @@
       KC.SearchFilter._matchList = [];
       var srchInput = document.getElementById('kc-search-input');
       if (srchInput) srchInput.value = '';
-      KC.SearchFilter._syncClearBtn();
+      KC.SearchFilter._syncClearBtn('');
       KC.Render.refresh();
       return event;
     }

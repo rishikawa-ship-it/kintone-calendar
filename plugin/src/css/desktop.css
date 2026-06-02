@@ -1135,14 +1135,6 @@ body.kc-dnd-active * {
   opacity: 0.4;
 }
 
-/* 検索ハイライト */
-.kc-month-chip--span.kc-event--match {
-  outline: 2px solid #2563eb;
-}
-.kc-month-chip--span.kc-event--match-active {
-  outline: 3px solid #1d4ed8;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.3);
-}
 
 /* ==========================================================================
  * 18. 自分の予定の強調表示（ログインユーザーの account と一致する予定）
@@ -1283,24 +1275,6 @@ body.kc-dnd-active * {
   margin: 0 12px;
 }
 
-/* ==========================================================================
- * 22. マッチ候補ハイライト（KC.SearchFilter — REQ_search-bar Phase A）
- * ========================================================================== */
-
-/* 一致候補: 青細枠 */
-.kc-event--match,
-.kc-ad-event.kc-event--match,
-.kc-month-chip.kc-event--match {
-  outline: 2px solid #2563eb;
-}
-
-/* アクティブ候補: 青太枠 + 外周光彩 */
-.kc-event--match-active,
-.kc-ad-event.kc-event--match-active,
-.kc-month-chip.kc-event--match-active {
-  outline: 3px solid #1d4ed8;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.3);
-}
 
 /* ==========================================================================
  * 23. 検索プルダウン一覧（KC.SearchFilter 案 X — REQ_search-bar Phase B）
