@@ -1114,6 +1114,7 @@ body.kc-dnd-active * {
   border-radius: 10px;
   overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;  /* clip から ellipsis に統一（他バー・chip と同一挙動） */
   pointer-events: auto;
   cursor: grab;
   /* デフォルト色（bgColor 未指定時）。JS で上書き */
@@ -1617,9 +1618,26 @@ body.kc-dnd-active * {
   padding: 3px 6px;
   border-radius: 4px;
   color: #ffffff;
-  white-space: nowrap;
+  /* 複数日の場合は title + date の 2 span を flex で並べる。単日は span なしで textContent を使う */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+/* タイトル部: 幅が足りない場合は ellipsis で省略。min-width で最低限のタイトルを確保 */
+.kc-month-overflow-bar-title {
+  flex: 1;
+  min-width: 3em;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 日付部: 常に完全表示（省略しない）*/
+.kc-month-overflow-bar-date {
+  flex: none;
+  white-space: nowrap;
 }
 
 /* 複数日 span 終日予定の期間ラベル */

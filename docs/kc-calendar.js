@@ -5363,11 +5363,18 @@
         var startYMD  = KC.Utils.fmtYMD(startDate);
         var endYMD    = KC.Utils.fmtYMD(endDate);
         if (startYMD !== endYMD) {
-          // 複数日: 「タイトル（M/D – M/D）」形式
-          // _formatSpanLabel には表示用終了日 YMD を渡す
-          bar.textContent = (evt.title || '(無題)') + '（' + _formatSpanLabel(startYMD, endYMD) + '）';
+          // 複数日: title と date を 2 span に分割して flex レイアウト（CSS で省略・固定を制御）
+          // 形式: 「タイトル M/D – M/D」（括弧なし・スペース区切り）
+          var titleSpan = document.createElement('span');
+          titleSpan.className = 'kc-month-overflow-bar-title';
+          titleSpan.textContent = evt.title || '(無題)';
+          var dateSpan = document.createElement('span');
+          dateSpan.className = 'kc-month-overflow-bar-date';
+          dateSpan.textContent = _formatSpanLabel(startYMD, endYMD);
+          bar.appendChild(titleSpan);
+          bar.appendChild(dateSpan);
         } else {
-          // 単日: タイトルのみ
+          // 単日: タイトルのみ（span 不使用、textContent で直接設定）
           bar.textContent = evt.title || '(無題)';
         }
         item.appendChild(bar);
