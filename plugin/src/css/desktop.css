@@ -832,6 +832,8 @@ body.kc-dnd-active * {
   border-top: 1px solid var(--kc-border);
   border-left: 1px solid var(--kc-border);
   min-height: var(--kc-month-cell-min-h, 90px);
+  height: 0;        /* grid の 1fr 割り当て高さが優先され min-height が下限を保証する。
+                       セル自体の高さをコンテンツで伸ばさないための固定化 (FR-1) */
   overflow: hidden;
   cursor: pointer;
   padding: 2px;

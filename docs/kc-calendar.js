@@ -3982,13 +3982,21 @@
      * @param {HTMLElement} weekEl - .kc-month-week 要素
      * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
      * @param {Array} alldayEvents - 当週の終日イベント配列
-     * @returns {{ laneCount: number, colLaneCounts: number[] }}
-     *   laneCount: 週全体の最大レーン数
-     *   colLaneCounts: 各列（0〜6）のレーン占有数
+     * @param {number} [maxItems] - セルの最大表示件数（FR-4: 終日バーの件数制限用）
+     *   指定時は各セルで maxItems-1 を超えるレーンのバーを非表示（描画しない）にする。
+     *   指定なしの場合は全件描画（後方互換）。
+     * @returns {{ laneCount: number, colLaneCounts: number[], hiddenByCol: Array[] }}
+     *   laneCount:   週全体の最大レーン数
+     *   colLaneCounts: 各列（0〜6）の実際に描画したレーン占有数（制限後）
+     *   hiddenByCol: 各列（0〜6）で非表示になった終日イベント配列
      */
-    function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents) {
+    function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents, maxItems) {
       var adLayer = weekEl.querySelector('.kc-month-ad-events');
-      var result = { laneCount: 0, colLaneCounts: [0, 0, 0, 0, 0, 0, 0] };
+      var result = {
+        laneCount: 0,
+        colLaneCounts: [0, 0, 0, 0, 0, 0, 0],
+        hiddenByCol:   [[], [], [], [], [], [], []]
+      };
       if (!adLayer || !alldayEvents || alldayEvents.length === 0) return result;
 
       // 各イベントに対して barPosition を求める（他月セルも含む全列が対象）
@@ -4013,18 +4021,40 @@
       }, -1);
       result.laneCount = maxLane + 1;
 
-      // 各セル列ごとのレーン占有数を計算
+      // FR-4: maxItems が指定されている場合、各セルで終日バーが時間予定枠を1件以上残せるよう
+      // セルごとの表示上限レーン数を計算する（maxItems - 1 まで終日バーを許可）
+      // 上限を超えるレーンのバーは描画せず hiddenByCol に記録する
+      var alldayLimit = (maxItems != null && maxItems > 0) ? (maxItems - 1) : Infinity;
+
+      // 各セル列ごとのレーン占有数を計算（制限後の実描画分のみ）
       weekEvents.forEach(function (ev) {
         for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
           if (ci >= 0 && ci < 7) {
-            // そのセルにかかるレーン番号の最大値 + 1 = 使用スロット数
-            result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], (ev.lane || 0) + 1);
+            var lanePlusOne = (ev.lane || 0) + 1;
+            if (lanePlusOne <= alldayLimit) {
+              // 表示範囲内: そのセルにかかるレーン番号の最大値 + 1 = 使用スロット数
+              result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], lanePlusOne);
+            }
           }
         }
       });
 
-      // バーを描画
+      // バーを描画（FR-4: 全セルで上限超えのバーは描画しない）
       weekEvents.forEach(function (ev) {
+        // このバーがかかる各セルで、いずれかのセルで制限内に収まれば描画する。
+        // ただし FR-4 の「セルごとの制限」に最も厳しく合わせるため、
+        // バーが span する全列でレーンが上限を超えているかを確認する。
+        // → バーの lane が alldayLimit を超えていれば全セルで非表示扱い。
+        var lanePlusOne = (ev.lane || 0) + 1;
+        if (lanePlusOne > alldayLimit) {
+          // このバーが span するセル全列に非表示として記録
+          for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
+            if (ci >= 0 && ci < 7) {
+              result.hiddenByCol[ci].push(ev);
+            }
+          }
+          return; // 描画しない
+        }
         var bar = buildMonthAlldayBar(ev);
         adLayer.appendChild(bar);
       });
@@ -4161,14 +4191,16 @@
         });
 
         // 終日バーを配置してセルごとのレーン使用数を取得（他月セルも含む）
-        var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday);
+        // FR-4: maxItems を渡して終日バーの件数を制限し、超過分を hiddenByCol として受け取る
+        var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday, maxItems);
 
         // セルごとに時間予定 chip を配置（他月セルも含む）
         var cellEls = Array.from(weekEl.querySelectorAll('.kc-month-cell'));
         cellEls.forEach(function (cellEl, colIdx) {
           var ymd = weekYMD[colIdx];
 
-          // このセルの使用済みスロット数（終日バーのレーン占有数）
+          // このセルの使用済みスロット数（終日バーのレーン占有数、FR-4 制限後の実描画数）
+          // src 版は日跨ぎ時間予定バー機能なし（plugin のみ実装）のため allday 分のみ参照する
           var usedSlots = alldayResult.colLaneCounts[colIdx] || 0;
 
           // このセルの時間予定を抽出（時刻昇順）
@@ -4184,12 +4216,13 @@
           var chipsAdded = placeMonthTimedEvents(cellEl, dayTimedEvents, usedSlots, maxItems);
 
           // 非表示件数を計算して +N more を表示
-          // hiddenCount は時間予定（chip）の非表示分のみを対象とする
-          // 終日バー / 日跨ぎバーの超過は本要件のスコープ外（別フェーズで対応）
-          var hiddenCount = dayTimedEvents.length - chipsAdded;
+          // FR-4: 時間予定の非表示分に加え、終日バーの超過分も hiddenCount に加算する
+          var hiddenTimed = dayTimedEvents.slice(chipsAdded);
+          var hiddenAllday = alldayResult.hiddenByCol[colIdx] || [];
+          var hiddenCount = hiddenTimed.length + hiddenAllday.length;
           if (hiddenCount > 0) {
-            var hiddenTimed = dayTimedEvents.slice(chipsAdded);
-            applyOverflow(cellEl, hiddenCount, hiddenTimed);
+            // ポップオーバーには終日超過分（先）＋時間予定超過分（後）を渡す
+            applyOverflow(cellEl, hiddenCount, hiddenAllday.concat(hiddenTimed));
           }
         });
       });
@@ -6060,6 +6093,13 @@
       var fsBtn = document.getElementById('kc-fullscreen-btn');
       if (exitBtn) exitBtn.style.display = 'inline-flex';
       if (fsBtn) fsBtn.style.display = 'none';
+      // FR-5: 全画面切替後にセル高が変わるため月ビューのイベント配置を再計算する
+      // requestAnimationFrame でレイアウト確定後に実行する（refresh と同様のパターン）
+      if (KC.State.view === 'month' && KC.RenderMonth) {
+        requestAnimationFrame(function () {
+          KC.RenderMonth.placeMonthEvents();
+        });
+      }
     },
 
     /** 全画面表示を解除 */
@@ -6069,6 +6109,12 @@
       var fsBtn = document.getElementById('kc-fullscreen-btn');
       if (exitBtn) exitBtn.style.display = 'none';
       if (fsBtn) fsBtn.style.display = '';
+      // FR-5: 全画面解除後にセル高が変わるため月ビューのイベント配置を再計算する
+      if (KC.State.view === 'month' && KC.RenderMonth) {
+        requestAnimationFrame(function () {
+          KC.RenderMonth.placeMonthEvents();
+        });
+      }
     },
 
     /**
