@@ -4442,7 +4442,9 @@
       // FR-4: maxItems が指定されている場合、各セルで終日バーが時間予定枠を1件以上残せるよう
       // セルごとの表示上限レーン数を計算する（maxItems - 1 まで終日バーを許可）
       // 上限を超えるレーンのバーは描画せず hiddenByCol に記録する
-      var alldayLimit = (maxItems != null && maxItems > 0) ? (maxItems - 1) : Infinity;
+      // maxItems=0 のとき（セルが極小で chip もバーも描けない場合）は alldayLimit=0 として
+      // 終日バーも全件非表示にし、more だけを表示する。
+      var alldayLimit = (maxItems != null) ? Math.max(0, maxItems - 1) : Infinity;
 
       // effectiveLaneCount: 制限後に実際に描画される終日バーのレーン数（上限適用後）
       // placeMonthTimedSpanEvents のオフセット計算に使う（laneCount は制限前の全件数のため不適切）
@@ -4495,16 +4497,19 @@
      * @param {HTMLElement} weekEl - .kc-month-week 要素
      * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
      * @param {Array} spanEvents - 当週にかかる日跨ぎ時間予定
-     * @param {number} alldayLaneCount - 終日バーのレーン数（下にずらすオフセット）
-     * @returns {{ colLaneCounts: number[] }}
-     *   colLaneCounts: 各列の使用スロット数（終日レーン含む合計）
+     * @param {number} alldayLaneCount - 終日バーの実効レーン数（下にずらすオフセット）
+     * @param {number} [maxItems] - セル全体の最大表示件数（指定時は超過 span を非表示にして hiddenByCol に計上）
+     * @returns {{ colLaneCounts: number[], hiddenByCol: Array[] }}
+     *   colLaneCounts: 各列の使用スロット数（終日レーン含む合計、制限後の実描画分）
+     *   hiddenByCol:   各列で非表示になった日跨ぎ時間予定配列
      */
-    function placeMonthTimedSpanEvents(weekEl, weekYMD, spanEvents, alldayLaneCount) {
-      var result = { colLaneCounts: [0, 0, 0, 0, 0, 0, 0] };
+    function placeMonthTimedSpanEvents(weekEl, weekYMD, spanEvents, alldayLaneCount, maxItems) {
+      var result = {
+        colLaneCounts: [0, 0, 0, 0, 0, 0, 0],
+        hiddenByCol:   [[], [], [], [], [], [], []]
+      };
       var adLayer = weekEl.querySelector('.kc-month-ad-events');
       if (!adLayer || !spanEvents || spanEvents.length === 0) {
-        // スパンなしでも終日分を colLaneCounts に反映
-        for (var ci = 0; ci < 7; ci++) result.colLaneCounts[ci] = 0;
         return result;
       }
 
@@ -4514,18 +4519,35 @@
       // 終日バーとは独立したレーン割り当て（0 始まり）
       KC.Lanes.assignLanes(weekEvents);
 
+      // maxItems が指定されている場合、終日レーン + span レーンの合計が maxItems を超えるものは非表示
+      // span バーはレーン位置固定（Google カレンダー方式）のため、
+      // offsetLane（= alldayLaneCount + ev.lane）>= maxItems のバーを丸ごと非表示にして
+      // そのバーが跨ぐ全列の hiddenByCol に計上する。
+      var spanLimit = (maxItems != null) ? maxItems : Infinity;
+
       // adLayer 内の top は終日バーの下にオフセット
       weekEvents.forEach(function (ev) {
         var offsetLane = alldayLaneCount + (ev.lane || 0);
+
+        if (offsetLane >= spanLimit) {
+          // 上限超え: 描画せず跨ぐ全列の hidden に計上
+          for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
+            if (ci >= 0 && ci < 7) {
+              result.hiddenByCol[ci].push(ev);
+            }
+          }
+          return;
+        }
+
         var evWithOffset = Object.assign({}, ev, { lane: offsetLane });
         var bar = buildMonthTimedSpanBar(evWithOffset);
         adLayer.appendChild(bar);
-        // 各列のスロット数（終日 + span）を更新
+        // 各列のスロット数（終日 + span）を更新（制限内のもののみ）
         for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
           if (ci >= 0 && ci < 7) {
             result.colLaneCounts[ci] = Math.max(
               result.colLaneCounts[ci],
-              alldayLaneCount + (ev.lane || 0) + 1
+              offsetLane + 1
             );
           }
         }
@@ -4693,8 +4715,10 @@
         // FR-4: オフセットには制限後の実効レーン数（effectiveLaneCount）を使う。
         //       laneCount（制限前）を使うと終日バーが maxItems で制限されても
         //       日跨ぎバーが制限前レーン数分だけ下にずれてセル外（不可視位置）に描画される。
+        // span 件数制限: maxItems を渡して終日+span の合計スロット数が maxItems を超えないよう制御する。
+        //       超過 span は描画せず spanResult.hiddenByCol に記録し、後段で hiddenCount に加算する。
         var spanResult = placeMonthTimedSpanEvents(
-          weekEl, weekYMD, weekTimedSpan, alldayResult.effectiveLaneCount
+          weekEl, weekYMD, weekTimedSpan, alldayResult.effectiveLaneCount, maxItems
         );
 
         // セルごとに単日時間予定 chip を配置（他月セルも含む）
@@ -4720,13 +4744,14 @@
           var chipsAdded = placeMonthTimedEvents(cellEl, dayTimedEvents, usedSlots, maxItems);
 
           // 非表示件数を計算して +N more を表示
-          // FR-4: 時間予定の非表示分に加え、終日バーの超過分も hiddenCount に加算する
-          var hiddenTimed = dayTimedEvents.slice(chipsAdded);
+          // 終日バー超過分・日跨ぎ時間予定超過分・単日時間予定超過分をすべて合算する
+          var hiddenTimed  = dayTimedEvents.slice(chipsAdded);
           var hiddenAllday = alldayResult.hiddenByCol[colIdx] || [];
-          var hiddenCount = hiddenTimed.length + hiddenAllday.length;
+          var hiddenSpan   = spanResult.hiddenByCol[colIdx]   || [];
+          var hiddenCount  = hiddenAllday.length + hiddenSpan.length + hiddenTimed.length;
           if (hiddenCount > 0) {
-            // ポップオーバーには終日超過分（先）＋時間予定超過分（後）を渡す
-            applyOverflow(cellEl, hiddenCount, hiddenAllday.concat(hiddenTimed));
+            // ポップオーバーには 終日超過（先）→ span 超過 → 時間予定超過（後）の順で渡す
+            applyOverflow(cellEl, hiddenCount, hiddenAllday.concat(hiddenSpan).concat(hiddenTimed));
           }
         });
       });

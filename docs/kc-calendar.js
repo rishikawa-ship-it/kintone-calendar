@@ -4030,7 +4030,9 @@
       // FR-4: maxItems が指定されている場合、各セルで終日バーが時間予定枠を1件以上残せるよう
       // セルごとの表示上限レーン数を計算する（maxItems - 1 まで終日バーを許可）
       // 上限を超えるレーンのバーは描画せず hiddenByCol に記録する
-      var alldayLimit = (maxItems != null && maxItems > 0) ? (maxItems - 1) : Infinity;
+      // maxItems=0 のとき（セルが極小で chip もバーも描けない場合）は alldayLimit=0 として
+      // 終日バーも全件非表示にし、more だけを表示する。
+      var alldayLimit = (maxItems != null) ? Math.max(0, maxItems - 1) : Infinity;
 
       // 各セル列ごとのレーン占有数を計算（制限後の実描画分のみ）
       weekEvents.forEach(function (ev) {
