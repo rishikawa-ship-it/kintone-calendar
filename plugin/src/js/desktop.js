@@ -4585,16 +4585,14 @@
      * @returns {number} 追加した chip 数
      */
     function placeMonthTimedEvents(cellEl, timedEvents, usedSlots, maxItems) {
-      if (!timedEvents || timedEvents.length === 0) return 0;
-
-      // 終日バーが占有する高さ分のスペーサーを挿入（chip がバーに隠れないよう）
-      // .kc-month-dateline の直後に配置して、chip を終日バーの下に押し下げる
-      // （.kc-month-dateline は datehead + 祝日名を内包する flex 行ラッパー）
+      // spacer 生成は timedEvents の有無によらず usedSlots > 0 なら常に行う。
+      // chip が 0 本でもバー（終日・span）が占有するスロット分の in-flow スペースが必要なため。
+      // これにより more の描画位置 = dateline + spacer(usedSlots) + chip群 の直後となる。
       //
       // spacer 高さの設計:
       //   .kc-month-ad-events の top は CSS で --kc-month-dateline-h (28px) に設定済み。
       //   dateline が 28px を占有した後に spacer がバー群高さ分 (usedSlots 本分) を確保すれば
-      //   chip 開始位置 = dateline(28px) + spacer(usedSlots*25px) = adLayer.top + バー群 下端 と一致する。
+      //   chip 開始位置 = dateline(28px) + spacer(usedSlots*BAR_H+...) = adLayer.top + バー群 下端 と一致する。
       //   BAR_TOP は 0 のため spacerH = usedSlots * BAR_H + (usedSlots - 1) * BAR_GAP。
       if (usedSlots > 0) {
         var spacer = cellEl.querySelector('.kc-month-chip-spacer');
@@ -4614,6 +4612,8 @@
           cellEl.insertBefore(spacer, insertBefore);
         }
       }
+
+      if (!timedEvents || timedEvents.length === 0) return 0;
 
       var remaining = maxItems - usedSlots;
       var added = 0;

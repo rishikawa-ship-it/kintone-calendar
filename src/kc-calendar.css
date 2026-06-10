@@ -962,7 +962,7 @@ body.kc-dnd-active * {
   padding: 1px 4px;
   cursor: pointer;
   flex: 0 0 auto;
-  margin-top: auto;  /* flex 残余スペースを上に吸収し、more を常にセル最下部へ寄せる */
+  margin-top: 1px;
   position: relative;
   z-index: 2;  /* .kc-month-ad-events (z-index: 1) より前面に表示 */
   border-radius: 4px;
