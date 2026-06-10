@@ -5898,18 +5898,24 @@
         var bar = document.createElement('div');
         bar.className = 'kc-month-overflow-bar';
         bar.style.backgroundColor = _getEventColor(evt);
-        bar.textContent = evt.title || '(無題)';
-        item.appendChild(bar);
 
-        // 複数日 span の場合は期間ラベルを追加
-        var startYMD = KC.Utils.fmtYMD(new Date(evt.start));
-        var endYMD   = KC.Utils.fmtYMD(new Date(evt.end));
+        // 期間ラベルをバー内 1 行に統合する。
+        // kintone 終日予定の end は「翌日 0 時」で格納されるため、表示用終了日は end-1日。
+        // 単日（start 日 = end-1日）の場合は期間を付けずタイトルのみ表示する。
+        var startDate = new Date(evt.start);
+        var endRaw    = new Date(evt.end);
+        var endDate   = new Date(endRaw.getFullYear(), endRaw.getMonth(), endRaw.getDate() - 1);
+        var startYMD  = KC.Utils.fmtYMD(startDate);
+        var endYMD    = KC.Utils.fmtYMD(endDate);
         if (startYMD !== endYMD) {
-          var spanLabel = document.createElement('div');
-          spanLabel.className = 'kc-month-overflow-span-label';
-          spanLabel.textContent = _formatSpanLabel(startYMD, endYMD);
-          item.appendChild(spanLabel);
+          // 複数日: 「タイトル（M/D – M/D）」形式
+          // _formatSpanLabel には表示用終了日 YMD を渡す
+          bar.textContent = (evt.title || '(無題)') + '（' + _formatSpanLabel(startYMD, endYMD) + '）';
+        } else {
+          // 単日: タイトルのみ
+          bar.textContent = evt.title || '(無題)';
         }
+        item.appendChild(bar);
 
         item.addEventListener('click', function (e) {
           e.stopPropagation();
