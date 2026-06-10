@@ -4133,8 +4133,10 @@
      *
      * 計算前提:
      *   - 月ビューはセル内に [日付行 + 終日バー領域 + chip 群 + +N more] が縦積み
-     *   - .kc-month-dateline の min-height は --kc-month-dateline-h (28px) に設定済み
+     *   - .kc-month-dateline の min-height は 28px だが padding-bottom:4px (content-box) で
+     *     flex 上の占有高は 32px になる
      *   - itemH は 1 件分の高さ（chip = BAR_H + BAR_GAP, 暗黙的に終日バーと同等）
+     *   - moreH は +N more の flex 占有高（font 12px × lh ≈ 1.4 + padding 2px + margin-top 1px ≈ 20px）
      *   - .kc-month-ad-events の top が CSS で 28px に固定されるため safety マージンは不要
      * @returns {number} 最低 1、最大 10
      */
@@ -4143,13 +4145,17 @@
       if (!firstCell) return MAX_CELL_ITEMS;
       var cellH = firstCell.getBoundingClientRect().height;
       if (!cellH || cellH <= 0) return MAX_CELL_ITEMS;
-      var dateHeadH = 28;        // 日付ヘッダー（dateline）高: --kc-month-dateline-h と同値
-      var padding   = 4;         // セル padding 上下合計（CSS: padding 2px）
-      var moreH     = 16;        // +N more 行高
+      var dateHeadH = 32;        // dateline 占有高: min-height(28px) + padding-bottom(4px, content-box)
+      var padding   = 4;         // セル padding 上下合計（CSS: padding 2px × 2）
+      var moreH     = 20;        // +N more 行占有高（font 12px×lh + padding 2px + margin-top 1px ≈ 20px）
       var itemH     = BAR_H + BAR_GAP; // 1 件あたりの高さ（27px）
       var available = cellH - dateHeadH - padding - moreH;
+      // available <= 0 のときは chip を 1 本も置けない（more 行だけ確保する）ため 0 を返す。
+      // 呼び出し元で hiddenCount > 0 なら more が追加され、more 単体（dateline + more ≈ 52px）は
+      // min-height(90px) 未満の極小セルでも収まる。
+      if (available <= 0) return 0;
       var max = Math.floor(available / itemH);
-      return Math.max(1, Math.min(max, 10));
+      return Math.min(max, 10);
     }
 
     /**
