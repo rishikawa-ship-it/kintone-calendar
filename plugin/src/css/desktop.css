@@ -815,9 +815,15 @@ body.kc-dnd-active * {
 /* 月グリッド本体（6行）*/
 .kc-month-grid {
   display: grid;
-  grid-template-rows: repeat(6, 1fr);
+  /* minmax(0, 1fr): min を 0 にすることで auto-minimum（コンテンツ起因の行伸び）を解除し、
+     予定が多い行でも全 6 行が均等高さに固定される（FR-1 根本対応）。
+     min=0 で行が過小にならないよう .kc-month-grid 自体に下限高さを別途保証する。 */
+  grid-template-rows: repeat(6, minmax(0, 1fr));
   flex: 1;
   min-height: 0;
+  /* セル min-height（90px）× 6 行を下限として保証する。
+     これにより minmax(0, 1fr) の min=0 でもセルが 90px を下回らない。 */
+  min-height: calc(6 * var(--kc-month-cell-min-h, 90px));
 }
 
 /* 週行ラッパー（7列グリッド + 終日バー絶対配置の基準）*/
@@ -825,6 +831,9 @@ body.kc-dnd-active * {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   position: relative;
+  /* grid アイテムとしての auto-minimum を解除してグリッド行高に完全追従させる。
+     overflow: hidden は付けない（position:absolute の .kc-month-ad-events がクリップされるため）。 */
+  min-height: 0;
 }
 
 /* 日付セル */
@@ -832,8 +841,9 @@ body.kc-dnd-active * {
   border-top: 1px solid var(--kc-border);
   border-left: 1px solid var(--kc-border);
   min-height: var(--kc-month-cell-min-h, 90px);
-  height: 0;        /* grid の 1fr 割り当て高さが優先され min-height が下限を保証する。
-                       セル自体の高さをコンテンツで伸ばさないための固定化 (FR-1) */
+  /* height:100% で .kc-month-week（グリッド行高）にいっぱいに追従する（FR-1）。
+     コンテンツが増えても高さはグリッド行高に固定され、overflow:hidden でクリップされる。 */
+  height: 100%;
   overflow: hidden;
   cursor: pointer;
   padding: 2px;
@@ -999,7 +1009,7 @@ body.kc-dnd-active * {
 /* 全画面モード時の月グリッド高（REQ_month-view §7.2）*/
 .kc-root.kc-expanded .kc-month-grid {
   height: calc(100vh - var(--kc-fullscreen-header-h, 0px));
-  grid-template-rows: repeat(6, 1fr);
+  grid-template-rows: repeat(6, minmax(0, 1fr));  /* 通常時と同様に auto-minimum を解除 */
 }
 
 /* ==========================================================================
