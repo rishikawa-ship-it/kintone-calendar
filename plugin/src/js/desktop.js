@@ -3934,9 +3934,13 @@
       var rangeStart = new Date(monthFirst);
       rangeStart.setDate(monthFirst.getDate() - monthFirst.getDay());
       rangeStart.setHours(0, 0, 0, 0);
-      // 6週 × 7日 - 1 = 41日後が末端
-      var rangeEnd = U.addDays(rangeStart, 41);
-      return { start: rangeStart, end: rangeEnd };
+      // 必要週数: ceil((月初曜日オフセット + 月の日数) / 7)（4〜6）
+      var offset     = monthFirst.getDay();
+      var daysInMonth = new Date(y, m + 1, 0).getDate();
+      var weekCount  = Math.ceil((offset + daysInMonth) / 7);
+      // weekCount × 7日 - 1 日後が末端
+      var rangeEnd = U.addDays(rangeStart, weekCount * 7 - 1);
+      return { start: rangeStart, end: rangeEnd, weekCount: weekCount };
     }
 
     /**
@@ -3996,7 +4000,7 @@
     }
 
     /**
-     * 6週 × 7セルのグリッドを描画する
+     * N週 × 7セルのグリッドを描画する（N = 4〜6、月によって動的に決定）
      * 各セルに data-date, 当月外フラグ, 当日フラグを付与
      */
     function renderMonthGrid() {
@@ -4007,13 +4011,22 @@
       gridEl.innerHTML = '';
 
       var range = monthRange(S.current);
+      var weekCount = range.weekCount;
       var currentMonth = S.current.getMonth();
       var todayYMD = U.fmtYMD(new Date());
 
-      // 6週分のループ
-      for (var week = 0; week < 6; week++) {
+      // 週数分のループ（4〜6 週）
+      for (var week = 0; week < weekCount; week++) {
         _buildWeekRow(gridEl, range, week, currentMonth, todayYMD);
       }
+
+      // CSS の repeat(6,...) を週数に合わせてインラインスタイルで上書きする。
+      // 通常モード・全画面モード（.kc-expanded）ともにインラインスタイルが CSS を上書きするため
+      // grid-template-rows を一括設定する。
+      var rowsDef = 'repeat(' + weekCount + ', minmax(0, 1fr))';
+      gridEl.style.gridTemplateRows = rowsDef;
+      // min-height も週数に追従させて各セルが 90px を下回らないよう保証する
+      gridEl.style.minHeight = 'calc(' + weekCount + ' * var(--kc-month-cell-min-h, 90px))';
     }
 
     /**

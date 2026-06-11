@@ -806,17 +806,17 @@ body.kc-dnd-active * {
 }
 .kc-month-dayhead:first-child { border-left: none; }
 
-/* 月グリッド本体（6行）*/
+/* 月グリッド本体（N行: 4〜6 週、JS の renderMonthGrid でインラインスタイルを上書きする）*/
 .kc-month-grid {
   display: grid;
-  /* minmax(0, 1fr): min を 0 にすることで auto-minimum（コンテンツ起因の行伸び）を解除し、
-     予定が多い行でも全 6 行が均等高さに固定される（FR-1 根本対応）。
-     min=0 で行が過小にならないよう .kc-month-grid 自体に下限高さを別途保証する。 */
+  /* デフォルト 6 行。JS の renderMonthGrid が repeat(N, minmax(0,1fr)) でインライン上書きする。
+     minmax(0, 1fr): min を 0 にすることで auto-minimum（コンテンツ起因の行伸び）を解除し、
+     予定が多い行でも全 N 行が均等高さに固定される（FR-1 根本対応）。 */
   grid-template-rows: repeat(6, minmax(0, 1fr));
   flex: 1;
   min-height: 0;
-  /* セル min-height（90px）× 6 行を下限として保証する。
-     これにより minmax(0, 1fr) の min=0 でもセルが 90px を下回らない。 */
+  /* セル min-height（90px）× 6 行をデフォルト下限とする。
+     JS の renderMonthGrid が週数 N に応じてインライン上書きする。 */
   min-height: calc(6 * var(--kc-month-cell-min-h, 90px));
 }
 
@@ -999,9 +999,9 @@ body.kc-dnd-active * {
 }
 
 /* 全画面モード時の月グリッド高（REQ_month-view §7.2）*/
+/* grid-template-rows は JS のインラインスタイルで repeat(N,...) が設定済みのため CSS での指定は不要 */
 .kc-root.kc-expanded .kc-month-grid {
   height: calc(100vh - var(--kc-fullscreen-header-h, 0px));
-  grid-template-rows: repeat(6, minmax(0, 1fr));  /* 通常時と同様に auto-minimum を解除 */
 }
 
 /* ==========================================================================
