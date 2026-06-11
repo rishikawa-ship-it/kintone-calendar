@@ -137,6 +137,23 @@
             <p class="kc-config-hint">MULTI_LINE_TEXT 型のフィールドが表示されます。</p>
           </div>
 
+          <!-- ---- 重複チェック設定 (REQ_dnd-overlap-block v2) ---- -->
+          <h3 class="kc-config-subsection-title">重複チェック設定</h3>
+          <div class="kc-config-field-group">
+            <label for="kc-field-overlap-key" class="kc-config-label">
+              重複判定キーフィールド
+            </label>
+            <select id="kc-field-overlap-key" name="overlapKeyField" class="kc-config-select">
+              <option value="">-- 未選択（無効）--</option>
+            </select>
+            <p class="kc-config-hint">
+              DnD（移動・リサイズ）確定時に、同じフィールド値を持つ他レコードと期間が重複する場合に保存をブロックします。<br>
+              未選択の場合は重複チェックを行いません（従来動作）。<br>
+              対象型: SINGLE_LINE_TEXT / NUMBER / DROP_DOWN / RADIO_BUTTON / USER_SELECT / LOOKUP。<br>
+              ※ CHECK_BOX は実機未確認のため選択肢に含まれません。REFERENCE_TABLE 等のシステムフィールドも除外されます。
+            </p>
+          </div>
+
         </section>
 
         <!-- ====================================================

@@ -277,10 +277,18 @@
       KC.Config.MAIL_LOGIN_USER_DEFAULT =
         (config.fieldMapping && config.fieldMapping.mailLoginUserDefault === true);
 
+      // DnD 重複チェック用リソースキーフィールド設定 (REQ_dnd-overlap-block §9.3, version 8 以降)
+      // version 7 以前の設定には overlapKeyFieldCode が存在しないため空文字として初期化（NF-3 後方互換）
+      KC.Config.OVERLAP_KEY_FIELD_CODE =
+        (config.fieldMapping && config.fieldMapping.overlapKeyFieldCode) ? config.fieldMapping.overlapKeyFieldCode : '';
+      KC.Config.OVERLAP_KEY_FIELD_TYPE =
+        (config.fieldMapping && config.fieldMapping.overlapKeyFieldType) ? config.fieldMapping.overlapKeyFieldType : '';
+
       console.log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD,
         'PERMISSION_RULES:', KC.Config.PERMISSION_RULES,
         'FIELDVALUE_RULES:', KC.Config.FIELDVALUE_RULES,
-        'SEARCH_TARGETS:', KC.Config.SEARCH_TARGETS);
+        'SEARCH_TARGETS:', KC.Config.SEARCH_TARGETS,
+        'OVERLAP_KEY_FIELD_CODE:', KC.Config.OVERLAP_KEY_FIELD_CODE);
     }
   };
 
@@ -313,6 +321,19 @@
    * @type {boolean}
    */
   KC.Config.MAIL_LOGIN_USER_DEFAULT = false;
+  /**
+   * DnD 重複チェック用リソースキーフィールドコード (REQ_dnd-overlap-block §9.3)
+   * loadFromPluginConfig で上書きされる。空文字 = 重複チェック無効（後方互換デフォルト）
+   * @type {string}
+   */
+  KC.Config.OVERLAP_KEY_FIELD_CODE = '';
+  /**
+   * DnD 重複チェック用リソースキーフィールド型 (REQ_dnd-overlap-block §9.3)
+   * loadFromPluginConfig で上書きされる。空文字 = 無効
+   * 使用する演算子の決定に利用する: USER_SELECT → in、その他 → =
+   * @type {string}
+   */
+  KC.Config.OVERLAP_KEY_FIELD_TYPE = '';
 
   /* ====================================================================
    * WCAG 輝度ユーティリティ (REQ §8.7)
@@ -655,6 +676,24 @@
         }
       }
 
+      // DnD 重複チェック用リソースキーフィールド値を格納（案 A: REQ_dnd-overlap-block §7.3）
+      // USER_SELECT 型: value[].code 配列, その他: 文字列値
+      var rawOverlapKeyValue = null;
+      var overlapKeyCodeRec = KC.Config.OVERLAP_KEY_FIELD_CODE;
+      var overlapKeyTypeRec = KC.Config.OVERLAP_KEY_FIELD_TYPE;
+      if (overlapKeyCodeRec && rec[overlapKeyCodeRec]) {
+        if (overlapKeyTypeRec === 'USER_SELECT') {
+          // USER_SELECT: value は [{code, name, ...}, ...] 形式
+          var usCodes = Array.isArray(rec[overlapKeyCodeRec].value)
+            ? rec[overlapKeyCodeRec].value.map(function (v) { return v.code || ''; }).filter(Boolean)
+            : [];
+          rawOverlapKeyValue = usCodes;
+        } else {
+          // 文字列値フィールド（SINGLE_LINE_TEXT / DROP_DOWN / RADIO_BUTTON / NUMBER / LOOKUP 等）
+          rawOverlapKeyValue = rec[overlapKeyCodeRec].value != null ? String(rec[overlapKeyCodeRec].value) : '';
+        }
+      }
+
       var ev = {
         id:               rec.$id.value,
         rev:              rec.$revision.value,
@@ -668,6 +707,7 @@
         memo:             self._safeVal(rec, F.memo),
         permissionFields: permissionFields, /* 権限ユーザー判定用フィールド値（REQ §6.2） */
         valueFields:      valueFields,       /* フィールド値権限判定用フィールド値（REQ v6 §6.2） */
+        rawOverlapKeyValue: rawOverlapKeyValue, /* DnD 重複チェック用リソースキー値（REQ_dnd-overlap-block §7.3 案 A） */
         record:           rec               /* 元 kintone レコード（Phase 2 追加フィールド検索用） */
       };
 
@@ -784,6 +824,13 @@
             }
           }
 
+          // DnD 重複チェック用リソースキーフィールドを取得対象に追加（案 A: REQ_dnd-overlap-block §7.3）
+          // OVERLAP_KEY_FIELD_CODE が設定されている場合のみ追加する（未設定時はチェック無効で不要）
+          var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
+          if (overlapKeyCode && fieldList.indexOf(overlapKeyCode) === -1) {
+            fieldList.push(overlapKeyCode);
+          }
+
           var recordsUrl = kintone.api.url('/k/v1/records.json', true);
           var params = {
             app:    KC.Config.getAppId(),
@@ -863,6 +910,109 @@
         record: record
       });
       return resp;
+    },
+
+    /**
+     * DnD 重複チェッククエリを発行し、重複レコードの先頭 1 件を返す。
+     *
+     * スコープ: DnD（移動・リサイズ）による日時変更時のベストエフォートな事前チェック。
+     * カレンダー JS 以外の保存経路（iframe モーダル・直接編集）は Customine で保護。
+     * TOCTOU 競合（チェック後・PUT 前に他ユーザーが同一リソースに保存）は
+     * Customine のサーバー側バリデーションが最終防衛線となる（§10.1）。
+     *
+     * @param {Object} ev - DnD 対象の KcEvent（id, rawOverlapKeyValue を含む）
+     * @param {string} newStart - 移動後の開始日時 (ISO 8601)
+     * @param {string} newEnd   - 移動後の終了日時 (ISO 8601)
+     * @returns {Promise<Array>} 重複レコード配列（0 件 = 重複なし、1 件以上 = ブロック）
+     * @throws {Error} API エラー時（FR-4: 呼び出し元でブロック扱いにする）
+     *
+     * REQ_dnd-overlap-block §7.1〜§7.4 準拠:
+     *   - 期間重複条件 (DATE型):
+     *       start_field < qNewEnd AND end_field >= qNewStart
+     *       DATE RAW値は inclusive なので >= が正しい（loadEvents と同パターン）
+     *       隣接（既存 end = 11/03, 新 start = 11/04 の場合）: "11/03" >= "11/04" = false → 非ヒット（AC-7 維持）
+     *   - 期間重複条件 (DATETIME型):
+     *       start_field < qNewEnd AND end_field > qNewStart（厳密不等号: 隣接は重複なし）
+     *   - 自レコード除外: $id != ev.id（FR-6）
+     *   - 除外ステータス: kintone.app.getQueryCondition() 条件を AND 結合（loadEvents と同メカニズム）
+     *   - fields: $id + タイトルフィールドのみ（バナー表示用、NF-2 応答サイズ最小化）
+     *   - limit 1（NF-2 応答サイズ最小化）
+     */
+    checkOverlapQuery: async function (ev, newStart, newEnd) {
+      var F = KC.Config.FIELD;
+      var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
+      var overlapKeyType = KC.Config.OVERLAP_KEY_FIELD_TYPE;
+
+      // DATE 型の場合は "YYYY-MM-DD" 形式に変換する（loadEvents の qStart/qEnd と同パターン）
+      // DATE RAW 値は _recordToEvent で翌日 UTC に変換されているが、
+      // クエリ側は kintone RAW 値（"YYYY-MM-DD"）同士の文字列比較のため -1 日は不要
+      var qNewStart = newStart;
+      var qNewEnd = newEnd;
+      if (KC.Config.START_FIELD_TYPE === 'DATE') {
+        qNewStart = newStart.substring(0, 10);
+        qNewEnd = newEnd.substring(0, 10);
+      }
+
+      // 重複条件: [A_start, A_end] と [newStart, newEnd] が重なるかを判定
+      // DATE 型: end は kintone RAW 値が inclusive（当日が終了日）のため >= を使用（loadEvents と同様）
+      // DATETIME 型: 厳密不等号（> / <）で隣接は重複なしとする
+      var conditions = [];
+      if (KC.Config.START_FIELD_TYPE === 'DATE') {
+        conditions.push('(' + F.start + ' < "' + qNewEnd + '")');
+        conditions.push('(' + F.end + ' >= "' + qNewStart + '")');
+      } else {
+        conditions.push('(' + F.start + ' < "' + qNewEnd + '")');
+        conditions.push('(' + F.end + ' > "' + qNewStart + '")');
+      }
+
+      // リソースキー条件（FR-2 / §7.2）
+      if (overlapKeyType === 'USER_SELECT') {
+        // USER_SELECT: value[].code 配列に対して in 演算子を使用（§7.4）
+        var codes = Array.isArray(ev.rawOverlapKeyValue) ? ev.rawOverlapKeyValue : [];
+        if (codes.length === 0) {
+          // リソースキー値が空 = 判定不能としてスキップ（チェックしない）
+          return [];
+        }
+        var inList = codes.map(function (c) { return '"' + c.replace(/"/g, '\\"') + '"'; }).join(',');
+        conditions.push('(' + overlapKeyCode + ' in (' + inList + '))');
+      } else {
+        // 文字列・数値・ドロップダウン等: = 演算子
+        var keyVal = (ev.rawOverlapKeyValue != null) ? String(ev.rawOverlapKeyValue) : '';
+        if (keyVal === '') {
+          // リソースキー値が空 = 判定不能としてスキップ（チェックしない）
+          return [];
+        }
+        conditions.push('(' + overlapKeyCode + ' = "' + keyVal.replace(/"/g, '\\"') + '")');
+      }
+
+      // 自レコード除外（FR-6 / §7.2）
+      conditions.push('($id != "' + String(ev.id) + '")');
+
+      // 除外ステータス条件（FR-5 / §7.2）: loadEvents と同メカニズム（kintone.app.getQueryCondition() を AND 結合）
+      // カレンダービューに設定された絞り込み条件（除外ステータス等）をそのまま引き継ぐことで
+      // 表示除外レコードを重複チェック対象からも除外する
+      // null・空文字・取得不能の場合は条件を付けない（フォールバック: より多くのレコードをチェック対象とする方向）
+      var userCondition = null;
+      try {
+        userCondition = kintone.app.getQueryCondition();
+      } catch (qcErr) {
+        console.warn('[KC.DnD] getQueryCondition 取得失敗、除外条件なしで続行:', qcErr);
+      }
+      if (userCondition) {
+        conditions.push('(' + userCondition + ')');
+      }
+
+      var query = conditions.join(' and ') + ' order by $id asc limit 1';
+
+      var url = kintone.api.url('/k/v1/records.json', true);
+      var params = {
+        app:    KC.Config.getAppId(),
+        query:  query,
+        fields: ['$id', F.title].filter(Boolean)
+      };
+
+      var resp = await kintone.api(url, 'GET', params);
+      return resp.records || [];
     },
 
     /** 更新（差分フィールドのみ） */
@@ -1599,12 +1749,29 @@
     }
 
     /**
-     * 楽観的 UI 更新: State をインプレース更新 → renderGrid → API 送信
-     * @param {Object} origEv - 元のイベントオブジェクト
-     * @param {string} newStart - 新しい開始 ISO 文字列
-     * @param {string} newEnd - 新しい終了 ISO 文字列
+     * DnD 確定処理: 楽観先行更新 → 重複チェック → 送信 or ブロック
+     *
+     * フロー (REQ_dnd-overlap-block §6.1 / FR-7):
+     *   1. State をインプレース更新 + renderGrid()（即時 UI 反映: 楽観先行フェーズ）
+     *   2. OVERLAP_KEY_FIELD_CODE が設定されていれば重複チェッククエリを await で実行
+     *   3. 0 件 → updateEvent 送信（送信フェーズ）
+     *   4. 1 件以上 or エラー → State を元に戻して renderGrid() + バナー表示（ブロックフェーズ）
+     *
+     * スコープ: DnD のみ。フォーム保存（iframe モーダル・直接編集）は Customine で保護。
+     * TOCTOU 競合（チェック後〜PUT の間に他ユーザーが保存）は Customine が最終防衛線（§10.1）。
+     *
+     * @param {Object} origEv  - DnD 開始時点の KcEvent（変更前）
+     * @param {string} newStart - 移動後の開始日時 (ISO 8601)
+     * @param {string} newEnd   - 移動後の終了日時 (ISO 8601)
      */
-    function _commitOptimistic(origEv, newStart, newEnd) {
+    async function _commitOptimistic(origEv, newStart, newEnd) {
+      // NOTE: origEv は drag.ev = KC.State.events[i] への直接参照（live reference）。
+      //       以下の楽観先行フェーズで origEv.start / origEv.end を書き換えてしまうと
+      //       ブロックフェーズで「元の値」が失われるため、上書き前に退避する。
+      var savedStart = origEv.start;
+      var savedEnd   = origEv.end;
+
+      // ── 楽観先行フェーズ ────────────────────────────────────────────────────
       // State をインプレース更新（Object.assign でコピーせず live reference を維持する）
       // NOTE: Object.assign でオブジェクトを置き換えると rev が古いままになり、
       //       連続ドラッグ時に 2 回目以降が 409 エラーになるため、直接プロパティを更新する
@@ -1617,9 +1784,57 @@
         currentEv.end = newEnd;
       }
 
-      // 即時 UI 反映
+      // 即時 UI 反映（楽観先行: ユーザーには移動後の状態が見える）
       KC.Render.renderGrid();
 
+      // ── チェックフェーズ ─────────────────────────────────────────────────────
+      var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
+      if (overlapKeyCode) {
+        // バナーを閉じてから重複チェック（前回のエラーバナーを消す）
+        KC.Banner.hide();
+
+        var overlapRecords;
+        var checkFailed = false;
+        try {
+          overlapRecords = await KC.Api.checkOverlapQuery(origEv, newStart, newEnd);
+        } catch (checkErr) {
+          console.error('[KC.DnD] 重複チェッククエリ失敗:', checkErr);
+          checkFailed = true;
+          overlapRecords = [];
+        }
+
+        var hasOverlap = checkFailed || (overlapRecords.length > 0);
+
+        if (hasOverlap) {
+          // ── ブロックフェーズ ────────────────────────────────────────────────
+          // savedStart / savedEnd（楽観更新前に退避した元値）で State を巻き戻す
+          // origEv.start / origEv.end は楽観先行フェーズで既に newStart/newEnd に書き換わっているため
+          // origEv から再取得すると巻き戻し不能になる点に注意
+          if (currentEv) {
+            currentEv.start = savedStart;
+            currentEv.end   = savedEnd;
+          }
+          KC.Render.renderGrid();
+
+          // バナー表示（FR-3 / FR-4 / §7.2）
+          var bannerMsg;
+          if (checkFailed) {
+            bannerMsg = '重複チェック中にエラーが発生しました。再度操作してください。';
+          } else {
+            var firstTitle = KC.Config.FIELD.title && overlapRecords[0][KC.Config.FIELD.title]
+              ? overlapRecords[0][KC.Config.FIELD.title].value
+              : '(無題)';
+            bannerMsg = '「' + firstTitle + '」と期間が重複しています。';
+          }
+          KC.Banner.show(bannerMsg);
+          return; // updateEvent は送信しない
+        }
+
+        // 重複なし: バナーを閉じてから送信（正常移動後のバナー消去 T-7）
+        KC.Banner.hide();
+      }
+
+      // ── 送信フェーズ ─────────────────────────────────────────────────────────
       // API を非同期送信（楽観的: レスポンスを待たない）
       // クロージャが保持する origEv.rev は古い可能性があるため、State の currentEv.rev を使う
       var payload = Object.assign({}, origEv, { start: newStart, end: newEnd, rev: currentEv ? currentEv.rev : origEv.rev });
@@ -1798,7 +2013,10 @@
       if (!drag.newStart || !drag.newEnd) return;
       if (drag.newStart === drag.ev.start && drag.newEnd === drag.ev.end) return;
 
-      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd);
+      // _commitOptimistic は async のため未処理 rejection を防ぐ .catch を付与（§6.2）
+      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd).catch(function (err) {
+        console.error('[KC.DnD] _commitOptimistic 未処理エラー:', err);
+      });
     }
 
     /**
@@ -2338,7 +2556,10 @@
       if (!drag.newStart || !drag.newEnd) return;
       if (drag.newStart === drag.ev.start && drag.newEnd === drag.ev.end) return;
 
-      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd);
+      // _commitOptimistic は async のため未処理 rejection を防ぐ .catch を付与（§6.2）
+      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd).catch(function (err) {
+        console.error('[KC.DnD] _commitOptimistic 未処理エラー:', err);
+      });
     }
 
     /**
@@ -2723,7 +2944,10 @@
       if (!drag.newStart || !drag.newEnd) return;
       if (drag.newStart === drag.ev.start && drag.newEnd === drag.ev.end) return;
 
-      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd);
+      // _commitOptimistic は async のため未処理 rejection を防ぐ .catch を付与（§6.2）
+      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd).catch(function (err) {
+        console.error('[KC.DnD] _commitOptimistic 未処理エラー:', err);
+      });
     }
 
     /**

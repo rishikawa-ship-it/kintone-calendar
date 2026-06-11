@@ -1,16 +1,20 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (v7: 検索対象フィールド設定追加)
+ * KC Calendar プラグイン設定画面スクリプト (v8: 重複チェック設定追加)
  *
- * 保存形式 (version 7):
+ * 保存形式 (version 8):
  *   {
- *     version: 7,
- *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ... },
+ *     version: 8,
+ *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ...,
+ *                     overlapKeyFieldCode, overlapKeyFieldType },
  *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, bgColor, textColor }, ... ],
  *     fieldValueRules: [ { fieldCode, fieldType, value, permission, bgColor, textColor }, ... ],
  *     searchTargets: [ { fieldCode: "memo" }, { fieldCode: "relatedMeetings" }, ... ],
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
+ * v8 変更点:
+ *   - fieldMapping に overlapKeyFieldCode / overlapKeyFieldType を追加（DnD 重複チェック用）
+ *   - v7→v8 マイグレーション: overlapKeyFieldCode: '', overlapKeyFieldType: '' を追加
  * v7 変更点:
  *   - searchTargets 配列を追加（検索対象フィールドの管理者設定）
  *   - v6→v7 マイグレーション: searchTargets: [] を追加
@@ -92,6 +96,12 @@
   /** 検索対象フィールドとして選択可能な型（REQ_search-bar v3 §3.1） */
   var SEARCH_TARGET_TYPES = ['SINGLE_LINE_TEXT', 'MULTI_LINE_TEXT', 'RICH_TEXT', 'REFERENCE_TABLE', 'USER_SELECT'];
 
+  /**
+   * 重複判定キーフィールドとして選択可能な型（REQ_dnd-overlap-block v2 §8）
+   * CHECK_BOX は in 演算子の kintone 実機動作が未確認のため除外（安全側）
+   */
+  var OVERLAP_KEY_FIELD_TYPES = ['SINGLE_LINE_TEXT', 'NUMBER', 'DROP_DOWN', 'RADIO_BUTTON', 'USER_SELECT', 'LOOKUP'];
+
   /* ====================================================================
    * ユーティリティ
    * ==================================================================== */
@@ -124,11 +134,11 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 7)
+   * setConfig で保存する全体設定オブジェクト (version 8)
    * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, views: Object }}
    */
   var currentConfig = {
-    version: 7,
+    version: 8,
     fieldMapping: {},
     permissionRules: [],
     fieldValueRules: [],
@@ -198,6 +208,9 @@
   var elFieldUserMail = document.getElementById('kc-field-usermail');
   var elFieldMemo = document.getElementById('kc-field-memo');
   var elAlldayLabel = document.getElementById('kc-allday-label');
+
+  /* --- 重複チェック設定 (v8 新規) --- */
+  var elFieldOverlapKey = document.getElementById('kc-field-overlap-key');
 
   /* --- 権限ユーザー設定 (v6 リネーム: 旧「編集権限設定」) --- */
   var elPermissionRows = document.getElementById('kc-permission-rows');
@@ -350,6 +363,44 @@
   }
 
   /**
+   * kintone フィールド一覧から指定した型のフィールドを型情報付きで抽出する
+   * option.dataset.fieldtype に設定するために使用する。
+   * @param {Object} properties - kintone API の properties オブジェクト
+   * @param {string[]} allowedTypes - 許可するフィールド型の配列
+   * @returns {Array<{code: string, label: string, type: string}>} 抽出したフィールドの配列
+   */
+  function filterFieldsWithType(properties, allowedTypes) {
+    var result = [];
+    Object.keys(properties).forEach(function (code) {
+      var field = properties[code];
+      if (allowedTypes.indexOf(field.type) !== -1) {
+        result.push({
+          code:  code,
+          label: field.label || code,
+          type:  field.type
+        });
+      }
+    });
+    result.sort(function (a, b) {
+      if (a.label < b.label) { return -1; }
+      if (a.label > b.label) { return 1; }
+      return 0;
+    });
+    return result;
+  }
+
+  /**
+   * select 要素の現在選択中 option の data-fieldtype 属性値を返す
+   * @param {HTMLSelectElement} selectEl - 対象の select 要素
+   * @returns {string} フィールド型文字列（未選択または未設定時は ''）
+   */
+  function getFieldTypeFromSelect(selectEl) {
+    if (!selectEl) { return ''; }
+    var opt = selectEl.options[selectEl.selectedIndex];
+    return (opt && opt.dataset.fieldtype) ? opt.dataset.fieldtype : '';
+  }
+
+  /**
    * プルダウンに指定した値を選択状態にする
    * @param {HTMLSelectElement} selectEl - 対象の select 要素
    * @param {string} value - 選択する値
@@ -451,16 +502,23 @@
    * @returns {Object} fieldMapping オブジェクト
    */
   function collectFieldMapping() {
+    // 重複判定キーフィールド: コードと型の両方を収集する
+    var overlapKeyFieldCode = elFieldOverlapKey ? elFieldOverlapKey.value : '';
+    var overlapKeyFieldType = (elFieldOverlapKey && overlapKeyFieldCode)
+      ? getFieldTypeFromSelect(elFieldOverlapKey)
+      : '';
     return {
-      fieldTitle:    elFieldTitle.value,
-      fieldStart:    elFieldStart.value,
-      fieldEnd:      elFieldEnd.value,
-      fieldAllday:   elFieldAllday.value,
-      fieldColor:    elFieldColor.value,
-      fieldPlace:    elFieldPlace.value,
-      fieldUserMail: elFieldUserMail.value,
-      fieldMemo:     elFieldMemo.value,
-      alldayLabel:   elAlldayLabel.value.trim()
+      fieldTitle:          elFieldTitle.value,
+      fieldStart:          elFieldStart.value,
+      fieldEnd:            elFieldEnd.value,
+      fieldAllday:         elFieldAllday.value,
+      fieldColor:          elFieldColor.value,
+      fieldPlace:          elFieldPlace.value,
+      fieldUserMail:       elFieldUserMail.value,
+      fieldMemo:           elFieldMemo.value,
+      alldayLabel:         elAlldayLabel.value.trim(),
+      overlapKeyFieldCode: overlapKeyFieldCode,
+      overlapKeyFieldType: overlapKeyFieldType
     };
   }
 
@@ -1647,6 +1705,11 @@
     selectValue(elFieldUserMail, fieldMapping.fieldUserMail || '');
     selectValue(elFieldMemo,     fieldMapping.fieldMemo     || '');
 
+    // 重複判定キーフィールド（v8: overlapKeyFieldCode）
+    if (elFieldOverlapKey) {
+      selectValue(elFieldOverlapKey, fieldMapping.overlapKeyFieldCode || '');
+    }
+
     // 値反映後に空文字状態を再同期する（selectValue が値を設定した後の状態に合わせる）
     syncSelectEmptyClass(elFieldTitle);
     syncSelectEmptyClass(elFieldStart);
@@ -1656,6 +1719,7 @@
     syncSelectEmptyClass(elFieldPlace);
     syncSelectEmptyClass(elFieldUserMail);
     syncSelectEmptyClass(elFieldMemo);
+    syncSelectEmptyClass(elFieldOverlapKey);
   }
 
   /**
@@ -1893,7 +1957,7 @@
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
       currentConfig = {
-        version: 7,
+        version: 8,
         fieldMapping: {},
         permissionRules: [],
         fieldValueRules: [],
@@ -1928,6 +1992,19 @@
       parsed.version = 7;
     }
 
+    // version 7 → 8 マイグレーション（overlapKeyFieldCode / overlapKeyFieldType 追加）
+    if (Number(parsed.version) < 8) {
+      console.log('[KC Config] version 7 → 8 へマイグレーション実行');
+      if (!parsed.fieldMapping) { parsed.fieldMapping = {}; }
+      if (parsed.fieldMapping.overlapKeyFieldCode === undefined || parsed.fieldMapping.overlapKeyFieldCode === null) {
+        parsed.fieldMapping.overlapKeyFieldCode = '';
+      }
+      if (parsed.fieldMapping.overlapKeyFieldType === undefined || parsed.fieldMapping.overlapKeyFieldType === null) {
+        parsed.fieldMapping.overlapKeyFieldType = '';
+      }
+      parsed.version = 8;
+    }
+
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
@@ -1942,7 +2019,7 @@
     }
 
     currentConfig = {
-      version:         7,
+      version:         8,
       fieldMapping:    fm,
       permissionRules: rules,
       fieldValueRules: Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
@@ -2033,6 +2110,26 @@
         if (a.label > b.label) return 1;
         return 0;
       });
+
+      // 重複判定キーフィールド選択肢を構築する（OVERLAP_KEY_FIELD_TYPES + dataset.fieldtype 付き）
+      if (elFieldOverlapKey) {
+        // 既存選択肢をクリアして空白オプションを追加
+        while (elFieldOverlapKey.options.length > 0) { elFieldOverlapKey.remove(0); }
+        var emptyOverlapOpt = document.createElement('option');
+        emptyOverlapOpt.value = '';
+        emptyOverlapOpt.textContent = '-- 未選択（無効）--';
+        elFieldOverlapKey.appendChild(emptyOverlapOpt);
+        // 型情報付きでフィールドを追加
+        var overlapCandidates = filterFieldsWithType(props, OVERLAP_KEY_FIELD_TYPES);
+        overlapCandidates.forEach(function (f) {
+          var opt = document.createElement('option');
+          opt.value = f.code;
+          opt.textContent = f.label + ' (' + f.code + ')';
+          opt.dataset.fieldtype = f.type;
+          elFieldOverlapKey.appendChild(opt);
+        });
+        syncSelectEmptyClass(elFieldOverlapKey);
+      }
 
       return props;
     }).catch(function (err) {
@@ -2510,9 +2607,9 @@
         mailLoginUserDefault: mailLoginUserDefault
       });
 
-      // 最終的な保存オブジェクト (version 7 形式: permissionRules + fieldValueRules + searchTargets を含む)
+      // 最終的な保存オブジェクト (version 8 形式: permissionRules + fieldValueRules + searchTargets + overlapKey を含む)
       var finalConfig = {
-        version: 7,
+        version: 8,
         fieldMapping:    updatedFieldMapping,
         permissionRules: currentConfig.permissionRules || [],
         fieldValueRules: currentConfig.fieldValueRules || [],
@@ -2727,7 +2824,8 @@
     // populateSelect / applyFieldMapping での初期反映済みのため、ここでは change のみ追加する
     [
       elFieldTitle, elFieldStart, elFieldEnd, elFieldAllday,
-      elFieldColor, elFieldPlace, elFieldUserMail, elFieldMemo
+      elFieldColor, elFieldPlace, elFieldUserMail, elFieldMemo,
+      elFieldOverlapKey
     ].forEach(function (sel) {
       if (!sel) { return; }
       sel.addEventListener('change', function () { syncSelectEmptyClass(sel); });
