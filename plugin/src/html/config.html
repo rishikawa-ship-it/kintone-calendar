@@ -137,9 +137,33 @@
             <p class="kc-config-hint">MULTI_LINE_TEXT 型のフィールドが表示されます。</p>
           </div>
 
-          <!-- ---- 重複チェック設定 (REQ_dnd-overlap-block v2) ---- -->
+          <!-- ---- 重複チェック設定 (REQ_dnd-overlap-block v5) ---- -->
           <h3 class="kc-config-subsection-title">重複チェック設定</h3>
+          <p class="kc-config-hint">
+            DnD（移動・リサイズ）確定時に、他レコードと期間が重複する場合に保存をブロックします。
+          </p>
+
+          <!-- 判定モード選択 -->
           <div class="kc-config-field-group">
+            <label class="kc-config-label">判定モード</label>
+            <div class="kc-overlap-mode-radios">
+              <label class="kc-overlap-mode-radio-label">
+                <input type="radio" id="kc-overlap-mode-none" name="kc-overlap-mode" value="none" />
+                無効（チェックしない）
+              </label>
+              <label class="kc-overlap-mode-radio-label">
+                <input type="radio" id="kc-overlap-mode-fieldkey" name="kc-overlap-mode" value="fieldKey" />
+                モード A: 通常フィールドで識別
+              </label>
+              <label class="kc-overlap-mode-radio-label">
+                <input type="radio" id="kc-overlap-mode-reftable" name="kc-overlap-mode" value="refTable" />
+                モード B: 関連レコード（REFERENCE_TABLE）で識別
+              </label>
+            </div>
+          </div>
+
+          <!-- モード A 設定エリア -->
+          <div id="kc-overlap-mode-a-area" class="kc-config-field-group" style="display:none;">
             <label for="kc-field-overlap-key" class="kc-config-label">
               重複判定キーフィールド
             </label>
@@ -147,11 +171,40 @@
               <option value="">-- 未選択（無効）--</option>
             </select>
             <p class="kc-config-hint">
-              DnD（移動・リサイズ）確定時に、同じフィールド値を持つ他レコードと期間が重複する場合に保存をブロックします。<br>
-              未選択の場合は重複チェックを行いません（従来動作）。<br>
+              同じフィールド値を持つ他レコードと期間が重複する場合に保存をブロックします。<br>
               対象型: SINGLE_LINE_TEXT / NUMBER / DROP_DOWN / RADIO_BUTTON / USER_SELECT / LOOKUP。<br>
-              ※ CHECK_BOX は実機未確認のため選択肢に含まれません。REFERENCE_TABLE 等のシステムフィールドも除外されます。
+              ※ CHECK_BOX は実機未確認のため選択肢に含まれません。
             </p>
+          </div>
+
+          <!-- モード B 設定エリア -->
+          <div id="kc-overlap-mode-b-area" class="kc-config-field-group" style="display:none;">
+            <div class="kc-config-field-group">
+              <label for="kc-overlap-ref-table-field" class="kc-config-label">
+                REFERENCE_TABLE フィールド
+              </label>
+              <select id="kc-overlap-ref-table-field" name="overlapRefTableField" class="kc-config-select">
+                <option value="">-- REFERENCE_TABLE フィールドを選択 --</option>
+              </select>
+              <p class="kc-config-hint">
+                このアプリに設置された「関連レコード一覧」フィールドを選択します。<br>
+                関連先アプリ・紐付けフィールドは選択後に自動取得されます。
+              </p>
+            </div>
+
+            <div class="kc-config-field-group">
+              <label for="kc-overlap-resource-field" class="kc-config-label">
+                リソース識別フィールド（関連先アプリ）
+              </label>
+              <select id="kc-overlap-resource-field" name="overlapResourceField" class="kc-config-select">
+                <option value="">-- まず REFERENCE_TABLE を選択してください --</option>
+              </select>
+              <p class="kc-config-hint">
+                関連先アプリ（機器台帳など）の中で、同一リソースを識別するフィールドを選択します。<br>
+                同じ値を持つリソースが期間重複した場合にブロックされます。<br>
+                対象型: SINGLE_LINE_TEXT / NUMBER / DROP_DOWN / RADIO_BUTTON / CALC。
+              </p>
+            </div>
           </div>
 
         </section>

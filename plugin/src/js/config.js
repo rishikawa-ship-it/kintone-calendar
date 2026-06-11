@@ -1,17 +1,27 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (v8: 重複チェック設定追加)
+ * KC Calendar プラグイン設定画面スクリプト (v9: DnD 重複チェック モード B 追加)
  *
- * 保存形式 (version 8):
+ * 保存形式 (version 9):
  *   {
- *     version: 8,
+ *     version: 9,
  *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ...,
- *                     overlapKeyFieldCode, overlapKeyFieldType },
+ *                     overlapMode,                  // 'none' / 'fieldKey' / 'refTable'
+ *                     overlapKeyFieldCode,          // モード A
+ *                     overlapKeyFieldType,          // モード A
+ *                     overlapRefTableFieldCode,          // モード B: このアプリの REFERENCE_TABLE フィールド
+ *                     overlapRefTableJoinFieldCode,       // モード B: 予約側紐付けフィールド (condition.field, 自動取得)
+ *                     overlapRefTableRelatedJoinFieldCode,// モード B: 関連先側紐付けフィールド (condition.relatedField, 自動取得)
+ *                     overlapRefTableRelatedAppId,        // モード B: 関連先アプリ ID（自動取得）
+ *                     overlapResourceFieldCode },         // モード B: 関連先のリソース識別フィールド
  *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, bgColor, textColor }, ... ],
  *     fieldValueRules: [ { fieldCode, fieldType, value, permission, bgColor, textColor }, ... ],
  *     searchTargets: [ { fieldCode: "memo" }, { fieldCode: "relatedMeetings" }, ... ],
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
+ * v9 変更点:
+ *   - fieldMapping に overlapMode / overlapRefTable* フィールドを追加（DnD 重複チェック モード B 用）
+ *   - v8→v9 マイグレーション: overlapMode を overlapKeyFieldCode から自動判定、モード B フィールドを '' で初期化
  * v8 変更点:
  *   - fieldMapping に overlapKeyFieldCode / overlapKeyFieldType を追加（DnD 重複チェック用）
  *   - v7→v8 マイグレーション: overlapKeyFieldCode: '', overlapKeyFieldType: '' を追加
@@ -134,11 +144,11 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 8)
+   * setConfig で保存する全体設定オブジェクト (version 9)
    * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, views: Object }}
    */
   var currentConfig = {
-    version: 8,
+    version: 9,
     fieldMapping: {},
     permissionRules: [],
     fieldValueRules: [],
@@ -209,8 +219,22 @@
   var elFieldMemo = document.getElementById('kc-field-memo');
   var elAlldayLabel = document.getElementById('kc-allday-label');
 
-  /* --- 重複チェック設定 (v8 新規) --- */
-  var elFieldOverlapKey = document.getElementById('kc-field-overlap-key');
+  /* --- 重複チェック設定 (v8/v9) --- */
+  var elFieldOverlapKey         = document.getElementById('kc-field-overlap-key');
+  /* --- 重複チェック モード選択 (v9 新規) --- */
+  var elOverlapModeNone         = document.getElementById('kc-overlap-mode-none');
+  var elOverlapModeFieldKey     = document.getElementById('kc-overlap-mode-fieldkey');
+  var elOverlapModeRefTable     = document.getElementById('kc-overlap-mode-reftable');
+  /* --- モード A 設定エリア (v9: 表示切替対象) --- */
+  var elOverlapModeAArea        = document.getElementById('kc-overlap-mode-a-area');
+  /* --- モード B 設定エリア (v9 新規) --- */
+  var elOverlapModeBArea        = document.getElementById('kc-overlap-mode-b-area');
+  var elOverlapRefTableField    = document.getElementById('kc-overlap-ref-table-field');
+  var elOverlapResourceField    = document.getElementById('kc-overlap-resource-field');
+  /* 自動取得した紐付けフィールドコード（予約側・関連先側）と関連先アプリIDを一時保持する変数 */
+  var _overlapRefJoinFieldCode        = '';  // 予約アプリ側 (condition.field)
+  var _overlapRefRelatedJoinFieldCode = '';  // 関連先アプリ側 (condition.relatedField)
+  var _overlapRefRelatedAppId         = '';
 
   /* --- 権限ユーザー設定 (v6 リネーム: 旧「編集権限設定」) --- */
   var elPermissionRows = document.getElementById('kc-permission-rows');
@@ -502,23 +526,40 @@
    * @returns {Object} fieldMapping オブジェクト
    */
   function collectFieldMapping() {
-    // 重複判定キーフィールド: コードと型の両方を収集する
+    // 判定モードを収集（ラジオボタン: none / fieldKey / refTable）
+    var overlapMode = 'none';
+    if (elOverlapModeFieldKey && elOverlapModeFieldKey.checked) { overlapMode = 'fieldKey'; }
+    else if (elOverlapModeRefTable && elOverlapModeRefTable.checked) { overlapMode = 'refTable'; }
+
+    // モード A: 重複判定キーフィールドのコードと型
     var overlapKeyFieldCode = elFieldOverlapKey ? elFieldOverlapKey.value : '';
     var overlapKeyFieldType = (elFieldOverlapKey && overlapKeyFieldCode)
       ? getFieldTypeFromSelect(elFieldOverlapKey)
       : '';
+
+    // モード B: REFERENCE_TABLE フィールド・リソース識別フィールド
+    // 紐付けフィールドコードと関連先アプリ ID は REFERENCE_TABLE 選択時に自動取得し変数に保持
+    var overlapRefTableFieldCode = elOverlapRefTableField ? elOverlapRefTableField.value : '';
+    var overlapResourceFieldCode = elOverlapResourceField ? elOverlapResourceField.value : '';
+
     return {
-      fieldTitle:          elFieldTitle.value,
-      fieldStart:          elFieldStart.value,
-      fieldEnd:            elFieldEnd.value,
-      fieldAllday:         elFieldAllday.value,
-      fieldColor:          elFieldColor.value,
-      fieldPlace:          elFieldPlace.value,
-      fieldUserMail:       elFieldUserMail.value,
-      fieldMemo:           elFieldMemo.value,
-      alldayLabel:         elAlldayLabel.value.trim(),
-      overlapKeyFieldCode: overlapKeyFieldCode,
-      overlapKeyFieldType: overlapKeyFieldType
+      fieldTitle:                   elFieldTitle.value,
+      fieldStart:                   elFieldStart.value,
+      fieldEnd:                     elFieldEnd.value,
+      fieldAllday:                  elFieldAllday.value,
+      fieldColor:                   elFieldColor.value,
+      fieldPlace:                   elFieldPlace.value,
+      fieldUserMail:                elFieldUserMail.value,
+      fieldMemo:                    elFieldMemo.value,
+      alldayLabel:                  elAlldayLabel.value.trim(),
+      overlapMode:                  overlapMode,
+      overlapKeyFieldCode:          overlapKeyFieldCode,
+      overlapKeyFieldType:          overlapKeyFieldType,
+      overlapRefTableFieldCode:          overlapRefTableFieldCode,
+      overlapRefTableJoinFieldCode:        _overlapRefJoinFieldCode,
+      overlapRefTableRelatedJoinFieldCode: _overlapRefRelatedJoinFieldCode,
+      overlapRefTableRelatedAppId:         _overlapRefRelatedAppId,
+      overlapResourceFieldCode:            overlapResourceFieldCode
     };
   }
 
@@ -1705,9 +1746,30 @@
     selectValue(elFieldUserMail, fieldMapping.fieldUserMail || '');
     selectValue(elFieldMemo,     fieldMapping.fieldMemo     || '');
 
-    // 重複判定キーフィールド（v8: overlapKeyFieldCode）
+    // 重複チェック: 判定モード選択（v9: overlapMode ラジオボタン）
+    var mode = fieldMapping.overlapMode || 'none';
+    if (elOverlapModeNone)     { elOverlapModeNone.checked     = (mode === 'none'); }
+    if (elOverlapModeFieldKey) { elOverlapModeFieldKey.checked = (mode === 'fieldKey'); }
+    if (elOverlapModeRefTable) { elOverlapModeRefTable.checked = (mode === 'refTable'); }
+    _applyOverlapModeUI(mode);
+
+    // モード A: 重複判定キーフィールド（v8: overlapKeyFieldCode）
     if (elFieldOverlapKey) {
       selectValue(elFieldOverlapKey, fieldMapping.overlapKeyFieldCode || '');
+    }
+
+    // モード B: REFERENCE_TABLE フィールド / リソース識別フィールド（v9）
+    // 紐付けフィールドコード（予約側・関連先側）と関連先アプリ ID は保存値から復元して内部変数に保持する
+    _overlapRefJoinFieldCode        = fieldMapping.overlapRefTableJoinFieldCode        || '';
+    _overlapRefRelatedJoinFieldCode = fieldMapping.overlapRefTableRelatedJoinFieldCode || '';
+    _overlapRefRelatedAppId         = fieldMapping.overlapRefTableRelatedAppId         || '';
+    if (elOverlapRefTableField) {
+      selectValue(elOverlapRefTableField, fieldMapping.overlapRefTableFieldCode || '');
+      syncSelectEmptyClass(elOverlapRefTableField);
+    }
+    // リソース識別フィールドは関連先アプリの選択肢が必要なので populateOverlapResourceField で非同期に反映
+    if (_overlapRefRelatedAppId && fieldMapping.overlapResourceFieldCode) {
+      _populateOverlapResourceField(_overlapRefRelatedAppId, fieldMapping.overlapResourceFieldCode);
     }
 
     // 値反映後に空文字状態を再同期する（selectValue が値を設定した後の状態に合わせる）
@@ -1720,6 +1782,69 @@
     syncSelectEmptyClass(elFieldUserMail);
     syncSelectEmptyClass(elFieldMemo);
     syncSelectEmptyClass(elFieldOverlapKey);
+  }
+
+  /**
+   * 判定モードに応じてモード A / B 設定エリアの表示を切り替える
+   * @param {string} mode - 'none' / 'fieldKey' / 'refTable'
+   */
+  function _applyOverlapModeUI(mode) {
+    if (elOverlapModeAArea) {
+      elOverlapModeAArea.style.display = (mode === 'fieldKey') ? '' : 'none';
+    }
+    if (elOverlapModeBArea) {
+      elOverlapModeBArea.style.display = (mode === 'refTable') ? '' : 'none';
+    }
+  }
+
+  /**
+   * 関連先アプリ（relatedAppId）のフィールド一覧を取得して
+   * リソース識別フィールドプルダウンを構築する。
+   * REFERENCE_TABLE フィールド選択時 / applyFieldMapping 時に呼ばれる。
+   * @param {string} relatedAppId - 関連先アプリ ID
+   * @param {string} [selectValue_] - 取得後に選択状態にする値（省略時は未選択）
+   */
+  function _populateOverlapResourceField(relatedAppId, selectValue_) {
+    if (!elOverlapResourceField || !relatedAppId) { return; }
+
+    // 読み込み中表示
+    while (elOverlapResourceField.options.length > 0) { elOverlapResourceField.remove(0); }
+    var loadingOpt = document.createElement('option');
+    loadingOpt.value = '';
+    loadingOpt.textContent = '-- 読み込み中... --';
+    elOverlapResourceField.appendChild(loadingOpt);
+
+    kintone.api(kintone.api.url('/k/v1/app/form/fields', true), 'GET', { app: relatedAppId })
+      .then(function (resp) {
+        var props = resp.properties || {};
+        var RESOURCE_FIELD_TYPES = ['SINGLE_LINE_TEXT', 'NUMBER', 'DROP_DOWN', 'RADIO_BUTTON', 'CALC'];
+        var candidates = filterFieldsWithType(props, RESOURCE_FIELD_TYPES);
+
+        while (elOverlapResourceField.options.length > 0) { elOverlapResourceField.remove(0); }
+        var emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = '-- リソース識別フィールドを選択 --';
+        elOverlapResourceField.appendChild(emptyOpt);
+
+        candidates.forEach(function (f) {
+          var opt = document.createElement('option');
+          opt.value = f.code;
+          opt.textContent = f.label + ' (' + f.code + ')';
+          opt.dataset.fieldtype = f.type;
+          elOverlapResourceField.appendChild(opt);
+        });
+
+        if (selectValue_) { selectValue(elOverlapResourceField, selectValue_); }
+        syncSelectEmptyClass(elOverlapResourceField);
+      })
+      .catch(function (err) {
+        console.warn('[KC Config] 関連先アプリのフィールド取得失敗:', err);
+        while (elOverlapResourceField.options.length > 0) { elOverlapResourceField.remove(0); }
+        var errOpt = document.createElement('option');
+        errOpt.value = '';
+        errOpt.textContent = '-- 取得失敗（権限を確認してください）--';
+        elOverlapResourceField.appendChild(errOpt);
+      });
   }
 
   /**
@@ -1957,7 +2082,7 @@
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
       currentConfig = {
-        version: 8,
+        version: 9,
         fieldMapping: {},
         permissionRules: [],
         fieldValueRules: [],
@@ -2005,6 +2130,23 @@
       parsed.version = 8;
     }
 
+    // version 8 → 9 マイグレーション（overlapMode / モード B フィールド追加）
+    if (Number(parsed.version) < 9) {
+      console.log('[KC Config] version 8 → 9 へマイグレーション実行');
+      if (!parsed.fieldMapping) { parsed.fieldMapping = {}; }
+      var fm8 = parsed.fieldMapping;
+      // v8 設定: overlapKeyFieldCode が空でなければモード A として引き継ぐ
+      if (fm8.overlapMode === undefined || fm8.overlapMode === null) {
+        fm8.overlapMode = fm8.overlapKeyFieldCode ? 'fieldKey' : 'none';
+      }
+      if (fm8.overlapRefTableFieldCode          === undefined) { fm8.overlapRefTableFieldCode          = ''; }
+      if (fm8.overlapRefTableJoinFieldCode       === undefined) { fm8.overlapRefTableJoinFieldCode       = ''; }
+      if (fm8.overlapRefTableRelatedJoinFieldCode === undefined) { fm8.overlapRefTableRelatedJoinFieldCode = ''; }
+      if (fm8.overlapRefTableRelatedAppId        === undefined) { fm8.overlapRefTableRelatedAppId        = ''; }
+      if (fm8.overlapResourceFieldCode           === undefined) { fm8.overlapResourceFieldCode           = ''; }
+      parsed.version = 9;
+    }
+
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
@@ -2019,7 +2161,7 @@
     }
 
     currentConfig = {
-      version:         8,
+      version:         9,
       fieldMapping:    fm,
       permissionRules: rules,
       fieldValueRules: Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
@@ -2129,6 +2271,38 @@
           elFieldOverlapKey.appendChild(opt);
         });
         syncSelectEmptyClass(elFieldOverlapKey);
+      }
+
+      // モード B: REFERENCE_TABLE フィールド選択肢を構築する（v9）
+      if (elOverlapRefTableField) {
+        while (elOverlapRefTableField.options.length > 0) { elOverlapRefTableField.remove(0); }
+        var emptyRefOpt = document.createElement('option');
+        emptyRefOpt.value = '';
+        emptyRefOpt.textContent = '-- REFERENCE_TABLE フィールドを選択 --';
+        elOverlapRefTableField.appendChild(emptyRefOpt);
+        var refTableCandidates = filterFieldsWithType(props, ['REFERENCE_TABLE']);
+        refTableCandidates.forEach(function (f) {
+          var opt = document.createElement('option');
+          opt.value = f.code;
+          opt.textContent = f.label + ' (' + f.code + ')';
+          opt.dataset.fieldtype = f.type;
+          // 関連先アプリ ID と紐付けフィールドコードも data 属性に保持しておく
+          var fieldDef = props[f.code];
+          // kintone API の REFERENCE_TABLE 定義: fieldDef.referenceTable.relatedApp / condition
+          var refTable = fieldDef && fieldDef.referenceTable ? fieldDef.referenceTable : null;
+          if (refTable && refTable.relatedApp) {
+            opt.dataset.relatedAppId   = refTable.relatedApp.app  || '';
+            opt.dataset.relatedAppCode = refTable.relatedApp.code || '';
+          }
+          if (refTable && refTable.condition) {
+            // condition.field:        予約アプリ側フィールドコード（Step1 fields / Step2 収集用）
+            // condition.relatedField: 関連先アプリ側フィールドコード（Step3 in クエリ / Step4 取り出し用）
+            opt.dataset.joinFieldCode        = refTable.condition.field        || '';
+            opt.dataset.relatedJoinFieldCode = refTable.condition.relatedField || '';
+          }
+          elOverlapRefTableField.appendChild(opt);
+        });
+        syncSelectEmptyClass(elOverlapRefTableField);
       }
 
       return props;
@@ -2607,9 +2781,9 @@
         mailLoginUserDefault: mailLoginUserDefault
       });
 
-      // 最終的な保存オブジェクト (version 8 形式: permissionRules + fieldValueRules + searchTargets + overlapKey を含む)
+      // 最終的な保存オブジェクト (version 9 形式: permissionRules + fieldValueRules + searchTargets + overlapMode/refTable を含む)
       var finalConfig = {
-        version: 8,
+        version: 9,
         fieldMapping:    updatedFieldMapping,
         permissionRules: currentConfig.permissionRules || [],
         fieldValueRules: currentConfig.fieldValueRules || [],
@@ -2894,6 +3068,83 @@
         if (elSearchTargetRows) {
           elSearchTargetRows.appendChild(buildSearchTargetRow());
         }
+      });
+    }
+
+    // 重複チェック: ラジオボタン切り替えでモード A / B エリアを表示切替 (v9)
+    [elOverlapModeNone, elOverlapModeFieldKey, elOverlapModeRefTable].forEach(function (radio) {
+      if (!radio) { return; }
+      radio.addEventListener('change', function () {
+        var mode = 'none';
+        if (elOverlapModeFieldKey && elOverlapModeFieldKey.checked) { mode = 'fieldKey'; }
+        else if (elOverlapModeRefTable && elOverlapModeRefTable.checked) { mode = 'refTable'; }
+        _applyOverlapModeUI(mode);
+      });
+    });
+
+    // 重複チェック: REFERENCE_TABLE フィールド変更時に紐付けフィールドと関連先アプリを自動取得 (v9)
+    if (elOverlapRefTableField) {
+      elOverlapRefTableField.addEventListener('change', function () {
+        syncSelectEmptyClass(elOverlapRefTableField);
+        var selOpt = elOverlapRefTableField.options[elOverlapRefTableField.selectedIndex];
+        if (!selOpt || !selOpt.value) {
+          // 選択解除: 内部変数をリセットしてリソースフィールドプルダウンをクリア
+          _overlapRefJoinFieldCode        = '';
+          _overlapRefRelatedJoinFieldCode = '';
+          _overlapRefRelatedAppId         = '';
+          if (elOverlapResourceField) {
+            while (elOverlapResourceField.options.length > 0) { elOverlapResourceField.remove(0); }
+            var emptyOpt = document.createElement('option');
+            emptyOpt.value = '';
+            emptyOpt.textContent = '-- まず REFERENCE_TABLE を選択してください --';
+            elOverlapResourceField.appendChild(emptyOpt);
+            syncSelectEmptyClass(elOverlapResourceField);
+          }
+          return;
+        }
+
+        // data 属性から関連先アプリ ID・予約側/関連先側の紐付けフィールドコードを取得（loadFields 時に設定済み）
+        var joinCode        = selOpt.dataset.joinFieldCode        || '';  // 予約側 (condition.field)
+        var relatedJoinCode = selOpt.dataset.relatedJoinFieldCode || '';  // 関連先側 (condition.relatedField)
+        var relatedAppId    = selOpt.dataset.relatedAppId         || '';
+
+        if (!relatedAppId || !joinCode || !relatedJoinCode) {
+          // data 属性が不足する場合は API で取得する（フォールバック）
+          var appId = getAppIdFromUrl();
+          kintone.api(kintone.api.url('/k/v1/app/form/fields', true), 'GET', { app: appId })
+            .then(function (resp) {
+              var fieldDef = resp.properties[selOpt.value];
+              // kintone REFERENCE_TABLE の正しいプロパティ構造: fieldDef.referenceTable.*
+              var refTable = fieldDef && fieldDef.referenceTable ? fieldDef.referenceTable : null;
+              if (refTable && refTable.relatedApp) {
+                relatedAppId = refTable.relatedApp.app || '';
+              }
+              if (refTable && refTable.condition) {
+                joinCode        = refTable.condition.field        || '';
+                relatedJoinCode = refTable.condition.relatedField || '';
+              }
+              _overlapRefJoinFieldCode        = joinCode;
+              _overlapRefRelatedJoinFieldCode = relatedJoinCode;
+              _overlapRefRelatedAppId         = relatedAppId;
+              _populateOverlapResourceField(relatedAppId, '');
+            })
+            .catch(function (err) {
+              console.warn('[KC Config] REFERENCE_TABLE フィールド定義取得失敗:', err);
+            });
+          return;
+        }
+
+        _overlapRefJoinFieldCode        = joinCode;
+        _overlapRefRelatedJoinFieldCode = relatedJoinCode;
+        _overlapRefRelatedAppId         = relatedAppId;
+        _populateOverlapResourceField(relatedAppId, '');
+      });
+    }
+
+    // 重複チェック: リソース識別フィールド select の空文字クラス追跡 (v9)
+    if (elOverlapResourceField) {
+      elOverlapResourceField.addEventListener('change', function () {
+        syncSelectEmptyClass(elOverlapResourceField);
       });
     }
 

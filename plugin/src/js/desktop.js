@@ -277,17 +277,26 @@
       KC.Config.MAIL_LOGIN_USER_DEFAULT =
         (config.fieldMapping && config.fieldMapping.mailLoginUserDefault === true);
 
-      // DnD 重複チェック用リソースキーフィールド設定 (REQ_dnd-overlap-block §9.3, version 8 以降)
-      // version 7 以前の設定には overlapKeyFieldCode が存在しないため空文字として初期化（NF-3 後方互換）
-      KC.Config.OVERLAP_KEY_FIELD_CODE =
-        (config.fieldMapping && config.fieldMapping.overlapKeyFieldCode) ? config.fieldMapping.overlapKeyFieldCode : '';
-      KC.Config.OVERLAP_KEY_FIELD_TYPE =
-        (config.fieldMapping && config.fieldMapping.overlapKeyFieldType) ? config.fieldMapping.overlapKeyFieldType : '';
+      // DnD 重複チェック設定 (REQ_dnd-overlap-block §9B, version 9 以降)
+      // version 8 以前の設定には overlapMode が存在しないため後方互換デフォルトを適用（NF-3）:
+      //   overlapKeyFieldCode が空文字 → 'none'、非空 → 'fieldKey'（モード A として引き継ぐ）
+      var fm9 = config.fieldMapping || {};
+      KC.Config.OVERLAP_MODE =
+        fm9.overlapMode ? fm9.overlapMode
+        : (fm9.overlapKeyFieldCode ? 'fieldKey' : 'none');
+      KC.Config.OVERLAP_KEY_FIELD_CODE = fm9.overlapKeyFieldCode || '';
+      KC.Config.OVERLAP_KEY_FIELD_TYPE = fm9.overlapKeyFieldType || '';
+      KC.Config.OVERLAP_REF_TABLE_FIELD_CODE         = fm9.overlapRefTableFieldCode          || '';
+      KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD         = fm9.overlapRefTableJoinFieldCode       || '';
+      KC.Config.OVERLAP_REF_TABLE_RELATED_JOIN_FIELD = fm9.overlapRefTableRelatedJoinFieldCode || '';
+      KC.Config.OVERLAP_REF_TABLE_RELATED_APP        = fm9.overlapRefTableRelatedAppId         || '';
+      KC.Config.OVERLAP_RESOURCE_FIELD_CODE          = fm9.overlapResourceFieldCode            || '';
 
       console.log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD,
         'PERMISSION_RULES:', KC.Config.PERMISSION_RULES,
         'FIELDVALUE_RULES:', KC.Config.FIELDVALUE_RULES,
         'SEARCH_TARGETS:', KC.Config.SEARCH_TARGETS,
+        'OVERLAP_MODE:', KC.Config.OVERLAP_MODE,
         'OVERLAP_KEY_FIELD_CODE:', KC.Config.OVERLAP_KEY_FIELD_CODE);
     }
   };
@@ -322,18 +331,53 @@
    */
   KC.Config.MAIL_LOGIN_USER_DEFAULT = false;
   /**
-   * DnD 重複チェック用リソースキーフィールドコード (REQ_dnd-overlap-block §9.3)
+   * DnD 重複チェック判定モード (REQ_dnd-overlap-block §9B)
+   * loadFromPluginConfig で上書きされる。
+   * 'none': 無効（デフォルト） / 'fieldKey': モード A（通常フィールド方式） / 'refTable': モード B（関連レコード方式）
+   * @type {string}
+   */
+  KC.Config.OVERLAP_MODE = 'none';
+  /**
+   * DnD 重複チェック用リソースキーフィールドコード (REQ_dnd-overlap-block §9A, モード A)
    * loadFromPluginConfig で上書きされる。空文字 = 重複チェック無効（後方互換デフォルト）
    * @type {string}
    */
   KC.Config.OVERLAP_KEY_FIELD_CODE = '';
   /**
-   * DnD 重複チェック用リソースキーフィールド型 (REQ_dnd-overlap-block §9.3)
+   * DnD 重複チェック用リソースキーフィールド型 (REQ_dnd-overlap-block §9A, モード A)
    * loadFromPluginConfig で上書きされる。空文字 = 無効
    * 使用する演算子の決定に利用する: USER_SELECT → in、その他 → =
    * @type {string}
    */
   KC.Config.OVERLAP_KEY_FIELD_TYPE = '';
+  /**
+   * モード B: 予約アプリ側の REFERENCE_TABLE フィールドコード
+   * @type {string}
+   */
+  KC.Config.OVERLAP_REF_TABLE_FIELD_CODE = '';
+  /**
+   * モード B: 紐付け条件の予約アプリ側フィールドコード（REFERENCE_TABLE の referenceTable.condition.field）
+   * loadEvents の fieldList に追加され、KcEvent の rawRefTableJoinValue として保持される。
+   * Step1 の fields 取得・Step2 の joinVal 収集に使用する。
+   * @type {string}
+   */
+  KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD = '';
+  /**
+   * モード B: 紐付け条件の関連先アプリ側フィールドコード（REFERENCE_TABLE の referenceTable.condition.relatedField）
+   * Step3 の in クエリと Step4 の取り出しに使用する（予約側の joinField とは別）。
+   * @type {string}
+   */
+  KC.Config.OVERLAP_REF_TABLE_RELATED_JOIN_FIELD = '';
+  /**
+   * モード B: 関連先アプリ ID（文字列）
+   * @type {string}
+   */
+  KC.Config.OVERLAP_REF_TABLE_RELATED_APP = '';
+  /**
+   * モード B: 関連先アプリ側のリソース識別フィールドコード
+   * @type {string}
+   */
+  KC.Config.OVERLAP_RESOURCE_FIELD_CODE = '';
 
   /* ====================================================================
    * WCAG 輝度ユーティリティ (REQ §8.7)
@@ -676,12 +720,12 @@
         }
       }
 
-      // DnD 重複チェック用リソースキーフィールド値を格納（案 A: REQ_dnd-overlap-block §7.3）
+      // DnD 重複チェック用リソースキーフィールド値を格納（案 A: REQ_dnd-overlap-block §7.3, モード A）
       // USER_SELECT 型: value[].code 配列, その他: 文字列値
       var rawOverlapKeyValue = null;
       var overlapKeyCodeRec = KC.Config.OVERLAP_KEY_FIELD_CODE;
       var overlapKeyTypeRec = KC.Config.OVERLAP_KEY_FIELD_TYPE;
-      if (overlapKeyCodeRec && rec[overlapKeyCodeRec]) {
+      if (KC.Config.OVERLAP_MODE === 'fieldKey' && overlapKeyCodeRec && rec[overlapKeyCodeRec]) {
         if (overlapKeyTypeRec === 'USER_SELECT') {
           // USER_SELECT: value は [{code, name, ...}, ...] 形式
           var usCodes = Array.isArray(rec[overlapKeyCodeRec].value)
@@ -692,6 +736,14 @@
           // 文字列値フィールド（SINGLE_LINE_TEXT / DROP_DOWN / RADIO_BUTTON / NUMBER / LOOKUP 等）
           rawOverlapKeyValue = rec[overlapKeyCodeRec].value != null ? String(rec[overlapKeyCodeRec].value) : '';
         }
+      }
+
+      // DnD 重複チェック用紐付けキー値（モード B: 関連レコード方式 §9B）
+      // 予約アプリ側の紐付けキーフィールド（例: 申請番号）の値を文字列として保持する
+      var rawRefTableJoinValue = null;
+      var refJoinFieldRec = KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD;
+      if (KC.Config.OVERLAP_MODE === 'refTable' && refJoinFieldRec && rec[refJoinFieldRec]) {
+        rawRefTableJoinValue = rec[refJoinFieldRec].value != null ? String(rec[refJoinFieldRec].value) : '';
       }
 
       var ev = {
@@ -705,9 +757,10 @@
         userMail:         self._safeVal(rec, F.userMail),
         account:          F.account && rec[F.account] ? ((rec[F.account].value || [])[0]?.code || '') : '',
         memo:             self._safeVal(rec, F.memo),
-        permissionFields: permissionFields, /* 権限ユーザー判定用フィールド値（REQ §6.2） */
-        valueFields:      valueFields,       /* フィールド値権限判定用フィールド値（REQ v6 §6.2） */
-        rawOverlapKeyValue: rawOverlapKeyValue, /* DnD 重複チェック用リソースキー値（REQ_dnd-overlap-block §7.3 案 A） */
+        permissionFields:    permissionFields,    /* 権限ユーザー判定用フィールド値（REQ §6.2） */
+        valueFields:         valueFields,         /* フィールド値権限判定用フィールド値（REQ v6 §6.2） */
+        rawOverlapKeyValue:  rawOverlapKeyValue,  /* DnD 重複チェック用リソースキー値（モード A: §7.3 案 A） */
+        rawRefTableJoinValue: rawRefTableJoinValue, /* DnD 重複チェック用紐付けキー値（モード B: §9B） */
         record:           rec               /* 元 kintone レコード（Phase 2 追加フィールド検索用） */
       };
 
@@ -824,11 +877,16 @@
             }
           }
 
-          // DnD 重複チェック用リソースキーフィールドを取得対象に追加（案 A: REQ_dnd-overlap-block §7.3）
-          // OVERLAP_KEY_FIELD_CODE が設定されている場合のみ追加する（未設定時はチェック無効で不要）
+          // DnD 重複チェック用フィールドを取得対象に追加（REQ_dnd-overlap-block §7.3）
+          // モード A: リソースキーフィールド（案 A: loadEvents 時に KcEvent に保持）
           var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
-          if (overlapKeyCode && fieldList.indexOf(overlapKeyCode) === -1) {
+          if (KC.Config.OVERLAP_MODE === 'fieldKey' && overlapKeyCode && fieldList.indexOf(overlapKeyCode) === -1) {
             fieldList.push(overlapKeyCode);
+          }
+          // モード B: 紐付けキーフィールド（予約アプリ側の申請番号等）を KcEvent に保持
+          var refJoinField = KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD;
+          if (KC.Config.OVERLAP_MODE === 'refTable' && refJoinField && fieldList.indexOf(refJoinField) === -1) {
+            fieldList.push(refJoinField);
           }
 
           var recordsUrl = kintone.api.url('/k/v1/records.json', true);
@@ -1013,6 +1071,172 @@
 
       var resp = await kintone.api(url, 'GET', params);
       return resp.records || [];
+    },
+
+    /**
+     * モード B（関連レコード方式）の重複チェックを実行する（FR-9 / §7.5）
+     *
+     * ステップ 1: 期間重複候補を取得（リソースキー条件なし、limit 100）
+     * ステップ 2: 自レコード + 候補の紐付けキー値を収集
+     * ステップ 3: 関連先アプリに in クエリで一括照会 → 申請番号→リソース集合マップ構築
+     * ステップ 4: リソース集合の交差判定
+     *
+     * 設計判断（§10 Q-7）: SearchFilter の _relatedRecordsCache は使用しない。
+     * 重複チェックは予約の正確性に直結するため常に最新値を都度取得する（キャッシュ不使用）。
+     *
+     * @param {Object} ev      - DnD 対象の KcEvent（rawRefTableJoinValue を保持）
+     * @param {string} newStart - 移動後の開始日時 (ISO 8601)
+     * @param {string} newEnd   - 移動後の終了日時 (ISO 8601)
+     * @returns {Promise<{ hasOverlap: boolean, firstRecord: Object|null, isPermissionError: boolean }>}
+     */
+    checkOverlapQueryModeB: async function (ev, newStart, newEnd) {
+      var F = KC.Config.FIELD;
+      // joinField:        予約アプリ側フィールドコード（Step1 fields 取得・Step2 値収集用）
+      // relatedJoinField: 関連先アプリ側フィールドコード（Step3 in クエリ・Step4 取り出し用）
+      var joinField        = KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD;
+      var relatedJoinField = KC.Config.OVERLAP_REF_TABLE_RELATED_JOIN_FIELD;
+      var relatedAppId     = KC.Config.OVERLAP_REF_TABLE_RELATED_APP;
+      var resourceField    = KC.Config.OVERLAP_RESOURCE_FIELD_CODE;
+
+      // 設定不備は安全側（ブロック）にフォールバックする
+      if (!joinField || !relatedJoinField || !relatedAppId || !resourceField) {
+        console.warn('[KC.Api.checkOverlapQueryModeB] モード B の設定が不完全です。ブロック扱いとします。',
+          { joinField: joinField, relatedJoinField: relatedJoinField,
+            relatedAppId: relatedAppId, resourceField: resourceField });
+        return { hasOverlap: true, firstRecord: null, isPermissionError: false };
+      }
+
+      // DATE 型のクエリ形式変換（loadEvents / checkOverlapQuery と同パターン）
+      var qNewStart = newStart;
+      var qNewEnd   = newEnd;
+      if (KC.Config.START_FIELD_TYPE === 'DATE') {
+        qNewStart = newStart.substring(0, 10);
+        qNewEnd   = newEnd.substring(0, 10);
+      }
+
+      // ── ステップ 1: 期間重複候補の取得（リソースキー条件なし, limit 100 / §7.5 / Q-8） ──
+      var step1Conditions = [];
+      if (KC.Config.START_FIELD_TYPE === 'DATE') {
+        step1Conditions.push('(' + F.start + ' < "' + qNewEnd + '")');
+        step1Conditions.push('(' + F.end   + ' >= "' + qNewStart + '")');
+      } else {
+        step1Conditions.push('(' + F.start + ' < "' + qNewEnd + '")');
+        step1Conditions.push('(' + F.end   + ' > "' + qNewStart + '")');
+      }
+      step1Conditions.push('($id != "' + String(ev.id) + '")');
+
+      var userCondition = null;
+      try { userCondition = kintone.app.getQueryCondition(); } catch (e) {}
+      if (userCondition) { step1Conditions.push('(' + userCondition + ')'); }
+
+      var step1Query = step1Conditions.join(' and ') + ' order by $id asc limit 100';
+      var recordsUrl = kintone.api.url('/k/v1/records.json', true);
+      var step1Resp = await kintone.api(recordsUrl, 'GET', {
+        app:    KC.Config.getAppId(),
+        query:  step1Query,
+        // joinField（予約側）を取得して Step2 の joinVal 収集に使う
+        fields: ['$id', F.title, joinField].filter(Boolean)
+      });
+      var candidateRecords = step1Resp.records || [];
+
+      // 候補 0 件 → 重複なし（AC-11）
+      if (candidateRecords.length === 0) {
+        return { hasOverlap: false, firstRecord: null, isPermissionError: false };
+      }
+
+      // ── ステップ 2: 紐付けキー値の収集（予約アプリ側 joinField を使う） ──
+      // 自レコードの joinVal（KcEvent.rawRefTableJoinValue = loadEvents 時に予約側 joinField から取得済み）
+      // joinVal が空 = 申請番号未設定 = リソース未確定 → Q-10 と同等で許可（FR-4 ブロックは API エラー時のみ）
+      var selfJoinVal = (ev.rawRefTableJoinValue != null) ? String(ev.rawRefTableJoinValue) : '';
+      if (!selfJoinVal) {
+        // 自レコードの申請番号が空 → リソース未確定のため許可
+        return { hasOverlap: false, firstRecord: null, isPermissionError: false };
+      }
+
+      // 候補レコードの joinVal を収集（空の候補はリソース無し扱い → 交差なし → スキップ）
+      var joinValSet = {};
+      joinValSet[selfJoinVal] = true;
+      candidateRecords.forEach(function (r) {
+        var jv = r[joinField] && r[joinField].value != null ? String(r[joinField].value) : '';
+        // 空 joinVal の候補はリソース無し扱い。joinValSet に加えない → Step3 で取得されず交差なし
+        if (jv) { joinValSet[jv] = true; }
+      });
+      var allJoinVals = Object.keys(joinValSet);
+
+      // ── ステップ 3: 関連先アプリへの一括照会（関連先側 relatedJoinField in (...)） ──
+      // Q-9 採用値: in の値数上限 100（候補 limit 100 + 自レコード分で最大 101 だが先頭 100 で判定）
+      // クエリ長: 申請番号が数十文字以内なら ≈ 5000 文字 ≈ URL 安全範囲内
+      var inList = allJoinVals
+        .slice(0, 100)
+        .map(function (v) { return '"' + v.replace(/"/g, '\\"') + '"'; })
+        .join(',');
+      // Step3 クエリは関連先アプリ側フィールド（relatedJoinField）を使う
+      var step3Query = '(' + relatedJoinField + ' in (' + inList + '))';
+
+      var step3Resp;
+      var isPermissionError = false;
+      try {
+        step3Resp = await kintone.api(kintone.api.url('/k/v1/records.json', true), 'GET', {
+          app:    relatedAppId,
+          query:  step3Query,
+          // relatedJoinField（関連先側）と resourceField を取得する
+          fields: [relatedJoinField, resourceField]
+        });
+      } catch (step3Err) {
+        console.warn('[KC.Api.checkOverlapQueryModeB] 関連先アプリへの GET 失敗:', step3Err);
+        // 権限エラー判定（403 相当: code CB_AU01 or status 403）
+        isPermissionError = !!(step3Err && (step3Err.code === 'CB_AU01' || step3Err.status === 403));
+        return { hasOverlap: true, firstRecord: null, isPermissionError: isPermissionError };
+      }
+      var relatedRecords = step3Resp.records || [];
+
+      // ── ステップ 4: リソース集合の交差判定 ──
+      // relatedJoinField 値 → リソース識別フィールド値の集合（Set 相当）を構築する
+      // resourceMap のキーは関連先アプリ側の relatedJoinField 値（= 予約側 joinVal と照合可能）
+      var resourceMap = {};  // { relatedJoinVal → { resourceVal → true } }
+      relatedRecords.forEach(function (r) {
+        // relatedJoinField（関連先側）で取り出す
+        var jv = r[relatedJoinField] && r[relatedJoinField].value != null
+          ? String(r[relatedJoinField].value) : '';
+        var rv = r[resourceField] && r[resourceField].value != null
+          ? String(r[resourceField].value) : '';
+        if (!jv || !rv) { return; }
+        if (!resourceMap[jv]) { resourceMap[jv] = {}; }
+        resourceMap[jv][rv] = true;
+      });
+
+      // 自レコードのリソース集合（selfJoinVal は relatedJoinField 値と対応）
+      var selfResources = resourceMap[selfJoinVal] || {};
+
+      // Q-10: 自リソース集合が空（機器未紐付け）→ 許可
+      if (Object.keys(selfResources).length === 0) {
+        return { hasOverlap: false, firstRecord: null, isPermissionError: false };
+      }
+
+      // 各候補レコードのリソース集合と交差チェック
+      for (var ci = 0; ci < candidateRecords.length; ci++) {
+        var cRec = candidateRecords[ci];
+        // cJoinVal は予約アプリ側 joinField から取得（joinVal = relatedJoinField 値に対応）
+        var cJoinVal = cRec[joinField] && cRec[joinField].value != null ? String(cRec[joinField].value) : '';
+        // joinVal が空の候補はリソース無し扱い → 交差なし（Step2 で joinValSet に追加されていないため resourceMap にも存在しない）
+        var cResources = cJoinVal ? (resourceMap[cJoinVal] || {}) : {};
+
+        // 交差判定: 候補のリソース集合の各要素が自リソース集合に含まれるか
+        var hasIntersection = false;
+        var cResKeys = Object.keys(cResources);
+        for (var ri2 = 0; ri2 < cResKeys.length; ri2++) {
+          if (selfResources[cResKeys[ri2]]) {
+            hasIntersection = true;
+            break;
+          }
+        }
+        if (hasIntersection) {
+          return { hasOverlap: true, firstRecord: cRec, isPermissionError: false };
+        }
+      }
+
+      // すべての候補と交差なし → 重複なし
+      return { hasOverlap: false, firstRecord: null, isPermissionError: false };
     },
 
     /** 更新（差分フィールドのみ） */
@@ -1792,9 +2016,11 @@
      *
      * フロー (REQ_dnd-overlap-block §6.1 / FR-7):
      *   1. State をインプレース更新 + renderGrid()（即時 UI 反映: 楽観先行フェーズ）
-     *   2. OVERLAP_KEY_FIELD_CODE が設定されていれば重複チェッククエリを await で実行
-     *   3. 0 件 → updateEvent 送信（送信フェーズ）
-     *   4. 1 件以上 or エラー → State を元に戻して renderGrid() + バナー表示（ブロックフェーズ）
+     *   2. OVERLAP_MODE が 'fieldKey'/'refTable' で有効設定あれば重複チェックを await で実行
+     *      モード A: checkOverlapQuery（GET 1 回, limit 1）
+     *      モード B: checkOverlapQueryModeB（GET 最大 2 回: 候補 limit 100 + 関連先 in クエリ）
+     *   3. 重複なし → updateEvent 送信（送信フェーズ）
+     *   4. 重複あり or エラー → State を元に戻して renderGrid() + バナー表示（ブロックフェーズ）
      *
      * スコープ: DnD のみ。フォーム保存（iframe モーダル・直接編集）は Customine で保護。
      * TOCTOU 競合（チェック後〜PUT の間に他ユーザーが保存）は Customine が最終防衛線（§10.1）。
@@ -1827,44 +2053,76 @@
       KC.Render.renderGrid();
 
       // ── チェックフェーズ ─────────────────────────────────────────────────────
-      var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
-      if (overlapKeyCode) {
+      var overlapMode = KC.Config.OVERLAP_MODE;
+      var isCheckEnabled = (overlapMode === 'fieldKey' && KC.Config.OVERLAP_KEY_FIELD_CODE) ||
+                           (overlapMode === 'refTable' && KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD);
+      if (isCheckEnabled) {
         // バナーを閉じてから重複チェック（前回のエラーバナーを消す）
         KC.Banner.hide();
 
-        var overlapRecords;
-        var checkFailed = false;
-        try {
-          overlapRecords = await KC.Api.checkOverlapQuery(origEv, newStart, newEnd);
-        } catch (checkErr) {
-          console.error('[KC.DnD] 重複チェッククエリ失敗:', checkErr);
-          checkFailed = true;
-          overlapRecords = [];
-        }
+        var hasOverlap = false;
+        var bannerMsg = '';
 
-        var hasOverlap = checkFailed || (overlapRecords.length > 0);
+        if (overlapMode === 'fieldKey') {
+          // ── モード A: 通常フィールド方式 ────────────────────────────────────
+          var overlapRecordsA;
+          var checkFailedA = false;
+          try {
+            overlapRecordsA = await KC.Api.checkOverlapQuery(origEv, newStart, newEnd);
+          } catch (checkErrA) {
+            console.error('[KC.DnD] 重複チェッククエリ（モード A）失敗:', checkErrA);
+            checkFailedA = true;
+            overlapRecordsA = [];
+          }
+
+          hasOverlap = checkFailedA || (overlapRecordsA.length > 0);
+          if (hasOverlap) {
+            if (checkFailedA) {
+              bannerMsg = '重複チェック中にエラーが発生しました。再度操作してください。';
+            } else {
+              var firstTitleA = KC.Config.FIELD.title && overlapRecordsA[0][KC.Config.FIELD.title]
+                ? overlapRecordsA[0][KC.Config.FIELD.title].value
+                : '(無題)';
+              bannerMsg = '「' + firstTitleA + '」と期間が重複しています。';
+            }
+          }
+        } else {
+          // ── モード B: 関連レコード方式 ────────────────────────────────────
+          var resultB;
+          var checkFailedB = false;
+          try {
+            resultB = await KC.Api.checkOverlapQueryModeB(origEv, newStart, newEnd);
+          } catch (checkErrB) {
+            console.error('[KC.DnD] 重複チェッククエリ（モード B）失敗:', checkErrB);
+            checkFailedB = true;
+            resultB = { hasOverlap: true, firstRecord: null, isPermissionError: false };
+          }
+
+          hasOverlap = checkFailedB || resultB.hasOverlap;
+          if (hasOverlap) {
+            if (checkFailedB) {
+              bannerMsg = '重複チェック中にエラーが発生しました。再度操作してください。';
+            } else if (resultB.isPermissionError) {
+              bannerMsg = '重複チェック中にエラーが発生しました。関連先アプリの閲覧権限を確認してください。';
+            } else if (resultB.firstRecord) {
+              var firstTitleB = KC.Config.FIELD.title && resultB.firstRecord[KC.Config.FIELD.title]
+                ? resultB.firstRecord[KC.Config.FIELD.title].value
+                : '(無題)';
+              bannerMsg = '「' + firstTitleB + '」と期間が重複しています。';
+            } else {
+              bannerMsg = '重複チェック中にエラーが発生しました。再度操作してください。';
+            }
+          }
+        }
 
         if (hasOverlap) {
           // ── ブロックフェーズ ────────────────────────────────────────────────
           // savedStart / savedEnd（楽観更新前に退避した元値）で State を巻き戻す
-          // origEv.start / origEv.end は楽観先行フェーズで既に newStart/newEnd に書き換わっているため
-          // origEv から再取得すると巻き戻し不能になる点に注意
           if (currentEv) {
             currentEv.start = savedStart;
             currentEv.end   = savedEnd;
           }
           KC.Render.renderGrid();
-
-          // バナー表示（FR-3 / FR-4 / §7.2）
-          var bannerMsg;
-          if (checkFailed) {
-            bannerMsg = '重複チェック中にエラーが発生しました。再度操作してください。';
-          } else {
-            var firstTitle = KC.Config.FIELD.title && overlapRecords[0][KC.Config.FIELD.title]
-              ? overlapRecords[0][KC.Config.FIELD.title].value
-              : '(無題)';
-            bannerMsg = '「' + firstTitle + '」と期間が重複しています。';
-          }
           KC.Banner.show(bannerMsg);
           return; // updateEvent は送信しない
         }
