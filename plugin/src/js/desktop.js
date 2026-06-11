@@ -1065,6 +1065,21 @@
       return { ok: true };
     },
 
+    /**
+     * 単一レコードの存在確認用 GET
+     * Phase 2 URL 復元時に record=<id> のレコードが存在するかを検証する（Q-5 対応）
+     * 成功時は kintone API レスポンスオブジェクト、失敗時は例外を throw する
+     * @param {string|number} recordId
+     * @returns {Promise<Object>}
+     */
+    getRecord: async function (recordId) {
+      var url = kintone.api.url('/k/v1/record.json', true);
+      return kintone.api(url, 'GET', {
+        app: KC.Config.getAppId(),
+        id: recordId
+      });
+    },
+
     /** ログインユーザー情報 */
     getLoginUser: function () {
       return kintone.getLoginUser();
@@ -1516,6 +1531,13 @@
     _close: function () {
       if (!this._backdrop) return;
 
+      // FR-4/FR-5: モーダルクローズ時に record/new パラメータを URL から除去する（replaceState）
+      // ×ボタン / backdrop / ESC / 保存後自動クローズ / 許可外URL遷移 すべての経路でここを通る
+      if (KC.UrlState) {
+        KC.UrlState.remove('record');
+        KC.UrlState.remove('new');
+      }
+
       // ポーリング監視を停止（先に停止してから iframe 削除）。
       // clearInterval を先に行うことで、削除後にポーリングが走り続けるリークを防ぐ。
       clearInterval(KC.Popup._urlWatcher);
@@ -1574,6 +1596,18 @@
       sessionStorage.setItem('KC_ALLDAY_LABEL', KC.Config.ALLDAY_LABEL || '終日');
       // メールアドレス初期値設定フラグを iframe へ渡す
       sessionStorage.setItem('KC_MAIL_LOGIN_USER_DEFAULT', KC.Config.MAIL_LOGIN_USER_DEFAULT ? '1' : '0');
+      // FR-5: 新規作成モーダルオープンを URL ハッシュに記録（pushState）
+      // new=YYYY-MM-DD または new=YYYY-MM-DDTHH:mm 形式で記録する（AC-6 相当）
+      if (KC.UrlState) {
+        var newParam = options.date || '';
+        if (!options.allday && options.date && options.hour !== undefined && options.minute !== undefined) {
+          newParam = options.date + 'T' + KC.Utils.pad2(options.hour) + ':' + KC.Utils.pad2(options.minute);
+        }
+        // URL に既に同値が載っている場合はスキップ（リロード復元・popstate 進む の二重化防止）
+        if (newParam && KC.UrlState.get('new') !== newParam) {
+          KC.UrlState.push('new', newParam);
+        }
+      }
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/edit';
       this._show(url);
@@ -1589,6 +1623,11 @@
         console.error('[KC.Popup.openEdit] recordId が取得できていません:', recordId);
         alert('レコードIDの取得に失敗しました。コンソールを確認してください。');
         return;
+      }
+      // FR-4: 編集モーダルオープンを URL ハッシュに記録（pushState）
+      // URL に既に同値が載っている場合はスキップ（リロード復元・popstate 進む の二重化防止）
+      if (KC.UrlState && KC.UrlState.get('record') !== String(recordId)) {
+        KC.UrlState.push('record', String(recordId));
       }
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/show#record=' + recordId;
@@ -6437,6 +6476,12 @@
       _popupEl    = popup;
       _anchorYMD  = dateYMD;
 
+      // FR-6: +N more ポップオーバーオープンを URL ハッシュに記録（pushState）
+      // URL に既に同値が載っている場合はスキップ（リロード復元・popstate 進む の二重化防止）
+      if (KC.UrlState && KC.UrlState.get('more') !== dateYMD) {
+        KC.UrlState.push('more', dateYMD);
+      }
+
       // DOM に追加してから位置計算（offsetWidth/Height が確定するため）
       _applyPosition(anchorEl);
       _bindEvents(anchorEl);
@@ -6454,6 +6499,10 @@
       _popupEl   = null;
       _anchorYMD = null;
 
+      // FR-6: +N more クローズ時に more パラメータを URL から除去する（replaceState）
+      // ESC / 外側クリック / リサイズ / 同日トグル すべての経路で close() を経由するため網羅済み
+      if (KC.UrlState) KC.UrlState.remove('more');
+
       if (_listenerDoc) {
         if (_onKeydown)  { _listenerDoc.removeEventListener('keydown', _onKeydown); }
         if (_onDocClick) { _listenerDoc.removeEventListener('click', _onDocClick); }
@@ -6469,10 +6518,30 @@
       if (_resizeTimer) { clearTimeout(_resizeTimer); _resizeTimer = null; }
     }
 
+    /**
+     * .kc-month-more 要素に紐付く非表示予定配列を返す（URL 復元時の more 復元に使用）
+     * WeakMap に登録されていない場合は空配列を返す
+     * @param {HTMLElement} moreEl
+     * @returns {Array}
+     */
+    function getHiddenEvents(moreEl) {
+      return _hiddenEventsMap.get(moreEl) || [];
+    }
+
+    /**
+     * ポップオーバーが現在開いているかを返す
+     * @returns {boolean}
+     */
+    function isOpen() {
+      return !!_popupEl;
+    }
+
     return {
       open:                open,
       close:               close,
-      registerHiddenEvents: registerHiddenEvents
+      isOpen:              isOpen,
+      registerHiddenEvents: registerHiddenEvents,
+      getHiddenEvents:     getHiddenEvents
     };
   }());
 
@@ -7459,10 +7528,13 @@
     }
 
     /**
-     * 現在のハッシュから指定キーを削除して replaceState する
+     * 現在のハッシュから指定キーを削除して replaceState する（冪等: キー不在なら何もしない）
      * @param {string} key
      */
     function remove(key) {
+      // キーが存在しない場合は replaceState を発行しない（不要な二連 replaceState を防ぐ）
+      var params = parse(window.location.hash);
+      if (!Object.prototype.hasOwnProperty.call(params, key)) return;
       update(key, '');
     }
 
@@ -7706,6 +7778,88 @@
 
       // --- スクロールリスナーを登録（週・日ビューのみ有効、月ビューはガード内でスキップ） ---
       _attachScrollListener();
+
+      // --- 6. モーダル・ポップオーバーの復元（Phase 2） ---
+      // record / new / more は非同期処理が絡むため即時 async IIFE で実行する。
+      // push スキップは各関数内の URL 現在値比較（get() === value）で自然に行われる。
+      (async function () {
+        var urlRecord = params.record;
+        var urlNew    = params['new'];
+        var urlMore   = params.more;
+
+        // 6-1. record: レコード編集モーダルの復元（存在確認 API 付き）
+        if (urlRecord) {
+          var recordId = String(urlRecord).trim();
+          // 数値文字列のバリデーション（不正値は無視）
+          if (/^\d+$/.test(recordId)) {
+            try {
+              await KC.Api.getRecord(recordId);
+              // レコード存在確認成功 → モーダルを開く（URL に既に同値があるため openEdit 内の push はスキップされる）
+              KC.Popup.openEdit(recordId);
+            } catch (err) {
+              // レコード不存在またはアクセス権限なし → エラーバナー表示、record パラメータ除去（FR-12 AC-8）
+              console.warn('[KC.UrlState.restore] record=', recordId, 'の存在確認失敗:', err);
+              KC.Banner.show('指定されたレコードが見つかりません', { hideReload: true });
+              remove('record');
+            }
+          } else {
+            // 不正値（数値以外）→ 無視して record パラメータ除去
+            remove('record');
+          }
+          // record 復元が有効なため new/more の復元はスキップ（排他制御）
+          return;
+        }
+
+        // 6-2. new: 新規作成モーダルの復元
+        if (urlNew) {
+          // YYYY-MM-DD または YYYY-MM-DDTHH:mm のバリデーション
+          var newDateMatch = urlNew.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2}))?$/);
+          if (newDateMatch) {
+            var options = { date: newDateMatch[1], allday: !newDateMatch[2] };
+            if (newDateMatch[2]) {
+              options.hour   = parseInt(newDateMatch[2], 10);
+              options.minute = parseInt(newDateMatch[3], 10);
+            }
+            // URL に既に同値があるため openCreate 内の push はスキップされる
+            KC.Popup.openCreate(options);
+          } else {
+            // 不正値は無視
+            remove('new');
+          }
+          return;
+        }
+
+        // 6-3. more: +N more ポップオーバーの復元（月ビューのみ、描画完了後）
+        // _refreshImmediate() の Promise を await して loadEvents + renderGrid + placeMonthEvents
+        // の完了を待ち、確実に .kc-month-more が DOM に存在する状態で querySelector する。
+        if (urlMore) {
+          // YYYY-MM-DD バリデーション
+          if (/^\d{4}-\d{2}-\d{2}$/.test(urlMore)) {
+            if (KC.State.view !== 'month') {
+              // 月ビュー以外では無視してパラメータ除去
+              remove('more');
+            } else {
+              // 月ビューの全描画（loadEvents → renderGrid → placeMonthEvents）を待つ
+              await KC.Render._refreshImmediate();
+              // data-date="YYYY-MM-DD" セルに紐付く .kc-month-more 要素を探す
+              var moreEl = document.querySelector('[data-date="' + urlMore + '"] .kc-month-more');
+              if (!moreEl) {
+                // セルが存在しない（対象日がグリッド外 or 予定数が閾値未満）→ 無視
+                remove('more');
+              } else {
+                // .kc-month-more に紐付く非表示予定リストを取得（WeakMap から）
+                var hiddenEvents = KC.MonthOverflowPopup.getHiddenEvents
+                  ? KC.MonthOverflowPopup.getHiddenEvents(moreEl)
+                  : [];
+                // URL に既に同値があるため open 内の push はスキップされる
+                KC.MonthOverflowPopup.open(moreEl, urlMore, hiddenEvents);
+              }
+            }
+          } else {
+            remove('more');
+          }
+        }
+      }());
     }
 
     // 公開 API
@@ -8461,14 +8615,73 @@
       // 初期表示で全画面
       this._enterExpanded(root);
 
-      // FR-10（Phase 1 基本部分）: popstate リスナーを登録する
-      // replaceState 系パラメータ（view/date/filter）の変化を差分更新する
-      // pushState 系パラメータ（record/new/more）の消滅検知は Phase 2 で追加する
+      // FR-10（Phase 1 + Phase 2）: popstate リスナーを登録する
+      // replaceState 系（view/date/filter）: 差分更新
+      // pushState 系（record/new/more）: パラメータ消滅検知 → クローズ / 再オープン
       window.addEventListener('popstate', function () {
         if (KC.UrlState._isUpdatingHash()) return;  // 自己書き換え無視（FR-11）
         var params = KC.UrlState.parse(window.location.hash);
         // #kc: プレフィクスなし → 無視（AC-13）
-        if (!window.location.hash || window.location.hash.indexOf('#kc:') !== 0) return;
+        if (!window.location.hash || window.location.hash.indexOf('#kc:') !== 0) {
+          // ハッシュが完全に消えた場合もモーダル/ポップオーバーを閉じる
+          if (KC.Popup._iframe) KC.Popup._close();
+          if (KC.MonthOverflowPopup && KC.MonthOverflowPopup.close) KC.MonthOverflowPopup.close();
+          return;
+        }
+
+        // --- pushState 系パラメータの消滅検知（FR-4/FR-5/FR-6 popstate 連動） ---
+
+        // record / new が消えた かつ モーダルが開いている → 閉じる（ブラウザ「戻る」AC-7 対応）
+        // _close() 内で remove() を呼ぶと replaceState が発火するが、
+        // popstate ハンドラ内の _isUpdatingHash() ガードが機能しているため再帰しない
+        if (!params.record && !params['new'] && KC.Popup._iframe) {
+          KC.Popup._close();
+        }
+        // record が戻った（「進む」） → モーダルを再オープン（T-3 step 5/6）
+        // openEdit 内で get('record') === rId を比較するため push は自然にスキップされる
+        if (params.record && !KC.Popup._iframe) {
+          var rId = String(params.record).trim();
+          if (/^\d+$/.test(rId)) {
+            KC.Api.getRecord(rId).then(function () {
+              KC.Popup.openEdit(rId);
+            }).catch(function () {
+              KC.Banner.show('指定されたレコードが見つかりません', { hideReload: true });
+              KC.UrlState.remove('record');
+            });
+          }
+        }
+        // new が戻った（「進む」） → 新規作成モーダルを再オープン
+        // openCreate 内で get('new') === newParam を比較するため push は自然にスキップされる
+        if (params['new'] && !KC.Popup._iframe) {
+          var newStr = params['new'];
+          var m = newStr.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2}))?$/);
+          if (m) {
+            var opts = { date: m[1], allday: !m[2] };
+            if (m[2]) { opts.hour = parseInt(m[2], 10); opts.minute = parseInt(m[3], 10); }
+            KC.Popup.openCreate(opts);
+          }
+        }
+
+        // more が消えた かつ ポップオーバーが開いている → 閉じる（AC-12）
+        // isOpen() で開閉状態を確認してから close() を呼ぶ（§7.4 擬似コードと一致）
+        if (!params.more && KC.MonthOverflowPopup && KC.MonthOverflowPopup.isOpen && KC.MonthOverflowPopup.isOpen()) {
+          KC.MonthOverflowPopup.close();
+        }
+        // more が戻った（「進む」） → ポップオーバーを再オープン
+        // open 内で get('more') === ymd を比較するため push は自然にスキップされる
+        if (params.more && KC.State.view === 'month') {
+          var ymd = params.more;
+          if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+            requestAnimationFrame(function () {
+              var moreEl = document.querySelector('[data-date="' + ymd + '"] .kc-month-more');
+              if (moreEl && KC.MonthOverflowPopup) {
+                KC.MonthOverflowPopup.open(moreEl, ymd, KC.MonthOverflowPopup.getHiddenEvents(moreEl));
+              }
+            });
+          }
+        }
+
+        // --- replaceState 系パラメータの差分更新 ---
 
         var curView = KC.State.view;
         var validViews = { month: true, week: true, day: true };
@@ -8479,7 +8692,7 @@
           KC.State.view = params.view;
           changed = true;
         }
-        // date の差分更新（[Medium] KC.UrlState.parseDate を共用して DRY 化）
+        // date の差分更新（KC.UrlState.parseDate を共用して DRY 化）
         if (params.date) {
           var parsedDt = KC.UrlState.parseDate(params.date);
           if (parsedDt) {
