@@ -3596,7 +3596,9 @@
      * .kc-grid-wrap と並行して .kc-root 直下に配置する
      */
     function _ensureMonthDOM() {
-      if (_monthRoot && _monthRoot.parentNode) return;
+      // _monthRoot が存在しても、ライブ DOM から切り離されている場合は再生成する。
+      // parentNode が非 null でも #kc-root が再生成された場合に detached になりうる。
+      if (_monthRoot && document.contains(_monthRoot)) return;
 
       var root = document.getElementById('kc-root');
       if (!root) return;
@@ -3802,7 +3804,8 @@
      * @returns {number} 最低 1、最大 10
      */
     function _calcMaxItems() {
-      var firstCell = document.querySelector('.kc-month-cell');
+      // _monthRoot スコープで検索（document-wide 検索は切り離されたツリーの要素を拾うリスクあり）
+      var firstCell = _monthRoot ? _monthRoot.querySelector('.kc-month-cell') : null;
       if (!firstCell) return MAX_CELL_ITEMS;
       var cellH = firstCell.getBoundingClientRect().height;
       if (!cellH || cellH <= 0) return MAX_CELL_ITEMS;
@@ -4161,12 +4164,22 @@
      * 週行ごとに終日バーを配置 → セルごとに時間予定 chip を配置
      */
     function placeMonthEvents() {
+      // ポップオーバーを先に閉じる（_monthRoot ガード前に実行して確実に閉じる）
+      if (KC.MonthOverflowPopup) KC.MonthOverflowPopup.close();
+
       if (!_monthRoot) return;
+      // _monthRoot がライブ DOM から切り離されていないか確認（デバッグ用）
+      if (!document.contains(_monthRoot)) {
+        console.warn('[KC.RenderMonth] placeMonthEvents: _monthRoot is detached from live DOM. Attempting re-init.');
+        _monthRoot = null;
+        _ensureMonthDOM();
+        if (!_monthRoot) return;
+        // グリッドを再構築してから続行する
+        KC.Render.setActiveView('month');
+        renderGrid();
+      }
       var gridEl = _monthRoot.querySelector('.kc-month-grid');
       if (!gridEl) return;
-
-      // 月ビュー再描画前にポップオーバーを閉じる（ポップオーバーが開いていない場合は冪等）
-      if (KC.MonthOverflowPopup) KC.MonthOverflowPopup.close();
 
       // 冪等化: 重複呼び出し時に chip が二重描画されないよう、既存要素を事前クリアする。
       // DnD ゴースト（.kc-event--ghost）は DnD 操作中も視覚的に残す必要があるため除外する。
@@ -4196,6 +4209,17 @@
 
       // フィルタ適用（all: 全件, mine: 自分のみ, others: 他人のみ）
       var filteredMonthEvents = KC.EventFilter.apply(S.events || []);
+
+      // デバッグ: イベント件数が 0 のとき、または maxItems が極小のときに原因調査用ログを出力
+      if (filteredMonthEvents.length === 0 && (S.events || []).length > 0) {
+        console.warn('[KC.RenderMonth] placeMonthEvents: フィルタ後のイベント数が 0 です。eventFilter=' + (KC.State.eventFilter || 'all'));
+      }
+      if (maxItems === 0) {
+        console.warn('[KC.RenderMonth] placeMonthEvents: maxItems=0 (セル高不足)。chipは非表示になり +N more のみ表示されます。');
+      }
+      if ((S.events || []).length === 0) {
+        console.log('[KC.RenderMonth] placeMonthEvents: S.events が空です (件数=0)。イベント配置をスキップします。');
+      }
 
       var weekEls = Array.from(gridEl.querySelectorAll('.kc-month-week'));
       weekEls.forEach(function (weekEl, weekIdx) {
@@ -6275,6 +6299,10 @@
         clearTimeout(_resizeTimer);
         _resizeTimer = setTimeout(function () {
           if (KC.State.view === 'month' && KC.RenderMonth) {
+            // ポップオーバーを先に閉じる（グリッドクリア前に確実に閉じるため）
+            if (KC.MonthOverflowPopup) KC.MonthOverflowPopup.close();
+            // 月ルートが非表示の場合に表示状態を回復してから再描画（_calcMaxItems の height=0 回避）
+            KC.RenderMonth._showMonthDOM();
             // データ再取得なし・レイアウト再計算のみ
             KC.RenderMonth.renderGrid();
             // セル高が確定してから placeMonthEvents を呼ぶ（refresh と同様）
