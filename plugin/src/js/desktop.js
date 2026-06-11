@@ -6603,6 +6603,28 @@
     _warnedFields: new Set(),
 
     /**
+     * kintone.api のエラーオブジェクトを診断可能な文字列に変換する。
+     * kintone REST API エラーは err.message が空で err.code / err.id / err.errors に
+     * 情報が入るパターンが多いため、これらを明示的に出力する。
+     * @param {unknown} err - catch で受け取ったエラー値
+     * @returns {string}
+     */
+    _fmtErr: function (err) {
+      if (!err) return String(err);
+      var parts = [];
+      if (err.code)    parts.push('code=' + err.code);
+      if (err.id)      parts.push('id=' + err.id);
+      if (err.message) parts.push('message=' + err.message);
+      if (err.errors) {
+        try { parts.push('errors=' + JSON.stringify(err.errors)); } catch (e) {}
+      }
+      if (parts.length > 0) return parts.join(', ');
+      // code/id/message/errors のいずれもない場合は JSON 全体を出力する
+      try { return JSON.stringify(err); } catch (e) {}
+      return String(err);
+    },
+
+    /**
      * 検索クエリを設定し、再描画をトリガーする
      * @param {string} q - 新しいクエリ
      */
@@ -6777,7 +6799,7 @@
         this._refTableDefsLoaded = true;
         console.log('[KC SearchFilter] _refTableDefs 取得完了:', this._refTableDefs);
       } catch (err) {
-        console.error('[KC SearchFilter] フィールド定義取得失敗:', err);
+        console.error('[KC SearchFilter] フィールド定義取得失敗: ' + this._fmtErr(err));
         this._refTableDefsLoaded = true;
       }
     },
@@ -6860,10 +6882,10 @@
           await kintone.api(kintone.api.url('/k/v1/records/cursor', true), 'DELETE', { id: cursorId });
         } catch (delErr) {
           // DELETE 失敗はキャッシュ側に影響しないため警告のみ
-          console.warn('[KC.SearchFilter] カーソル DELETE 失敗（取得は成功）:', delErr.message);
+          console.warn('[KC.SearchFilter] カーソル DELETE 失敗（取得は成功）: ' + this._fmtErr(delErr));
         }
       } catch (err) {
-        console.warn('[KC SearchFilter] REFERENCE_TABLE "' + fieldCode + '" のキャッシュ取得失敗:', err);
+        console.warn('[KC SearchFilter] REFERENCE_TABLE "' + fieldCode + '" のキャッシュ取得失敗: ' + this._fmtErr(err));
         // 失敗した場合はキャッシュを空にして、そのフィールドを検索対象外とする
         this._relatedRecordsCache[fieldCode] = {};
         // カーソルが残存している場合は破棄を試みる
