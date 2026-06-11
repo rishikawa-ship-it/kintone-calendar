@@ -6018,6 +6018,25 @@
           self.buildTimeSlots();
           self.bindAllDayBoxes();
           self.scrollToDefaultTime();
+          // FR-8: デフォルトスクロール位置（6:30 付近）を URL ハッシュに同期する（replaceState）
+          // 初回描画時のデフォルト位置として記録する。ユーザースクロール後はイベントリスナーが上書きする
+          if (KC.UrlState) {
+            var bodyEl = document.getElementById('kc-body');
+            if (bodyEl) {
+              var timeColEl = document.getElementById('kc-time-col');
+              var hh = 60;
+              if (timeColEl) {
+                var ft = timeColEl.querySelector('.kc-time');
+                if (ft) { var rc = ft.getBoundingClientRect(); if (rc.height) hh = rc.height; }
+              }
+              var totalMin = Math.round((bodyEl.scrollTop / hh) * 60);
+              var hVal = Math.floor(totalMin / 60);
+              var mVal = totalMin % 60;
+              if (hVal > 23) hVal = 23;
+              var scrollStr = KC.Utils.pad2(hVal) + ':' + KC.Utils.pad2(mVal);
+              KC.UrlState.update('scroll', scrollStr);
+            }
+          }
         } catch (err) {
           console.error('[KC.TimeSlots] decorate error', err);
         }
@@ -6522,6 +6541,15 @@
       this.query = q;
       this._syncClearBtn(q);
       this.activeIndex = -1;
+      // FR-3: 検索クエリを URL ハッシュに同期する（replaceState）
+      // searchTargets が空（検索バー非表示）の場合は q パラメータを除去する
+      if (KC.UrlState) {
+        if (q && this._searchTargets && this._searchTargets.length > 0) {
+          KC.UrlState.update('q', q);
+        } else {
+          KC.UrlState.remove('q');
+        }
+      }
       KC.Render.renderGrid();
     },
 
@@ -7285,6 +7313,418 @@
   };
 
   /* ====================================================================
+   * KC.UrlState — URL ハッシュ状態同期（REQ_url-state-sync Phase 1）
+   *
+   * ハッシュフォーマット: #kc:<key>=<value>[&<key>=<value>...]
+   * replaceState 系パラメータ: view / date / filter / q / fs / scroll
+   * pushState 系パラメータ: record / new / more（Phase 2）
+   * "#kc:" プレフィクスなしのハッシュはすべて無視する（FR-12）
+   *
+   * fs セマンティクス（ユーザー決定）:
+   *   デフォルト（fs パラメータなし）= 全画面。URL に fs を書かない。
+   *   ユーザーが全画面解除 → fs=0 を記録。再全画面化 → fs を除去。
+   *   これにより init が無条件に _enterExpanded を呼んでも URL への書き込みが不要となり、
+   *   リロード時の復元と競合しない。
+   *
+   * 順序バグ対策（[High] 指摘対応）:
+   *   IIFE が評価された時点（= ページロード直後・KC.Boot.init より前）で
+   *   location.hash をパースして _initialParams にキャッシュする。
+   *   restore() はこのキャッシュから読むため、init 内の _enterExpanded 等が
+   *   URL を書き換えても復元値が汚染されない。
+   * ==================================================================== */
+  KC.UrlState = (function () {
+    /** カレンダー自身の replaceState/pushState 呼び出しによる hashchange を無視するフラグ */
+    var _isUpdatingHash = false;
+
+    /** スクロールイベントのデバウンスタイマー */
+    var _scrollTimer = null;
+
+    /** スクロールイベントリスナー参照（週・日ビュー専用。月ビュー切替時に登録/解除） */
+    var _scrollListener = null;
+
+    /** #kc: プレフィクス */
+    var PREFIX = '#kc:';
+
+    /**
+     * 起動時（IIFE 評価時点）のハッシュを即時キャッシュする。
+     * restore() はこのキャッシュを参照するため、init 内の URL 書き込みに汚染されない。
+     */
+    var _initialParams = (function () {
+      // parse をまだ定義していないため同等のロジックをインラインで実行する
+      var hash = window.location.hash;
+      if (!hash || hash.indexOf(PREFIX) !== 0) return {};
+      var body = hash.slice(PREFIX.length);
+      if (!body) return {};
+      var result = {};
+      body.split('&').forEach(function (pair) {
+        var idx = pair.indexOf('=');
+        if (idx === -1) return;
+        var k = pair.slice(0, idx);
+        var v = pair.slice(idx + 1);
+        if (!k) return;
+        try { result[k] = decodeURIComponent(v); } catch (e) { /* デコード失敗は無視 */ }
+      });
+      return result;
+    }());
+
+    /**
+     * ハッシュ文字列をパースしてキー値マップを返す
+     * "#kc:" プレフィクスを持たない場合は {} を返す（FR-12 AC-13）
+     * @param {string} hash - window.location.hash
+     * @returns {Object}
+     */
+    function parse(hash) {
+      if (!hash || hash.indexOf(PREFIX) !== 0) return {};
+      var body = hash.slice(PREFIX.length);
+      if (!body) return {};
+      var result = {};
+      body.split('&').forEach(function (pair) {
+        var idx = pair.indexOf('=');
+        if (idx === -1) return;
+        var k = pair.slice(0, idx);
+        var v = pair.slice(idx + 1);
+        if (!k) return;
+        try {
+          result[k] = decodeURIComponent(v);
+        } catch (e) {
+          // デコード失敗は無視
+        }
+      });
+      return result;
+    }
+
+    /**
+     * キー値マップをハッシュ文字列にシリアライズする
+     * @param {Object} params
+     * @returns {string}
+     */
+    function serialize(params) {
+      var pairs = [];
+      Object.keys(params).forEach(function (k) {
+        var v = params[k];
+        if (v === null || v === undefined || v === '') return;
+        pairs.push(k + '=' + encodeURIComponent(v));
+      });
+      if (pairs.length === 0) return '';
+      return PREFIX + pairs.join('&');
+    }
+
+    /**
+     * 現在のハッシュから指定キーの値を返す。存在しない場合は null
+     * @param {string} key
+     * @returns {string|null}
+     */
+    function get(key) {
+      var params = parse(window.location.hash);
+      return Object.prototype.hasOwnProperty.call(params, key) ? params[key] : null;
+    }
+
+    /**
+     * 現在のハッシュの指定キーを更新して replaceState する（FR-11 ガード付き）
+     * @param {string} key
+     * @param {string} value - 空文字の場合はキーを削除する
+     */
+    function update(key, value) {
+      var params = parse(window.location.hash);
+      if (value === null || value === undefined || value === '') {
+        delete params[key];
+      } else {
+        params[key] = value;
+      }
+      var newHash = serialize(params);
+      _isUpdatingHash = true;
+      try {
+        history.replaceState(null, '', newHash || location.pathname + location.search);
+      } finally {
+        _isUpdatingHash = false;
+      }
+    }
+
+    /**
+     * 現在のハッシュに指定キーを追加して pushState する（Phase 2 用: record/new/more）
+     * Phase 1 では使用しない
+     * @param {string} key
+     * @param {string} value
+     */
+    function push(key, value) {
+      var params = parse(window.location.hash);
+      params[key] = value;
+      var newHash = serialize(params);
+      _isUpdatingHash = true;
+      try {
+        history.pushState(null, '', newHash || location.pathname + location.search);
+      } finally {
+        _isUpdatingHash = false;
+      }
+    }
+
+    /**
+     * 現在のハッシュから指定キーを削除して replaceState する
+     * @param {string} key
+     */
+    function remove(key) {
+      update(key, '');
+    }
+
+    /**
+     * Date オブジェクト → ビューに応じた date 文字列を返す
+     * 月ビュー: YYYY-MM、週・日ビュー: YYYY-MM-DD
+     * @param {Date} d
+     * @param {string} view
+     * @returns {string}
+     */
+    function _dateToParam(d, view) {
+      if (!d) return '';
+      var y = d.getFullYear();
+      var m = KC.Utils.pad2(d.getMonth() + 1);
+      if (view === 'month') return y + '-' + m;
+      var day = KC.Utils.pad2(d.getDate());
+      return y + '-' + m + '-' + day;
+    }
+
+    /**
+     * date パラメータ文字列から Date を生成して返す（overflow 逆算チェック付き）
+     * 不正値の場合は null を返す（FR-12）
+     * popstate ハンドラと restore() の両方で共用する（DRY）
+     * @param {string} dateStr - "YYYY-MM" または "YYYY-MM-DD"
+     * @returns {Date|null}
+     */
+    function parseDate(dateStr) {
+      if (!dateStr) return null;
+      // YYYY-MM 形式（月ビュー）
+      if (/^\d{4}-\d{2}$/.test(dateStr)) {
+        var y = parseInt(dateStr.slice(0, 4), 10);
+        var mo = parseInt(dateStr.slice(5, 7), 10) - 1;
+        if (mo < 0 || mo > 11) return null;
+        return new Date(y, mo, 1);
+      }
+      // YYYY-MM-DD 形式（週・日ビュー）overflow 逆算チェック付き
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        var parts = dateStr.split('-');
+        var yy = parseInt(parts[0], 10);
+        var mm = parseInt(parts[1], 10) - 1;
+        var dd = parseInt(parts[2], 10);
+        if (mm < 0 || mm > 11 || dd < 1 || dd > 31) return null;
+        var dt = new Date(yy, mm, dd);
+        // overflow 逆算チェック: new Date(2026, 1, 30) → 3/2 になる等の異常値を排除
+        if (dt.getFullYear() !== yy || dt.getMonth() !== mm || dt.getDate() !== dd) return null;
+        return dt;
+      }
+      return null;
+    }
+
+    /**
+     * 現在の view + current を URL に書き込む（replaceState）
+     * ナビゲーション操作・ビュー切替後に呼ぶ
+     */
+    function syncViewDate() {
+      var view = KC.State.view;
+      var dateStr = _dateToParam(KC.State.current, view);
+      var params = parse(window.location.hash);
+      params.view = view;
+      params.date = dateStr;
+      var newHash = serialize(params);
+      _isUpdatingHash = true;
+      try {
+        history.replaceState(null, '', newHash || location.pathname + location.search);
+      } finally {
+        _isUpdatingHash = false;
+      }
+    }
+
+    /**
+     * scroll=HH:mm 形式から scrollTop 値（px）に変換する
+     * hourHeight は kc-time 要素の高さから算出する（scrollToDefaultTime と同じロジック）
+     * 不正値は null を返す（FR-12）
+     * @param {string} scrollStr - "HH:mm"
+     * @returns {number|null}
+     */
+    function _scrollStrToTop(scrollStr) {
+      if (!scrollStr || !/^\d{2}:\d{2}$/.test(scrollStr)) return null;
+      var parts = scrollStr.split(':');
+      var h = parseInt(parts[0], 10);
+      var min = parseInt(parts[1], 10);
+      if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+      var timeCol = document.getElementById('kc-time-col');
+      var hourHeight = 60;
+      if (timeCol) {
+        var firstTick = timeCol.querySelector('.kc-time');
+        if (firstTick) {
+          var rect = firstTick.getBoundingClientRect();
+          if (rect.height) hourHeight = rect.height;
+        }
+      }
+      return (h + min / 60) * hourHeight;
+    }
+
+    /**
+     * #kc-body の現在の scrollTop を HH:mm 文字列に変換する
+     * @param {HTMLElement} bodyEl
+     * @returns {string}
+     */
+    function _scrollTopToStr(bodyEl) {
+      var timeCol = document.getElementById('kc-time-col');
+      var hourHeight = 60;
+      if (timeCol) {
+        var firstTick = timeCol.querySelector('.kc-time');
+        if (firstTick) {
+          var rect = firstTick.getBoundingClientRect();
+          if (rect.height) hourHeight = rect.height;
+        }
+      }
+      var totalMinutes = Math.round((bodyEl.scrollTop / hourHeight) * 60);
+      var h = Math.floor(totalMinutes / 60);
+      var m = totalMinutes % 60;
+      if (h > 23) h = 23;
+      return KC.Utils.pad2(h) + ':' + KC.Utils.pad2(m);
+    }
+
+    /**
+     * 週・日ビューで #kc-body のスクロールイベントを登録する（デバウンス 500ms）
+     * 月ビューでは誤発火しないよう view === 'month' をガードする（Q-3 対応）
+     */
+    function _attachScrollListener() {
+      var bodyEl = document.getElementById('kc-body');
+      if (!bodyEl) return;
+      if (_scrollListener) {
+        bodyEl.removeEventListener('scroll', _scrollListener);
+      }
+      _scrollListener = function () {
+        // 月ビューの場合はスクロール更新をスキップ（Q-3: 月ビュー誤発火ガード）
+        if (KC.State.view === 'month') return;
+        clearTimeout(_scrollTimer);
+        _scrollTimer = setTimeout(function () {
+          var bEl = document.getElementById('kc-body');
+          if (!bEl) return;
+          update('scroll', _scrollTopToStr(bEl));
+        }, 500);
+      };
+      bodyEl.addEventListener('scroll', _scrollListener);
+    }
+
+    /**
+     * init 完了後に URL ハッシュを解析して状態を復元する（Phase 1 スコープ）
+     * 復元順序: ビュー/日付 → フィルタ → 検索 → 全画面 → スクロール
+     *
+     * 注: _initialParams（IIFE 評価時にキャッシュ済み）から読む。
+     *     init 内の _enterExpanded 等が URL を書き換えた後でも正しい初期値を参照できる。
+     */
+    function restore() {
+      // キャッシュ済みの起動時パラメータを使用する（URL への書き込みによる汚染を回避）
+      var params = _initialParams;
+
+      // --- 1. ビュー・日付の復元 ---
+      var urlView = params.view;
+      var urlDate = params.date;
+      var validViews = { month: true, week: true, day: true };
+      var viewChanged = false;
+      var dateChanged = false;
+
+      if (urlView && validViews[urlView]) {
+        if (urlView !== KC.State.view) {
+          KC.State.view = urlView;
+          viewChanged = true;
+        }
+      }
+      if (urlDate) {
+        var parsedDate = parseDate(urlDate);
+        if (parsedDate) {
+          KC.State.current = parsedDate;
+          dateChanged = true;
+        }
+        // 不正値は無視（FR-12）
+      }
+
+      if (viewChanged || dateChanged) {
+        // debounce を経由せず即時実行（復元のため）
+        KC.Render._refreshImmediate();
+      }
+
+      // --- 2. フィルタの復元（URL 優先、なければ localStorage 既存値を維持） ---
+      var urlFilter = params.filter;
+      if (urlFilter === 'all' || urlFilter === 'mine' || urlFilter === 'others') {
+        // URL 値が有効な場合は localStorage 値より優先して上書きする（FR-2, AC-3）
+        KC.State.eventFilter = urlFilter;
+        // フィルタドロップダウンのボタン表示ラベルも更新する
+        var filterBtn = document.getElementById('kc-filter-select');
+        if (filterBtn) {
+          var filterLabel = KC.FilterDropdown._labelFor(urlFilter);
+          if (filterBtn.childNodes.length > 0) {
+            filterBtn.childNodes[0].nodeValue = filterLabel + ' ';
+          }
+        }
+        // aria-selected の更新
+        var filterMenu = document.querySelector('#kc-filter .kc-dropdown-menu');
+        if (filterMenu) {
+          Array.from(filterMenu.querySelectorAll('.kc-option')).forEach(function (li) {
+            li.setAttribute('aria-selected', String(li.dataset.value === urlFilter));
+          });
+        }
+        // URL のフィルタに合わせて renderGrid で再描画（viewChanged でないケースで差分反映）
+        KC.Render.renderGrid();
+      }
+      // urlFilter が無効値（不正値）の場合は既存の eventFilter（localStorage 由来）を維持（FR-12 / AC-4）
+
+      // --- 3. 検索クエリの復元（[Low] 二重 replaceState 対策） ---
+      // setQuery() を経由すると URL を再書き込みするため、ここでは直接プロパティを設定する
+      var urlQ = params.q;
+      if (urlQ !== undefined && urlQ !== null && urlQ !== '') {
+        // searchTargets が空（検索バー非表示）の場合は q を無視する（FR-3）
+        if (KC.SearchFilter._searchTargets && KC.SearchFilter._searchTargets.length > 0) {
+          KC.SearchFilter.query = urlQ;
+          KC.SearchFilter.activeIndex = -1;
+          var input = document.getElementById('kc-search-input');
+          if (input) input.value = urlQ;
+          KC.SearchFilter._syncClearBtn(urlQ);
+          // マッチリストの再構築（setQuery が行う renderGrid は既に viewChanged で呼び済みの場合も多いが念のため実行）
+          KC.Render.renderGrid();
+        }
+      }
+
+      // --- 4. 全画面の復元（[High] fs セマンティクス反転対応） ---
+      // デフォルト（fs なし）= 全画面。init が _enterExpanded を呼んでいるので何もしない。
+      // fs=0 のとき → ユーザーが前回解除した状態なので _exitExpanded を呼ぶ。
+      // fs=0 以外（不正値含む）は全画面のままとする（デフォルト一致）。
+      if (params.fs === '0') {
+        var root = document.getElementById('kc-root');
+        if (root) KC.Boot._exitExpanded(root);
+      }
+      // fs なし・fs=0 以外のケースは全画面状態を維持（init の _enterExpanded が設定済み）
+
+      // --- 5. スクロール位置の復元（週・日ビューのみ） ---
+      if (KC.State.view !== 'month' && params.scroll) {
+        requestAnimationFrame(function () {
+          var bodyEl = document.getElementById('kc-body');
+          if (!bodyEl) return;
+          var top = _scrollStrToTop(params.scroll);
+          if (top !== null) {
+            bodyEl.scrollTop = top;
+          }
+          // 不正値は無視してデフォルト位置のまま（FR-12）
+        });
+      }
+
+      // --- スクロールリスナーを登録（週・日ビューのみ有効、月ビューはガード内でスキップ） ---
+      _attachScrollListener();
+    }
+
+    // 公開 API
+    return {
+      parse: parse,
+      serialize: serialize,
+      get: get,
+      update: update,
+      push: push,
+      remove: remove,
+      restore: restore,
+      syncViewDate: syncViewDate,
+      parseDate: parseDate,        // [Medium] popstate ハンドラと共用（DRY）
+      // テスト・デバッグ用内部アクセサ
+      _isUpdatingHash: function () { return _isUpdatingHash; }
+    };
+  }());
+
+  /* ====================================================================
    * KC.FilterDropdown — イベントフィルタドロップダウン
    * ヘッダー右側に「すべて / 自分のみ / 他人のみ」を切り替える UI を提供する
    * ==================================================================== */
@@ -7319,6 +7759,8 @@
       } catch (e) {
         console.warn('[KC.FilterDropdown] localStorage 保存失敗:', e);
       }
+      // FR-2: フィルタ変更を URL ハッシュに同期する（replaceState）
+      if (KC.UrlState) KC.UrlState.update('filter', value);
       // フィルタはクライアント側処理のため API 再取得不要。renderGrid で再描画のみ実施する
       KC.Render.renderGrid();
     },
@@ -7484,6 +7926,8 @@
         KC.State.view = value;
         // ビュー切替時: activeIndex をリセット（FR-7）。クエリとマッチリストは維持する
         KC.SearchFilter.activeIndex = -1;
+        // FR-1: ビュー切替を URL ハッシュに同期する（replaceState）
+        if (KC.UrlState) KC.UrlState.syncViewDate();
         KC.Render.refresh();
       }
 
@@ -7761,6 +8205,8 @@
       var fsBtn = document.getElementById('kc-fullscreen-btn');
       if (exitBtn) exitBtn.style.display = 'inline-flex';
       if (fsBtn) fsBtn.style.display = 'none';
+      // FR-7: 全画面 ON = デフォルト状態のため fs パラメータを除去する（fs なし = 全画面）
+      if (KC.UrlState) KC.UrlState.remove('fs');
       // FR-5: 全画面切替後にセル高が変わるため月ビューのイベント配置を再計算する
       // requestAnimationFrame でレイアウト確定後に実行する（refresh と同様のパターン）
       if (KC.State.view === 'month' && KC.RenderMonth) {
@@ -7777,6 +8223,8 @@
       var fsBtn = document.getElementById('kc-fullscreen-btn');
       if (exitBtn) exitBtn.style.display = 'none';
       if (fsBtn) fsBtn.style.display = '';
+      // FR-7: 全画面解除 = 非デフォルト状態のため fs=0 を記録する（fs=0 = 全画面解除）
+      if (KC.UrlState) KC.UrlState.update('fs', '0');
       // FR-5: 全画面解除後にセル高が変わるため月ビューのイベント配置を再計算する
       if (KC.State.view === 'month' && KC.RenderMonth) {
         requestAnimationFrame(function () {
@@ -7892,6 +8340,8 @@
           } else {
             S.current.setDate(S.current.getDate() - 7);
           }
+          // FR-1: ナビゲーション操作を URL ハッシュに同期する（replaceState）
+          if (KC.UrlState) KC.UrlState.syncViewDate();
           _updateNavAriaLabels();
           R.refresh();
         });
@@ -7903,6 +8353,8 @@
           KC.DnD._cancel();
           S.alldayExpanded = false;   // 切り替え時はトグル状態をリセット（AC 4.14 / §3.6）
           S.current = new Date();     // view によらず今日へ（REQ_month-view §3.8）
+          // FR-1: today ボタン操作を URL ハッシュに同期する（replaceState）
+          if (KC.UrlState) KC.UrlState.syncViewDate();
           R.refresh();
         });
       }
@@ -7920,6 +8372,8 @@
           } else {
             S.current.setDate(S.current.getDate() + 7);
           }
+          // FR-1: ナビゲーション操作を URL ハッシュに同期する（replaceState）
+          if (KC.UrlState) KC.UrlState.syncViewDate();
           _updateNavAriaLabels();
           R.refresh();
         });
@@ -8006,6 +8460,49 @@
 
       // 初期表示で全画面
       this._enterExpanded(root);
+
+      // FR-10（Phase 1 基本部分）: popstate リスナーを登録する
+      // replaceState 系パラメータ（view/date/filter）の変化を差分更新する
+      // pushState 系パラメータ（record/new/more）の消滅検知は Phase 2 で追加する
+      window.addEventListener('popstate', function () {
+        if (KC.UrlState._isUpdatingHash()) return;  // 自己書き換え無視（FR-11）
+        var params = KC.UrlState.parse(window.location.hash);
+        // #kc: プレフィクスなし → 無視（AC-13）
+        if (!window.location.hash || window.location.hash.indexOf('#kc:') !== 0) return;
+
+        var curView = KC.State.view;
+        var validViews = { month: true, week: true, day: true };
+        var changed = false;
+
+        // view の差分更新
+        if (params.view && validViews[params.view] && params.view !== curView) {
+          KC.State.view = params.view;
+          changed = true;
+        }
+        // date の差分更新（[Medium] KC.UrlState.parseDate を共用して DRY 化）
+        if (params.date) {
+          var parsedDt = KC.UrlState.parseDate(params.date);
+          if (parsedDt) {
+            KC.State.current = parsedDt;
+            changed = true;
+          }
+        }
+        if (changed) {
+          KC.Render._refreshImmediate();
+        }
+
+        // filter の差分更新（replaceState で書き換わった場合）
+        if (params.filter && (params.filter === 'all' || params.filter === 'mine' || params.filter === 'others')) {
+          if (params.filter !== KC.State.eventFilter) {
+            KC.State.eventFilter = params.filter;
+            KC.Render.renderGrid();
+          }
+        }
+      });
+
+      // URL ハッシュからの状態復元（Phase 1: view/date/filter/q/fs/scroll）
+      // _enterExpanded 後に呼ぶことで全画面の ON/OFF を正しく制御できる
+      KC.UrlState.restore();
 
       // アプリ管理権限を確認し、権限あれば設定ボタンを表示する
       // 初回描画完了後に非同期で実行するため、権限判定の失敗はカレンダー動作に影響しない

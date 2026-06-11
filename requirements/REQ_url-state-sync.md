@@ -2,7 +2,7 @@
 
 **文書番号**: REQ_url-state-sync
 **作成日**: 2026-06-11
-**最終更新日**: 2026-06-11（第 2 版: Q-1/Q-2 実機確認により確定）
+**最終更新日**: 2026-06-11（第 3 版: FR-7 全画面 URL セマンティクス反転）
 **作成者**: designer (サブエージェント)
 **ステータス**: 確定版 第 1 版（残存未確定事項: §10 Q-3〜Q-5 のみ）
 **関連文書**:
@@ -142,14 +142,14 @@ KC Calendar プラグインは現状、ページ URL が常に同一であり、
 | `record` | kintone レコード ID（数値文字列） | `#kc:record=123` | `pushState` |
 | `new` | `YYYY-MM-DD` または `YYYY-MM-DDTHH:mm` | `#kc:new=2026-06-15T10:00` | `pushState` |
 | `more` | `YYYY-MM-DD` | `#kc:more=2026-06-15` | `pushState` |
-| `fs` | `1`（全画面有効） | `#kc:fs=1` | `replaceState` |
+| `fs` | `0`（全画面解除状態）| `#kc:fs=0` | `replaceState` |
 | `scroll` | `HH:mm` | `#kc:scroll=09:00` | `replaceState` |
 | `settings` | `1`（設定ポップアップ）| `#kc:settings=1` | 対象外（§4.4 参照） |
 
 ### 4.3 組み合わせ例
 
 ```
-#kc:view=week&date=2026-06-09&filter=mine&q=%E4%BC%9A%E8%AD%B0&fs=1&scroll=09:00
+#kc:view=week&date=2026-06-09&filter=mine&q=%E4%BC%9A%E8%AD%B0&scroll=09:00
 #kc:view=month&date=2026-06&record=456
 #kc:view=month&date=2026-06-15&more=2026-06-15
 ```
@@ -206,9 +206,17 @@ KC Calendar プラグインは現状、ページ URL が常に同一であり、
 
 ### FR-7: 全画面モードの URL 同期
 
-- `KC.Boot._enterExpanded(root)` 呼び出し時に `fs=1` を `replaceState` で追加する
-- `KC.Boot._exitExpanded(root)` 呼び出し時に `fs` パラメータを URL から除去して `replaceState` する
-- 復元時: `KC.Boot._enterExpanded(root)` を呼ぶ。全画面解除後のリロードでは `fs` パラメータが存在しないため自動的に通常表示になる
+**セマンティクス（確定）**: KC Calendar の起動時は常に全画面状態がデフォルトである。そのため `fs` パラメータは「全画面を解除した状態」を記録する用途とする。
+
+| 状態 | URL | 説明 |
+|---|---|---|
+| 全画面（デフォルト） | `fs` パラメータなし | 起動デフォルトと一致するため記録不要 |
+| 全画面解除 | `#kc:fs=0` | 明示的に解除した状態を記録 |
+
+- `KC.Boot._exitExpanded(root)` 呼び出し時に `fs=0` を `replaceState` で書き込む
+- `KC.Boot._enterExpanded(root)` 呼び出し時に `fs` パラメータを URL から除去して `replaceState` する（全画面に戻ったのでデフォルト状態へ）
+- **復元時**: `fs=0` のときのみ `KC.Boot._exitExpanded(root)` を呼び出す。`fs` パラメータがない場合は何もしない（起動デフォルトの全画面のまま維持）
+- **実装上の注意（順序バグ対策）**: `KC.Boot.init` 冒頭で `_initialHash = window.location.hash` としてハッシュをキャッシュしておく。`KC.UrlState.restore()` はキャッシュ値（`_initialHash`）から `fs` を読む。init 処理中に `_enterExpanded` / `_exitExpanded` が呼ばれて `fs` が URL から除去・書き込みされても、キャッシュ値には影響しないため順序バグが発生しない
 
 ### FR-8: 週ビュースクロール位置の URL 同期
 
@@ -324,8 +332,8 @@ update: function (key, value) {
 | モーダル _close | `record` / `new` 削除（replaceState） | `KC.Popup._close()` 内 |
 | +N more 開く | `more` 追加（pushState） | `KC.OverflowPopup.open()` 内 |
 | +N more 閉じる | `more` 削除（replaceState） | `KC.OverflowPopup.close()` 内 |
-| 全画面 ON | `fs=1` 追加（replaceState） | `KC.Boot._enterExpanded()` 内 |
-| 全画面 OFF | `fs` 削除（replaceState） | `KC.Boot._exitExpanded()` 内 |
+| 全画面 ON（解除状態から再全画面化） | `fs` 削除（replaceState） | `KC.Boot._enterExpanded()` 内 |
+| 全画面 OFF（解除） | `fs=0` 書き込み（replaceState） | `KC.Boot._exitExpanded()` 内 |
 | 週・日ビュースクロール | `scroll` 更新（replaceState） | `#kc-body` の `scroll` イベント（デバウンス 500ms） |
 
 ### 7.3 復元処理（`KC.UrlState.restore()`）
@@ -347,8 +355,9 @@ update: function (key, value) {
    │  KC.SearchFilter.setQuery(decodedQ)
    │  input 要素に値を反映
    ↓
-4. 全画面の復元
-   │  KC.Boot._enterExpanded(root)（requestAnimationFrame で placeMonthEvents を後続実行）
+4. 全画面の復元（_initialHash キャッシュから読む）
+   │  fs=0 のとき: KC.Boot._exitExpanded(root)
+   │  fs なし（デフォルト全画面）: 何もしない
    ↓
 5. スクロール位置の復元（週・日ビューのみ）
    │  renderGrid 完了後の requestAnimationFrame 内で kc-body.scrollTop を設定
@@ -406,7 +415,7 @@ window.addEventListener('popstate', function (e) {
 
 | 既存機能 | 接続点 | 注意事項 |
 |---|---|---|
-| 全画面切替（FR-5: placeMonthEvents 再計算） | `_enterExpanded` / `_exitExpanded` に `KC.UrlState.update('fs', '1')` / `KC.UrlState.remove('fs')` を追加 | 全画面状態復元時も `requestAnimationFrame` で `placeMonthEvents` を実行する（既存動作を踏襲） |
+| 全画面切替（FR-5: placeMonthEvents 再計算） | `_exitExpanded` に `KC.UrlState.update('fs', '0')` を追加。`_enterExpanded` に `KC.UrlState.remove('fs')` を追加 | 復元時（`_exitExpanded` 呼び出し時）も `requestAnimationFrame` で `placeMonthEvents` を実行する（既存動作を踏襲）。`restore()` は `_initialHash` キャッシュから `fs` を読む（順序バグ対策）|
 | 検索 Phase 2 フローティング一覧（`#kc-search-dropdown`） | `KC.SearchFilter.setQuery()` に `KC.UrlState.update('q', encoded)` を追加 | `searchTargets` が空の場合は `q` パラメータを URL から除去する |
 | iframe モーダル（REQ_popup-behavior-fix） | `KC.Popup.openEdit()` / `openCreate()` / `_close()` に `KC.UrlState.push()` / `remove()` を追加 | `_close()` は複数の経路（× ボタン・backdrop クリック・保存完了後の自動クローズ）から呼ばれるため、すべての経路で `remove()` が実行されることを確認する |
 | +N more ポップオーバー（REQ_month-overflow-popup） | `KC.OverflowPopup.open()` / `close()` に `KC.UrlState.push()` / `remove()` を追加 | `close()` はリサイズ・外側クリック・ESC でも呼ばれるため、すべての経路で `remove()` が実行されることを確認する |
@@ -509,9 +518,17 @@ window.addEventListener('popstate', function (e) {
 
 ### AC-10: 全画面状態の URL 同期
 
-- **Given**: 全画面ボタンをクリックして全画面状態になった状態で
+- **Given**: 起動直後（全画面デフォルト状態）で `fs` パラメータが URL にない状態で
 - **When**: ページをリロードしたとき
-- **Then**: `#kc:fs=1` が URL に存在し、リロード後も全画面状態が復元される
+- **Then**: 全画面状態のまま表示される（`fs` なし = デフォルト全画面）
+
+- **Given**: 全画面解除ボタンをクリックして通常表示にした状態で
+- **When**: ページをリロードしたとき
+- **Then**: `#kc:fs=0` が URL に存在し、リロード後も通常表示（非全画面）が復元される
+
+- **Given**: `#kc:fs=0` が URL にある状態でページをリロードしたとき
+- **When**: 全画面ボタンをクリックして全画面に戻したとき
+- **Then**: URL から `fs` パラメータが除去される
 
 ### AC-11: +N more ポップオーバーの URL 同期
 
@@ -611,8 +628,8 @@ kintone アプリ内のページ遷移（一覧 → 詳細 → 編集）も hist
 
 ### T-6: 複合パラメータシナリオ
 
-1. 週ビューで 2026-06-09 を表示、フィルタ「自分のみ」、検索キーワード「会議」を入力、全画面 ON
-2. 確認: URL に `view=week&date=2026-06-09&filter=mine&q=%E4%BC%9A%E8%AD%B0&fs=1&scroll=HH:mm` が含まれる
+1. 週ビューで 2026-06-09 を表示、フィルタ「自分のみ」、検索キーワード「会議」を入力（全画面はデフォルトのため `fs` なし）
+2. 確認: URL に `view=week&date=2026-06-09&filter=mine&q=%E4%BC%9A%E8%AD%B0&scroll=HH:mm` が含まれる（`fs` パラメータは存在しない）
 3. URL をコピーして別タブで開く
 4. 確認: 同じ状態が復元される
 
@@ -667,3 +684,4 @@ kintone アプリ内のページ遷移（一覧 → 詳細 → 編集）も hist
 
 *第 1 版（2026-06-11）: ユーザー確定事項（全ケース実装・plugin 限定・kc: プレフィクス・history API 使い分け・復元順序・Phase 分割）を反映して初版作成。未確定事項 Q-1〜Q-5 を §10 に整理。*
 *第 2 版（2026-06-11）: Q-1（kintone の hashchange 不使用を実機確認）・Q-2（kintone のハッシュ競合なし・ハッシュ保持を実機確認）を解決済みに更新。§3.2 前提条件 2 に実機確認結果を明記。残存未確定事項は Q-3〜Q-5 のみ。*
+*第 3 版（2026-06-11）: FR-7 全画面 URL セマンティクスを反転。デフォルト（fs なし）= 全画面、全画面解除 = `fs=0` に変更。restore() は `fs=0` のときのみ `_exitExpanded` を呼ぶ。init 冒頭で `_initialHash` キャッシュを取得して順序バグを防ぐ実装注意を追記。§4.2 パラメータ表・§4.3 組み合わせ例・§7.2 呼び出しポイント表・§7.3 復元順序・§7.6 接続点・AC-10・T-6 を更新。*
