@@ -8059,6 +8059,70 @@
       // --- スクロールリスナーを登録（週・日ビューのみ有効、月ビューはガード内でスキップ） ---
       _attachScrollListener();
 
+      // --- URL 書き戻し（restore 完了後の確定的な 1 回 replaceState） ---
+      // init 中の _enterExpanded / patchRenderGrid 等が `parse(window.location.hash)` を基に
+      // replaceState を発行する場合、その時点で URL に残っていないパラメータは消えてしまう。
+      // ここで _initialParams を基に「実際に復元した状態」を 1 回だけ replaceState で書き戻す。
+      // - 有効な view/date は KC.State に反映済みのため KC.State から取得する
+      // - filter/q/fs/scroll/record/new/more は _initialParams からの有効値を使う
+      //   （fs はステップ 4 の処理結果で URL に既に反映されているが、まとめて再設定して問題ない）
+      // - record/new/more は非同期検証前の段階で URL に残す（後段の async IIFE が検証失敗時に remove する）
+      (function () {
+        // 元 URL に #kc: ハッシュがなかった場合は書き戻し不要（FR-12: 非 #kc: ハッシュ・ハッシュなしには不干渉）
+        if (Object.keys(params).length === 0) return;
+
+        var restoredParams = {};
+
+        // view/date: 常に現在の KC.State から取得（restore ステップ 1 で更新済み）
+        restoredParams.view = KC.State.view;
+        var _dateToParamLocal = function (d, view) {
+          var y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+          var pad = function (n) { return n < 10 ? '0' + n : String(n); };
+          return view === 'month'
+            ? (y + '-' + pad(m))
+            : (y + '-' + pad(m) + '-' + pad(day));
+        };
+        restoredParams.date = _dateToParamLocal(KC.State.current, KC.State.view);
+
+        // filter: 有効値が URL に存在した場合のみ書き戻す
+        var urlFilter = params.filter;
+        if (urlFilter === 'all' || urlFilter === 'mine' || urlFilter === 'others') {
+          restoredParams.filter = urlFilter;
+        }
+
+        // q: 空でない場合のみ書き戻す（searchTargets が空で復元スキップした場合も含めて書き戻す）
+        // searchTargets が空の場合、フロントエンド側で q は機能しないが URL に残す（再描画後に有効になることを想定）
+        var urlQ = params.q;
+        if (urlQ !== undefined && urlQ !== null && urlQ !== '') {
+          restoredParams.q = urlQ;
+        }
+
+        // fs: '0' の場合のみ書き戻す（デフォルト=全画面=なしが仕様のため '0' 以外は書かない）
+        if (params.fs === '0') {
+          restoredParams.fs = '0';
+        }
+
+        // scroll: 有効値が URL に存在した場合のみ書き戻す
+        // （週・日ビュー以外では意味がないが、URL に残すことは問題ない）
+        var urlScroll = params.scroll;
+        if (urlScroll && /^\d{2}:\d{2}$/.test(urlScroll)) {
+          restoredParams.scroll = urlScroll;
+        }
+
+        // record/new/more: 非同期検証前の段階でそのまま書き戻す（async IIFE が失敗時に remove する）
+        if (params.record) { restoredParams.record = params.record; }
+        if (params['new']) { restoredParams['new'] = params['new']; }
+        if (params.more)   { restoredParams.more   = params.more; }
+
+        var newHash = serialize(restoredParams);
+        _isUpdatingHash = true;
+        try {
+          history.replaceState(null, '', newHash || location.pathname + location.search);
+        } finally {
+          _isUpdatingHash = false;
+        }
+      }());
+
       // --- 6. モーダル・ポップオーバーの復元（Phase 2） ---
       // record / new / more は非同期処理が絡むため即時 async IIFE で実行する。
       // push スキップは各関数内の URL 現在値比較（get() === value）で自然に行われる。
