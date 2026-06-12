@@ -15,6 +15,24 @@
   'use strict';
 
   /* ====================================================================
+   * P-11: デバッグログ制御
+   * KC_DEBUG = true に設定すると console.log の正常系ログが出力される。
+   * 既定値は false（本番環境でのコンソール汚染防止）。
+   * console.warn / console.error は KC_DEBUG によらず常に出力される（診断・エラーログ）。
+   * ==================================================================== */
+  var KC_DEBUG = (typeof window !== 'undefined' && window.KC_DEBUG === true);
+
+  /**
+   * デバッグログ出力（KC_DEBUG が true の場合のみ出力）
+   * console.log の直接呼び出しをこれに置き換えることで本番ログを抑制する
+   */
+  function _log() {
+    if (!KC_DEBUG) return;
+    // eslint-disable-next-line no-console
+    console.log.apply(console, arguments);
+  }
+
+  /* ====================================================================
    * 名前空間
    * ==================================================================== */
   var KC = {};
@@ -93,9 +111,9 @@
               this.FIELD[k2] = '';
             }
           }
-          console.log('[KC] フィールド自動検出完了:', detected);
+          _log('[KC] フィールド自動検出完了:', detected);
         } else {
-          console.log('[KC] KC_プレフィックスのフィールドなし。デフォルト値を使用');
+          _log('[KC] KC_プレフィックスのフィールドなし。デフォルト値を使用');
         }
 
         // 必須フィールドチェック
@@ -111,10 +129,14 @@
 
         // KC_start フィールドの型（DATETIME or DATE）を記録
         this.START_FIELD_TYPE = props[this.FIELD.start] ? props[this.FIELD.start].type : 'DATETIME';
-        console.log('[KC] START_FIELD_TYPE:', this.START_FIELD_TYPE);
+        _log('[KC] START_FIELD_TYPE:', this.START_FIELD_TYPE);
+
+        // P-2: properties を返して呼び出し元が _loadRefTableDefs に再利用できるようにする
+        return props;
       } catch (e) {
         console.error('[KC] フィールド検出エラー:', e);
         // エラー時はデフォルト値で続行
+        return null;
       }
     },
 
@@ -130,7 +152,7 @@
           { id: this.getAppId() }
         );
         this.APP_NAME = resp.name || 'カレンダー';
-        console.log('[KC.Config] APP_NAME:', this.APP_NAME);
+        _log('[KC.Config] APP_NAME:', this.APP_NAME);
       } catch (err) {
         console.warn('[KC.Config] アプリ名取得失敗、フォールバック使用:', err);
         this.APP_NAME = 'カレンダー';
@@ -182,7 +204,7 @@
 
       // 設定なし (初回インストール・設定未完了) はハードコード値を維持
       if (!rawConfig || Object.keys(rawConfig).length === 0) {
-        console.log('[KC.Config] プラグイン設定なし。ハードコード値 / detectFields を使用');
+        _log('[KC.Config] プラグイン設定なし。ハードコード値 / detectFields を使用');
         return;
       }
 
@@ -203,7 +225,7 @@
 
       // version 2 未満は旧フラット設定として破棄 (Q11 確定)
       if (!config || !config.version || Number(config.version) < 2) {
-        console.log('[KC.Config] version 2 未満の設定を無視。detectFields フォールバックへ');
+        _log('[KC.Config] version 2 未満の設定を無視。detectFields フォールバックへ');
         return;
       }
 
@@ -233,22 +255,22 @@
             if (viewCfg.calendarTitle && viewCfg.calendarTitle.trim()) {
               KC.Config.CALENDAR_TITLE = viewCfg.calendarTitle.trim();
               KC.Config.APP_NAME = viewCfg.calendarTitle.trim();
-              console.log('[KC.Config] calendarTitle (ビュー個別):', KC.Config.CALENDAR_TITLE);
+              _log('[KC.Config] calendarTitle (ビュー個別):', KC.Config.CALENDAR_TITLE);
             }
             // デフォルトビュー
             if (viewCfg.defaultView &&
                 ['month', 'week', 'day'].indexOf(viewCfg.defaultView) !== -1) {
               KC.State.view = viewCfg.defaultView;
-              console.log('[KC.Config] defaultView (ビュー個別):', KC.State.view);
+              _log('[KC.Config] defaultView (ビュー個別):', KC.State.view);
             }
           } else {
-            console.log('[KC.Config] views[' + viewIdStr + '] なし。共通設定でフォールバック動作');
+            _log('[KC.Config] views[' + viewIdStr + '] なし。共通設定でフォールバック動作');
           }
         } catch (e) {
           console.warn('[KC.Config] ビュー個別設定の適用に失敗。共通設定でフォールバック:', e);
         }
       } else if (config.views && viewId == null) {
-        console.log('[KC.Config] viewId 未取得のためビュー個別設定をスキップ。共通設定を使用');
+        _log('[KC.Config] viewId 未取得のためビュー個別設定をスキップ。共通設定を使用');
       }
 
       // 権限ユーザールール (version 2 以降) を適用
@@ -296,12 +318,16 @@
       KC.Config.OVERLAP_REF_TABLE_RELATED_APP        = fm9.overlapRefTableRelatedAppId         || '';
       KC.Config.OVERLAP_RESOURCE_FIELD_CODE          = fm9.overlapResourceFieldCode            || '';
 
-      console.log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD,
+      _log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD,
         'PERMISSION_RULES:', KC.Config.PERMISSION_RULES,
         'FIELDVALUE_RULES:', KC.Config.FIELDVALUE_RULES,
         'SEARCH_TARGETS:', KC.Config.SEARCH_TARGETS,
         'OVERLAP_MODE:', KC.Config.OVERLAP_MODE,
         'OVERLAP_KEY_FIELD_CODE:', KC.Config.OVERLAP_KEY_FIELD_CODE);
+
+      // P-7: loadEvents が毎回再構築しているフィールドリストを Config 確定後に一度だけ構築してキャッシュする。
+      // OVERLAP_MODE や PERMISSION_RULES 等が確定した後でないと正確なリストが作れないためここで構築する。
+      KC.Config._buildCachedFieldList();
     }
   };
 
@@ -382,6 +408,45 @@
    * @type {string}
    */
   KC.Config.OVERLAP_RESOURCE_FIELD_CODE = '';
+
+  /**
+   * P-7: loadEvents が使う fields パラメータのキャッシュ。
+   * loadFromPluginConfig の完了後に _buildCachedFieldList() で一度だけ構築する。
+   * null の場合は loadEvents が従来通り毎回構築する（初回起動・設定変更後のフォールバック）。
+   * @type {string[]|null}
+   */
+  KC.Config._cachedFieldList = null;
+
+  /**
+   * P-7: Config 確定後に loadEvents の fields リストを事前構築してキャッシュする。
+   * loadFromPluginConfig の末尾から呼ばれる。
+   */
+  KC.Config._buildCachedFieldList = function () {
+    var F = KC.Config.FIELD;
+    var fieldList = ['$id', '$revision', '$created'];
+    for (var key in F) {
+      if (F[key]) fieldList.push(F[key]);
+    }
+    var permRules = KC.Config.PERMISSION_RULES || [];
+    for (var pri = 0; pri < permRules.length; pri++) {
+      var pfc = permRules[pri].fieldCode;
+      if (pfc && fieldList.indexOf(pfc) === -1) fieldList.push(pfc);
+    }
+    var fvRules = KC.Config.FIELDVALUE_RULES || [];
+    for (var fvri = 0; fvri < fvRules.length; fvri++) {
+      var fvfc = fvRules[fvri].fieldCode;
+      if (fvfc && fieldList.indexOf(fvfc) === -1) fieldList.push(fvfc);
+    }
+    var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
+    if (KC.Config.OVERLAP_MODE === 'fieldKey' && overlapKeyCode && fieldList.indexOf(overlapKeyCode) === -1) {
+      fieldList.push(overlapKeyCode);
+    }
+    var refJoinField = KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD;
+    if (KC.Config.OVERLAP_MODE === 'refTable' && refJoinField && fieldList.indexOf(refJoinField) === -1) {
+      fieldList.push(refJoinField);
+    }
+    KC.Config._cachedFieldList = fieldList;
+  };
 
   /* ====================================================================
    * WCAG 輝度ユーティリティ (REQ §8.7)
@@ -602,7 +667,7 @@
         })
         .then(function (data) {
           _data = data;
-          console.log('[KC.Holidays] loaded', Object.keys(data).length, 'entries');
+          _log('[KC.Holidays] loaded', Object.keys(data).length, 'entries');
         })
         .catch(function (err) {
           console.warn('[KC.Holidays] API 取得失敗（CSP ブロックの可能性）、ハードコードにフォールバック:', err);
@@ -813,7 +878,7 @@
       // in-flight ガード: 前リクエストが完了していない場合は進行中の Promise を返す
       // 短時間に複数の refresh() が呼ばれても GET リクエストは 1 本に集約される
       if (this._loading) {
-        console.log('[KC.Api.loadEvents] 前リクエスト進行中のためスキップ（同 Promise を返す）');
+        _log('[KC.Api.loadEvents] 前リクエスト進行中のためスキップ（同 Promise を返す）');
         return this._loadingPromise;
       }
 
@@ -856,41 +921,37 @@
           // limit 500 を末尾に付与する（通常 GET の上限値）
           var query = conditions.join(' and ') + ' order by ' + F.start + ' asc limit 500';
 
-          // fields パラメータ（存在するフィールドのみ）
-          // $created はシステムフィールドのため FIELD オブジェクトに含まれず明示追加
-          var fieldList = ['$id', '$revision', '$created'];
-          for (var key in F) {
-            if (F[key]) fieldList.push(F[key]);
-          }
-          // 権限判定用フィールドを取得対象に追加（重複は後で除去）
-          var permRules = KC.Config.PERMISSION_RULES || [];
-          for (var pri = 0; pri < permRules.length; pri++) {
-            var pfc = permRules[pri].fieldCode;
-            if (pfc && fieldList.indexOf(pfc) === -1) {
-              fieldList.push(pfc);
+          // P-7: fields パラメータはキャッシュ済みリストを優先使用する（loadFromPluginConfig 完了後に構築済み）。
+          // キャッシュが null（初回 init 前や設定変更後）の場合はフォールバックで毎回構築する。
+          var fieldList;
+          if (KC.Config._cachedFieldList) {
+            // キャッシュをスライスして使う（元配列の汚染防止）
+            fieldList = KC.Config._cachedFieldList.slice();
+          } else {
+            // フォールバック: Config 確定前 or プラグイン設定なし環境
+            // $created はシステムフィールドのため FIELD オブジェクトに含まれず明示追加
+            fieldList = ['$id', '$revision', '$created'];
+            for (var key in F) {
+              if (F[key]) fieldList.push(F[key]);
             }
-          }
-
-          // フィールド値権限判定用フィールドを取得対象に追加（重複は除去）
-          // $status は kintone のシステムフィールドのため fields パラメータに含めることで取得可能（未検証）
-          var fvRulesForField = KC.Config.FIELDVALUE_RULES || [];
-          for (var fvri = 0; fvri < fvRulesForField.length; fvri++) {
-            var fvfc = fvRulesForField[fvri].fieldCode;
-            if (fvfc && fieldList.indexOf(fvfc) === -1) {
-              fieldList.push(fvfc);
+            var permRules = KC.Config.PERMISSION_RULES || [];
+            for (var pri = 0; pri < permRules.length; pri++) {
+              var pfc = permRules[pri].fieldCode;
+              if (pfc && fieldList.indexOf(pfc) === -1) fieldList.push(pfc);
             }
-          }
-
-          // DnD 重複チェック用フィールドを取得対象に追加（REQ_dnd-overlap-block §7.3）
-          // モード A: リソースキーフィールド（案 A: loadEvents 時に KcEvent に保持）
-          var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
-          if (KC.Config.OVERLAP_MODE === 'fieldKey' && overlapKeyCode && fieldList.indexOf(overlapKeyCode) === -1) {
-            fieldList.push(overlapKeyCode);
-          }
-          // モード B: 紐付けキーフィールド（予約アプリ側の申請番号等）を KcEvent に保持
-          var refJoinField = KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD;
-          if (KC.Config.OVERLAP_MODE === 'refTable' && refJoinField && fieldList.indexOf(refJoinField) === -1) {
-            fieldList.push(refJoinField);
+            var fvRulesForField = KC.Config.FIELDVALUE_RULES || [];
+            for (var fvri = 0; fvri < fvRulesForField.length; fvri++) {
+              var fvfc = fvRulesForField[fvri].fieldCode;
+              if (fvfc && fieldList.indexOf(fvfc) === -1) fieldList.push(fvfc);
+            }
+            var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
+            if (KC.Config.OVERLAP_MODE === 'fieldKey' && overlapKeyCode && fieldList.indexOf(overlapKeyCode) === -1) {
+              fieldList.push(overlapKeyCode);
+            }
+            var refJoinField = KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD;
+            if (KC.Config.OVERLAP_MODE === 'refTable' && refJoinField && fieldList.indexOf(refJoinField) === -1) {
+              fieldList.push(refJoinField);
+            }
           }
 
           var recordsUrl = kintone.api.url('/k/v1/records.json', true);
@@ -1404,7 +1465,7 @@
           el.addEventListener('click', function (e) {
             e.preventDefault();
             e.stopPropagation();
-            console.log('[KC.Popup] キャンセルボタンを検知、モーダルを閉じます');
+            _log('[KC.Popup] キャンセルボタンを検知、モーダルを閉じます');
             KC.Popup._close();
           }, true); // capture phase
         }
@@ -1460,7 +1521,7 @@
           el.__kcSaveBound = true;
           found = true;
           el.addEventListener('click', function () {
-            console.log('[KC.Popup] 保存ボタンを検知、保存待ちフラグを立てます');
+            _log('[KC.Popup] 保存ボタンを検知、保存待ちフラグを立てます');
             KC.Popup._savePending = true;
           }, true); // capture phase（kintone ハンドラより前に実行されるが処理は通す）
         }
@@ -1697,8 +1758,12 @@
           // 保存成功の検知（_savePending が true の状態で詳細表示 URL に遷移した場合）
           // キャンセル検知・一覧遷移検知より先に評価する
           if (KC.Popup._savePending && KC.Popup._isSaveSuccessUrl(loc)) {
-            console.log('[KC.Popup] 保存成功を検知、カレンダー再描画してモーダルを閉じます:', loc.pathname + loc.hash);
+            _log('[KC.Popup] 保存成功を検知、カレンダー再描画してモーダルを閉じます:', loc.pathname + loc.hash);
             KC.Popup._savePending = false;
+            // P-6: 保存後は関連レコードキャッシュを無効化して次回の loadRelatedRecords で強制再取得させる
+            if (KC.SearchFilter && typeof KC.SearchFilter._invalidateRelatedRecordsCache === 'function') {
+              KC.SearchFilter._invalidateRelatedRecordsCache();
+            }
             if (KC.Render && typeof KC.Render._refreshImmediate === 'function') {
               KC.Render._refreshImmediate();
             }
@@ -1710,7 +1775,7 @@
             // 許可 URL へ到達したことを記録（以降の cross-origin 例外は「閉じる」扱いにする）
             KC.Popup._loadCount++;
           } else {
-            console.log('[KC.Popup] 許可外 URL への遷移を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
+            _log('[KC.Popup] 許可外 URL への遷移を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
             KC.Popup._close();
           }
         } catch (e) {
@@ -1718,10 +1783,10 @@
           // _loadCount === 0（まだ許可 URL へ一度も到達していない）場合は
           // 初期ロード中の中間リダイレクトとみなして「待機」とし、モーダルを閉じない。
           if (KC.Popup._loadCount === 0) {
-            console.log('[KC.Popup] 初期ロード中の cross-origin 状態を検知、到達を待機します:', e.message || e);
+            _log('[KC.Popup] 初期ロード中の cross-origin 状態を検知、到達を待機します:', e.message || e);
           } else {
             // 許可 URL 到達後に別ドメインへ遷移 → 閉じる
-            console.log('[KC.Popup] cross-origin 遷移を検知、モーダルを閉じます:', e);
+            _log('[KC.Popup] cross-origin 遷移を検知、モーダルを閉じます:', e);
             KC.Popup._close();
           }
         }
@@ -1745,24 +1810,28 @@
       // ESC キーリスナー登録（モーダル表示中のみ有効）
       document.addEventListener('keydown', this._onKeydown);
 
-      // URL ポーリング監視を開始（SPA 的遷移で load が発火しないケースを補完）
+      // P-5: URL 遷移監視（イベント駆動を主、ポーリングをフォールバック）
       // kintone の一覧⇔詳細⇔編集の遷移は pushState / hashchange で完結することがあり、
       // load イベントだけでは一覧遷移（キャンセル等）を取りこぼす場合がある（実機未検証）。
-      // ポーリングは iframe.contentWindow.location を読むだけで API リクエストは発生しない。
-      KC.Popup._urlWatcher = setInterval(function () {
+      // allow-same-origin かつ同一オリジンのため iframe.contentWindow への hashchange リスナー登録が可能。
+      // hashchange イベント駆動で即時検知し、ポーリングは 1500ms のフォールバックとする（検知漏れ対策を維持）。
+      var _checkIframeUrl = function (source) {
         var iframe = KC.Popup._iframe;
-        // iframe が DOM から切り離されていれば既に閉じ済みなので何もしない
         if (!iframe || !iframe.parentNode) return;
         try {
           var loc = iframe.contentWindow.location;
 
-          // about:blank は初期状態 or リセット中。ポーリングでは無視してスキップ。
+          // about:blank は初期状態 or リセット中。スキップ。
           if (loc.href === 'about:blank') return;
 
           // 保存成功の検知（SPA 遷移で load が発火しないケースを補完）
           if (KC.Popup._savePending && KC.Popup._isSaveSuccessUrl(loc)) {
-            console.log('[KC.Popup] ポーリング: 保存成功を検知、カレンダー再描画してモーダルを閉じます:', loc.pathname + loc.hash);
+            _log('[KC.Popup] ' + source + ': 保存成功を検知、カレンダー再描画してモーダルを閉じます:', loc.pathname + loc.hash);
             KC.Popup._savePending = false;
+            // P-6: 保存後は関連レコードキャッシュを無効化して次回の loadRelatedRecords で強制再取得させる
+            if (KC.SearchFilter && typeof KC.SearchFilter._invalidateRelatedRecordsCache === 'function') {
+              KC.SearchFilter._invalidateRelatedRecordsCache();
+            }
             if (KC.Render && typeof KC.Render._refreshImmediate === 'function') {
               KC.Render._refreshImmediate();
             }
@@ -1774,20 +1843,38 @@
             // 許可 URL に到達（load ハンドラが発火しなかったケースを補完）
             KC.Popup._loadCount++;
           } else {
-            console.log('[KC.Popup] ポーリング: 許可外 URL を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
+            _log('[KC.Popup] ' + source + ': 許可外 URL を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
             KC.Popup._close();
           }
         } catch (e) {
           // cross-origin 例外: _loadCount === 0 の間は初期リダイレクト中とみなして待機。
           if (KC.Popup._loadCount === 0) {
-            console.log('[KC.Popup] ポーリング: 初期ロード中の cross-origin 状態を検知、到達を待機します:', e.message || e);
+            _log('[KC.Popup] ' + source + ': 初期ロード中の cross-origin 状態を検知、到達を待機します:', e.message || e);
           } else {
             // 許可 URL 到達後に別ドメインへ遷移 → 閉じる
-            console.log('[KC.Popup] ポーリング: cross-origin 遷移を検知、モーダルを閉じます:', e);
+            _log('[KC.Popup] ' + source + ': cross-origin 遷移を検知、モーダルを閉じます:', e);
             KC.Popup._close();
           }
         }
-      }, 500);
+      };
+
+      // イベント駆動: iframe 内 hashchange を検知（kintone の SPA ナビゲーションを即時捕捉）
+      // allow-same-origin があるため contentWindow へのアクセス・リスナー登録が可能
+      // （cross-origin 状態の場合は try-catch で吸収）
+      try {
+        if (iframe.contentWindow) {
+          iframe.contentWindow.addEventListener('hashchange', function () {
+            _checkIframeUrl('hashchange');
+          });
+        }
+      } catch (e) {
+        // cross-origin 状態でのリスナー登録失敗は無視（ポーリングで補完）
+      }
+
+      // フォールバックポーリング（1500ms: SPA 遷移で hashchange が発火しないケースを補完）
+      KC.Popup._urlWatcher = setInterval(function () {
+        _checkIframeUrl('polling');
+      }, 1500);
     },
 
     /**
@@ -1899,7 +1986,7 @@
       }
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/show#record=' + recordId;
-      console.log('[KC.Popup.openEdit] open modal:', url);
+      _log('[KC.Popup.openEdit] open modal:', url);
       this._show(url);
     }
   };
@@ -4449,6 +4536,8 @@
       try {
         KC.Banner.hide();
         S.events = await KC.Api.loadEvents(isoStart, isoEnd);
+        // P-9: events 更新後は SearchFilter のクエリキャッシュを無効化して次回の _computeMatchList で再スキャンさせる
+        KC.SearchFilter._lastQuery = null;
         KC.Render.renderGrid();
         KC.Render.refreshTitle();
       } catch (err) {
@@ -5286,7 +5375,7 @@
         console.warn('[KC.RenderMonth] placeMonthEvents: maxItems=0 (セル高不足)。chipは非表示になり +N more のみ表示されます。');
       }
       if ((S.events || []).length === 0) {
-        console.log('[KC.RenderMonth] placeMonthEvents: S.events が空です (件数=0)。イベント配置をスキップします。');
+        _log('[KC.RenderMonth] placeMonthEvents: S.events が空です (件数=0)。イベント配置をスキップします。');
       }
 
       var weekEls = Array.from(gridEl.querySelectorAll('.kc-month-week'));
@@ -5381,6 +5470,8 @@
       try {
         KC.Banner.hide();
         S.events = await KC.Api.loadEvents(isoStart, isoEnd);
+        // P-9: events 更新後は SearchFilter のクエリキャッシュを無効化して次回の _computeMatchList で再スキャンさせる
+        KC.SearchFilter._lastQuery = null;
         // グリッドを再描画してからイベントを配置する（Phase 1B-2）
         renderGrid();
         // 1 フレーム待ってセル高が確定してから placeMonthEvents を呼ぶ
@@ -5893,6 +5984,8 @@
       try {
         KC.Banner.hide();
         S.events = await KC.Api.loadEvents(isoStart, isoEnd);
+        // P-9: events 更新後は SearchFilter のクエリキャッシュを無効化して次回の _computeMatchList で再スキャンさせる
+        KC.SearchFilter._lastQuery = null;
         KC.Render.renderGrid();
         KC.Render.refreshTitle();
       } catch (err) {
@@ -6056,9 +6149,10 @@
     refresh: function () {
       var self = this;
       clearTimeout(self._refreshTimer);
+      // B-P2: resize debounce（200ms）と統一（従来 300ms）
       self._refreshTimer = setTimeout(function () {
         self._refreshImmediate();
-      }, 300);
+      }, 200);
     },
 
     /** debounce タイマー（内部管理用） */
@@ -6082,9 +6176,9 @@
         m.renderGrid();
       }
 
-      // REFERENCE_TABLE の関連レコードをキャッシュ取得する（FR-15）
-      // データ取得後・マッチリスト更新前に実行し、キャッシュ更新後に _computeMatchList が呼ばれるようにする
-      if (KC.SearchFilter._searchTargets.length > 0) {
+      // P-12: REFERENCE_TABLE フィールドが searchTargets にある場合のみ loadRelatedRecords を呼ぶ
+      // _hasRefTableTarget が false（REFERENCE_TABLE なし）なら呼び出し自体をスキップして async コストを排除する
+      if (KC.SearchFilter._hasRefTableTarget) {
         try {
           await KC.SearchFilter.loadRelatedRecords();
         } catch (err) {
@@ -6895,14 +6989,31 @@
     // Phase 2 追加プロパティ
     /** 関連レコードキャッシュ: { [fieldCode]: { [recordId]: kintoneRecord } } */
     _relatedRecordsCache: {},
+    /**
+     * P-6: 関連レコード最終取得タイムスタンプ (Date.now() ms)。
+     * 0 = 未取得（強制再取得）。TTL_MS 以内の場合は再取得をスキップする。
+     */
+    _relatedRecordsFetchedAt: 0,
     /** プラグイン設定から読み込んだ検索対象フィールド一覧 */
     _searchTargets: [],
+    /**
+     * P-12: _searchTargets に REFERENCE_TABLE 型が存在するかを示すフラグ。
+     * false の場合は _refreshImmediate での loadRelatedRecords 呼び出し自体をスキップする。
+     */
+    _hasRefTableTarget: false,
     /** REFERENCE_TABLE フィールド定義キャッシュ: { [fieldCode]: { appId, displayFields } } */
     _refTableDefs: {},
     /** _loadRefTableDefs 完了フラグ（二重取得防止） */
     _refTableDefsLoaded: false,
     /** matchField で一度 warn 済みのフィールドコード（コンソール汚染防止: 初回のみ出力） */
     _warnedFields: new Set(),
+    /**
+     * P-9: _computeMatchList のクエリキャッシュ。
+     * _lastQuery と KC.State.events が変化していない場合は全スキャンをスキップして _lastMatchList を返す。
+     * KC.Api.loadEvents 完了後（events が更新された時）は _lastQuery をリセットして強制再計算する。
+     */
+    _lastQuery: null,
+    _lastMatchList: [],
 
     /**
      * kintone.api のエラーオブジェクトを診断可能な文字列に変換する。
@@ -7065,7 +7176,12 @@
      * searchTargets に REFERENCE_TABLE が含まれる場合に呼ばれる
      * @returns {Promise<void>}
      */
-    _loadRefTableDefs: async function () {
+    /**
+     * P-2: properties を引数として受け取れるようにする。
+     * detectFields が返した resp.properties を渡せば API 呼び出しを省略できる。
+     * @param {Object|null} [existingProps] - 既に取得済みの resp.properties。null/undefined なら API を叩く
+     */
+    _loadRefTableDefs: async function (existingProps) {
       if (this._refTableDefsLoaded) return;
 
       if (this._searchTargets.length === 0) {
@@ -7074,12 +7190,18 @@
       }
 
       try {
-        var resp = await kintone.api(
-          kintone.api.url('/k/v1/app/form/fields', true),
-          'GET',
-          { app: kintone.app.getId() }
-        );
-        var props = resp.properties || {};
+        var props;
+        if (existingProps) {
+          // P-2: detectFields から渡された properties を再利用（API 呼び出し不要）
+          props = existingProps;
+        } else {
+          var resp = await kintone.api(
+            kintone.api.url('/k/v1/app/form/fields', true),
+            'GET',
+            { app: kintone.app.getId() }
+          );
+          props = resp.properties || {};
+        }
 
         this._refTableDefs = {};
         Object.keys(props).forEach(function (code) {
@@ -7100,7 +7222,7 @@
         }.bind(this));
 
         this._refTableDefsLoaded = true;
-        console.log('[KC SearchFilter] _refTableDefs 取得完了:', this._refTableDefs);
+        _log('[KC SearchFilter] _refTableDefs 取得完了:', this._refTableDefs);
       } catch (err) {
         console.error('[KC SearchFilter] フィールド定義取得失敗: ' + this._fmtErr(err));
         this._refTableDefsLoaded = true;
@@ -7111,16 +7233,29 @@
      * 全 REFERENCE_TABLE フィールドの関連先レコードをカーソル API で一括取得してキャッシュする
      * - 権限のない関連先アプリは除外して警告ログを出力する（AC-P2-8）
      * - ビュー切替・月送り時にも呼び出す（FR-15）
+     * - P-6: TTL 5 分以内の場合は再取得をスキップする（_relatedRecordsFetchedAt で管理）
+     *   保存後は _invalidateRelatedRecordsCache() でタイムスタンプをリセットして強制再取得する
+     * @param {boolean} [force] - true の場合は TTL を無視して強制再取得する
      * @returns {Promise<void>}
      */
-    loadRelatedRecords: async function () {
+    loadRelatedRecords: async function (force) {
+      // P-6: TTL チェック（5 分 = 300,000ms）
+      var TTL_MS = 5 * 60 * 1000;
+      if (!force && this._relatedRecordsFetchedAt > 0) {
+        var elapsed = Date.now() - this._relatedRecordsFetchedAt;
+        if (elapsed < TTL_MS) return; // TTL 内なのでキャッシュを再利用
+      }
+
       // searchTargets のうち REFERENCE_TABLE 型のフィールドを特定する
       var refTargets = this._searchTargets.filter(function (t) {
         var def = this._refTableDefs[t.fieldCode];
         return def && def.appId && def.displayFields.length > 0;
       }.bind(this));
 
-      if (refTargets.length === 0) return;
+      if (refTargets.length === 0) {
+        this._relatedRecordsFetchedAt = Date.now(); // 空でも fetch 済みとして記録
+        return;
+      }
 
       // 最大 10 並列（kintone レート制限考慮）でチャンク処理
       var CHUNK_SIZE = 10;
@@ -7132,6 +7267,17 @@
           return self._fetchAllRelatedRecords(target.fieldCode);
         }));
       }
+
+      // P-6: 取得完了タイムスタンプを記録
+      this._relatedRecordsFetchedAt = Date.now();
+    },
+
+    /**
+     * P-6: 関連レコードキャッシュを無効化する（TTL をリセットして次回呼び出し時に強制再取得させる）。
+     * レコード保存後（KC.Popup の保存検知時）に呼び出すこと。
+     */
+    _invalidateRelatedRecordsCache: function () {
+      this._relatedRecordsFetchedAt = 0;
     },
 
     /**
@@ -7178,7 +7324,7 @@
           if (id) recordMap[String(id)] = r;
         });
         this._relatedRecordsCache[fieldCode] = recordMap;
-        console.log('[KC SearchFilter] ' + fieldCode + ' 関連レコード取得完了: ' + records.length + '件');
+        _log('[KC SearchFilter] ' + fieldCode + ' 関連レコード取得完了: ' + records.length + '件');
 
         // カーソルは取得完了後に自動破棄されるが、明示的に DELETE して確実にリソース解放する
         // next=false で終了後は API が既に破棄済みのため 404 が返る可能性がある点に注意
@@ -7211,12 +7357,18 @@
      * KC.State.events をスキャンしてマッチ候補 KcEvent 配列を構築し、
      * フローティング一覧（#kc-search-dropdown）を更新する。
      * カレンダー DOM（.kc-event 等）には一切手を加えない。
+     * P-9: クエリが変化していない場合（_lastQuery と一致）は全スキャンをスキップして
+     * キャッシュ済み _lastMatchList を使用する。
+     * loadEvents 完了後は _lastQuery をリセットして強制再計算させること（loadEvents 呼び出し元で実施）。
      */
     _computeMatchList: function () {
       if (!this.query) {
         this._matchList = [];
+        this._lastQuery = null; // キャッシュを無効化（クエリ空の場合は次回必ず再計算）
         this.activeIndex = -1;
         this._updateEmptyMsg(false, '');
+        // B-P4: クエリ空の場合は _renderDropdown 不要（ドロップダウンは非表示のはず）
+        // ただし既存挙動を維持するため _renderDropdown は呼ぶ
         this._renderDropdown();
         return;
       }
@@ -7225,8 +7377,25 @@
 
       if (tokens.length === 0) {
         this._matchList = [];
+        this._lastQuery = null;
         this._updateEmptyMsg(false, '');
         this._renderDropdown();
+        return;
+      }
+
+      // P-9: 同一クエリかつ events が変化していない（_lastQuery が一致）ならキャッシュを返す
+      if (this._lastQuery === this.query && this._lastMatchList !== null) {
+        // キャッシュ済み matchList をそのまま使用（_matchList に同期）
+        this._matchList = this._lastMatchList;
+        var cachedCount = this._matchList.length;
+        this._updateEmptyMsg(cachedCount === 0, this.query);
+        if (cachedCount === 0) {
+          this.activeIndex = -1;
+        } else if (this.activeIndex < 0 || this.activeIndex >= cachedCount) {
+          this.activeIndex = 0;
+        }
+        this._renderDropdown();
+        this._updateDropdownActive();
         return;
       }
 
@@ -7244,6 +7413,9 @@
       });
 
       this._matchList = matched;
+      // P-9: キャッシュを更新
+      this._lastQuery = this.query;
+      this._lastMatchList = matched;
 
       var count = matched.length;
       this._updateEmptyMsg(count === 0, this.query);
@@ -7731,6 +7903,13 @@
     /** カレンダー自身の replaceState/pushState 呼び出しによる hashchange を無視するフラグ */
     var _isUpdatingHash = false;
 
+    /**
+     * P-14: parse(window.location.hash) の同一ハッシュ値に対するメモ化キャッシュ。
+     * { hash: string, params: Object } の形式で直前のパース結果を保持する。
+     * replaceState/pushState による hash 変化 or 外部からの hashchange で自動的に無効化される。
+     */
+    var _parseCache = null;
+
     /** スクロールイベントのデバウンスタイマー */
     var _scrollTimer = null;
 
@@ -7805,12 +7984,27 @@
     }
 
     /**
+     * P-14: 現在の window.location.hash をパースして返す（キャッシュ付き）。
+     * 同一ハッシュに対して連続して呼ばれる場合はキャッシュを返してパースコストを削減する。
+     * replaceState/pushState 後はキャッシュが自動的に無効化される（_parseCache = null）。
+     * @returns {Object}
+     */
+    function _parseCurrent() {
+      var hash = window.location.hash;
+      if (_parseCache && _parseCache.hash === hash) return _parseCache.params;
+      var params = parse(hash);
+      _parseCache = { hash: hash, params: params };
+      return params;
+    }
+
+    /**
      * 現在のハッシュから指定キーの値を返す。存在しない場合は null
+     * P-14: _parseCurrent() でキャッシュを活用してパースを最小化する
      * @param {string} key
      * @returns {string|null}
      */
     function get(key) {
-      var params = parse(window.location.hash);
+      var params = _parseCurrent();
       return Object.prototype.hasOwnProperty.call(params, key) ? params[key] : null;
     }
 
@@ -7828,6 +8022,7 @@
       }
       var newHash = serialize(params);
       _isUpdatingHash = true;
+      _parseCache = null; // P-14: replaceState 前にキャッシュ無効化
       try {
         history.replaceState(null, '', newHash || location.pathname + location.search);
       } finally {
@@ -7846,6 +8041,7 @@
       params[key] = value;
       var newHash = serialize(params);
       _isUpdatingHash = true;
+      _parseCache = null; // P-14: pushState 前にキャッシュ無効化
       try {
         history.pushState(null, '', newHash || location.pathname + location.search);
       } finally {
@@ -7862,6 +8058,25 @@
       var params = parse(window.location.hash);
       if (!Object.prototype.hasOwnProperty.call(params, key)) return;
       update(key, '');
+    }
+
+    /**
+     * P-8: 複数の update/remove を 1 回の replaceState にまとめるトランザクション API。
+     * fn(params) を呼び出し、その中での params オブジェクト編集を元に最終 replaceState を 1 回だけ発行する。
+     * @param {function(Object): void} fn - params オブジェクトを受け取り変更する関数
+     *   fn 内では update/remove の代わりに params[key] = value / delete params[key] を使う
+     */
+    function batch(fn) {
+      var params = parse(window.location.hash);
+      fn(params);
+      var newHash = serialize(params);
+      _isUpdatingHash = true;
+      _parseCache = null; // P-14: replaceState 前にキャッシュ無効化
+      try {
+        history.replaceState(null, '', newHash || location.pathname + location.search);
+      } finally {
+        _isUpdatingHash = false;
+      }
     }
 
     /**
@@ -8121,14 +8336,8 @@
 
         // view/date: 常に現在の KC.State から取得（restore ステップ 1 で更新済み）
         restoredParams.view = KC.State.view;
-        var _dateToParamLocal = function (d, view) {
-          var y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
-          var pad = function (n) { return n < 10 ? '0' + n : String(n); };
-          return view === 'month'
-            ? (y + '-' + pad(m))
-            : (y + '-' + pad(m) + '-' + pad(day));
-        };
-        restoredParams.date = _dateToParamLocal(KC.State.current, KC.State.view);
+        // B-P3: インライン再実装 (_dateToParamLocal) を廃止し、同スコープの _dateToParam を使用する（DRY）
+        restoredParams.date = _dateToParam(KC.State.current, KC.State.view);
 
         // filter: 有効値が URL に存在した場合のみ書き戻す
         var urlFilter = params.filter;
@@ -8260,6 +8469,7 @@
       update: update,
       push: push,
       remove: remove,
+      batch: batch,          // P-8: 複数変更を 1 回の replaceState にまとめるトランザクション API
       restore: restore,
       syncViewDate: syncViewDate,
       parseDate: parseDate,        // [Medium] popstate ハンドラと共用（DRY）
@@ -8751,13 +8961,11 @@
       if (fsBtn) fsBtn.style.display = 'none';
       // FR-7: 全画面 ON = デフォルト状態のため fs パラメータを除去する（fs なし = 全画面）
       if (KC.UrlState) KC.UrlState.remove('fs');
-      // FR-5: 全画面切替後にセル高が変わるため月ビューのイベント配置を再計算する
-      // requestAnimationFrame でレイアウト確定後に実行する（refresh と同様のパターン）
-      if (KC.State.view === 'month' && KC.RenderMonth) {
-        requestAnimationFrame(function () {
-          KC.RenderMonth.placeMonthEvents();
-        });
-      }
+      // P-3: 全画面切替後にセル高が変わるため再描画する。
+      // KC.Render.renderGrid() を経由することで placeMonthEvents も 1 回だけスケジュールされる
+      // （renderGrid ファサード内の rAF + placeMonthEvents チェーンに委ねる）。
+      // データ再取得は不要なため refresh() ではなく renderGrid() を使用する。
+      KC.Render.renderGrid();
     },
 
     /** 全画面表示を解除 */
@@ -8769,17 +8977,14 @@
       if (fsBtn) fsBtn.style.display = '';
       // FR-7: 全画面解除 = 非デフォルト状態のため fs=0 を記録する（fs=0 = 全画面解除）
       if (KC.UrlState) KC.UrlState.update('fs', '0');
-      // FR-5: 全画面解除後にセル高が変わるため月ビューのイベント配置を再計算する
-      if (KC.State.view === 'month' && KC.RenderMonth) {
-        requestAnimationFrame(function () {
-          KC.RenderMonth.placeMonthEvents();
-        });
-      }
+      // P-3: 全画面解除後にセル高が変わるため再描画する（renderGrid 経由で placeMonthEvents も 1 回のみ実行）
+      KC.Render.renderGrid();
     },
 
     /**
      * prev/next ボタンの aria-label を現在の view に合わせて更新する（REQ_day-view §3.6）
      * view 切替時に KC.Render.refresh 経由で呼ばれるよう外部公開する
+     * P-10/B-P1: KC.State.els.prevBtn/nextBtn を優先参照し、DOM クエリを削減する
      */
     _updateNavAriaLabels: function () {
       var labels = {
@@ -8788,8 +8993,10 @@
         day:   { prev: '前の日', next: '次の日' }
       };
       var v = labels[KC.State.view] || labels.week;
-      var prevBtn = document.querySelector('[data-action="prev"]');
-      var nextBtn = document.querySelector('[data-action="next"]');
+      // KC.State.els が refreshEls() 後に確定している場合はキャッシュを使用する（DOM クエリ不要）
+      var els = KC.State.els || {};
+      var prevBtn = els.prevBtn || document.querySelector('[data-action="prev"]');
+      var nextBtn = els.nextBtn || document.querySelector('[data-action="next"]');
       if (prevBtn) prevBtn.setAttribute('aria-label', v.prev);
       if (nextBtn) nextBtn.setAttribute('aria-label', v.next);
     },
@@ -8816,39 +9023,50 @@
       KC.SearchFilter._refTableDefsLoaded = false;
       KC.SearchFilter._refTableDefs = {};
       KC.SearchFilter._relatedRecordsCache = {};
+      KC.SearchFilter._relatedRecordsFetchedAt = 0; // P-6: TTL キャッシュ用タイムスタンプ初期化
 
-      // REFERENCE_TABLE が searchTargets に含まれる場合はフィールド定義を先行取得する
+      // P-12: REFERENCE_TABLE フィールドが searchTargets に存在するかを事前フラグとして保持する
+      // _refreshImmediate での loadRelatedRecords 呼び出し判定に使用する
+      KC.SearchFilter._hasRefTableTarget = KC.SearchFilter._searchTargets.some(function (t) {
+        return t.fieldType === 'REFERENCE_TABLE';
+      });
+
+      // P-1/P-2: detectFields と detectAppName を並列実行して初期化レイテンシを削減する
+      // detectFields の戻り値（resp.properties）は P-2 で _loadRefTableDefs が再利用する
+      // detectAppName は calendarTitle 設定済みならスキップ
+      var detectAppNamePromise = KC.Config.CALENDAR_TITLE
+        ? Promise.resolve()
+        : KC.Config.detectAppName();
+
+      var fieldsProps = await KC.Config.detectFields(); // P-2: properties を受け取る
+
+      // P-1: detectAppName の完了を待つ（detectFields と並列実行した場合に未完了の可能性）
+      await detectAppNamePromise;
+
+      // P-2: REFERENCE_TABLE が searchTargets に含まれる場合は detectFields の結果を再利用して
+      // フィールド定義を取得する（同一エンドポイントへの重複 API コールを回避）
       // await して完了後に初期描画へ進むことで、初回描画時に _refTableDefs が空のまま
       // matchField が呼ばれる問題を防ぐ。失敗してもカレンダー表示には影響しない
-      if (KC.SearchFilter._searchTargets.length > 0) {
+      if (KC.SearchFilter._hasRefTableTarget) {
         try {
-          await KC.SearchFilter._loadRefTableDefs();
+          // fieldsProps が null（detectFields 失敗時）の場合は _loadRefTableDefs が自前で API を叩く
+          await KC.SearchFilter._loadRefTableDefs(fieldsProps);
         } catch (err) {
           console.warn('[KC.Boot] _loadRefTableDefs 失敗（継続）:', err);
         }
       }
 
-      // フィールド自動検出（KC_プレフィックスのフィールドを探す）
-      // プラグイン設定で必須フィールドが設定済みの場合もフィールド型の検出（START_FIELD_TYPE）に使用
-      await KC.Config.detectFields();
-
       // ログインユーザー情報をキャッシュ（権限判定に使用）
       // USER_SELECT のみ対応のため同期呼び出しで十分
       KC.LoginContext.init();
 
-      // アプリ名を REST API で取得（calendarTitle が設定済みの場合はスキップ）
-      // §10 Q5: calendarTitle が空文字なら detectAppName フォールバック
-      if (KC.Config.CALENDAR_TITLE) {
-        console.log('[KC.Boot] calendarTitle 設定済みのため detectAppName をスキップ');
-      } else {
-        await KC.Config.detectAppName();
-      }
-
-      // 祝日データを非同期取得（await しない: 初回はハードコードで即時描画し、取得完了後に再描画）
+      // P-13: 祝日データを非同期取得（await しない: 初回はハードコードで即時描画し、取得完了後に再描画）
       // CSP で外部 API がブロックされた場合は console.warn のみ出力して継続する
+      // 祝日データはグリッド描画関数内で KC.Holidays.getName() を参照するため
+      // renderGrid() のみで正しく反映される（loadEvents 不要）
       KC.Holidays.fetchHolidays().then(function () {
         if (KC.State.view === 'month' || KC.State.view === 'week' || KC.State.view === 'day') {
-          KC.Render.refresh();
+          KC.Render.renderGrid(); // P-13: refresh() → renderGrid()（loadEvents を省略して余分な API コール削減）
         }
       });
 
@@ -8932,10 +9150,10 @@
       // スクロールバー幅 → CSS変数
       this._setScrollbarVar();
       var self = this;
-      // リサイズ時: スクロールバー幅更新 + 月ビューのセル件数上限を再計算して再描画
+      // P-4: リサイズ時の _setScrollbarVar は ResizeObserver 側（kc-body 監視）に専任させる。
+      // window.resize ハンドラでは月ビュー再描画のみ行い、_setScrollbarVar の二重呼び出しを排除する。
       var _resizeTimer = null;
       window.addEventListener('resize', function () {
-        self._setScrollbarVar();
         clearTimeout(_resizeTimer);
         _resizeTimer = setTimeout(function () {
           if (KC.State.view === 'month' && KC.RenderMonth) {
@@ -9013,6 +9231,8 @@
       // pushState 系（record/new/more）: パラメータ消滅検知 → クローズ / 再オープン
       window.addEventListener('popstate', function () {
         if (KC.UrlState._isUpdatingHash()) return;  // 自己書き換え無視（FR-11）
+        // P-14: 外部からの popstate（ブラウザ戻る/進む）は _parseCurrent キャッシュを汚染するため
+        // KC.UrlState.parse を直接使って最新ハッシュを取得する（_parseCurrent は使わない）
         var params = KC.UrlState.parse(window.location.hash);
         // #kc: プレフィクスなし → 無視（AC-13）
         if (!window.location.hash || window.location.hash.indexOf('#kc:') !== 0) {
@@ -9116,7 +9336,7 @@
         bootSelf._insertSettingsButton();
       });
 
-      console.log('[KC.Boot] init complete');
+      _log('[KC.Boot] init complete');
     }
   };
 
@@ -9270,7 +9490,7 @@
           try { window.close(); } catch (e) { console.warn('[KC] cancel close failed:', e); }
         }, 100);
       });
-      console.log('[KC] cancel button listener attached:', btn.className || btn.tagName);
+      _log('[KC] cancel button listener attached:', btn.className || btn.tagName);
     }
 
     function _findAndAttach() {
