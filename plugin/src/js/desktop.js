@@ -142,6 +142,7 @@
      * kintone プラグイン設定から KC.Config の各値を上書きする (Phase 9: 2 階層設計対応)。
      * プラグイン設定が存在しない / version 2 未満の場合はハードコード値を維持する（フォールバック）。
      * KC.Boot.init の冒頭で呼び出すこと。
+     * @param {string|number|null} [viewId] - app.record.index.show イベントの event.viewId
      *
      * 保存形式 (version 6):
      *   getConfig 返り値の .config キーを JSON.parse した 2 階層オブジェクトを使用する
@@ -176,7 +177,7 @@
      * 旧フラット設定 (version キーなし): 破棄 (Q11 確定)。detectFields フォールバックへ。
      * (excludedStatuses は Phase 8 で廃止。旧設定値は無視する)
      */
-    loadFromPluginConfig: function () {
+    loadFromPluginConfig: function (viewId) {
       var rawConfig = kintone.plugin.app.getConfig(PLUGIN_ID);
 
       // 設定なし (初回インストール・設定未完了) はハードコード値を維持
@@ -221,11 +222,12 @@
       }
 
       // ビュー個別設定 (views[viewId]) を適用
-      // kintone.app.getViewId() は未検証の API のため try-catch で保護する
-      if (config.views) {
+      // viewId は app.record.index.show の event.viewId を引数として受け取る
+      // （kintone.app.getViewId() は存在しない API のため使用しない）
+      if (config.views && viewId != null) {
         try {
-          var viewId = String(kintone.app.getViewId());
-          var viewCfg = config.views[viewId];
+          var viewIdStr = String(viewId);
+          var viewCfg = config.views[viewIdStr];
           if (viewCfg) {
             // カレンダータイトル: 空文字なら detectAppName フォールバック
             if (viewCfg.calendarTitle && viewCfg.calendarTitle.trim()) {
@@ -240,11 +242,13 @@
               console.log('[KC.Config] defaultView (ビュー個別):', KC.State.view);
             }
           } else {
-            console.log('[KC.Config] views[' + viewId + '] なし。フォールバック動作');
+            console.log('[KC.Config] views[' + viewIdStr + '] なし。共通設定でフォールバック動作');
           }
         } catch (e) {
-          console.warn('[KC.Config] getViewId() 失敗。ビュー個別設定をスキップ:', e);
+          console.warn('[KC.Config] ビュー個別設定の適用に失敗。共通設定でフォールバック:', e);
         }
+      } else if (config.views && viewId == null) {
+        console.log('[KC.Config] viewId 未取得のためビュー個別設定をスキップ。共通設定を使用');
       }
 
       // 権限ユーザールール (version 2 以降) を適用
@@ -8750,8 +8754,11 @@
       if (nextBtn) nextBtn.setAttribute('aria-label', v.next);
     },
 
-    /** 初期化 */
-    init: async function () {
+    /**
+     * 初期化
+     * @param {string|number|null} [viewId] - app.record.index.show の event.viewId
+     */
+    init: async function (viewId) {
       var root = document.getElementById('kc-root');
       if (!root) return;
 
@@ -8760,7 +8767,7 @@
 
       // プラグイン設定を読み込み KC.Config を上書きする（detectFields より前に呼ぶ）
       // 設定なし / 必須フィールド未入力の場合はハードコード値を維持し、detectFields でフォールバック
-      KC.Config.loadFromPluginConfig();
+      KC.Config.loadFromPluginConfig(viewId);
 
       // SearchFilter の検索対象フィールドをプラグイン設定から初期化する（Phase 2）
       // searchTargets が空の場合は何もマッチしない動作になる（v7 以降はタイトルが初期値として設定済み）
@@ -9102,7 +9109,9 @@
     }
 
     KC.Boot._initialized = true;
-    KC.Boot.init(); // async だが return event は即座に返す
+    // event.viewId（kintone ビュー ID）をビュー個別設定の読み込みに使用する
+    // kintone.app.getViewId() は存在しないため event オブジェクトから取得する
+    KC.Boot.init(event.viewId); // async だが return event は即座に返す
     return event;
   });
 
