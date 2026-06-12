@@ -1352,6 +1352,17 @@
      * _close() 時に disconnect() してリークを防ぐ。
      */
     _saveObserver: null,
+    /**
+     * 現在開いている iframe の「正常ロード完了回数」カウンタ。
+     * 0 = まだ 1 度も許可 URL へ到達していない（初期ロード中 / リダイレクト中）。
+     * _show() 呼び出し時にリセット（0）。
+     * load ハンドラで _isAllowedUrl が true を返したときだけインクリメントする。
+     *
+     * 用途: 初回ロード中の cross-origin 例外（SAML/SSO リダイレクト等）を
+     * 「閉じる」ではなく「待機」として扱うための判定に使用する。
+     * _loadCount === 0 の間は cross-origin 例外でモーダルを閉じない。
+     */
+    _loadCount: 0,
 
     /**
      * sandbox 化した iframe 内の kintone「キャンセル」ボタンを検知してモーダルを閉じる。
@@ -1517,6 +1528,9 @@
      * @returns {boolean} 許可されていれば true
      */
     _isAllowedUrl: function (loc) {
+      // about:blank は中間状態であり、許可でも不許可でもない。false を返す。
+      // 呼び出し元で about:blank を先にスキップしているが、念のため防護。
+      if (!loc || loc.href === 'about:blank') return false;
       var appId = kintone.app.getId();
       var p = loc.pathname;
       var h = loc.hash;
@@ -1613,8 +1627,9 @@
     _show: function (url) {
       this._init();
 
-      // モーダルを開くときに保存待ちフラグをリセット（前回の状態が残らないようにする）
+      // モーダルを開くときに保存待ちフラグ・ロードカウンタをリセット（前回の状態が残らないようにする）
       this._savePending = false;
+      this._loadCount = 0;
 
       // 既に iframe が残っている場合は削除してからやり直す（連続クリック対応）
       if (this._iframe && this._iframe.parentNode) {
@@ -1675,6 +1690,10 @@
         try {
           var loc = iframe.contentWindow.location;
 
+          // about:blank は iframe 生成直後の初期状態であり監視不要。スキップ。
+          // （src 未設定の直後など、ブラウザによって load が発火する場合がある）
+          if (loc.href === 'about:blank') return;
+
           // 保存成功の検知（_savePending が true の状態で詳細表示 URL に遷移した場合）
           // キャンセル検知・一覧遷移検知より先に評価する
           if (KC.Popup._savePending && KC.Popup._isSaveSuccessUrl(loc)) {
@@ -1687,14 +1706,24 @@
             return;
           }
 
-          if (!KC.Popup._isAllowedUrl(loc)) {
+          if (KC.Popup._isAllowedUrl(loc)) {
+            // 許可 URL へ到達したことを記録（以降の cross-origin 例外は「閉じる」扱いにする）
+            KC.Popup._loadCount++;
+          } else {
             console.log('[KC.Popup] 許可外 URL への遷移を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
             KC.Popup._close();
           }
         } catch (e) {
-          // cross-origin 例外: 想定外ドメインへ遷移した（ログイン画面等）→ 閉じる
-          console.log('[KC.Popup] cross-origin 遷移を検知、モーダルを閉じます:', e);
-          KC.Popup._close();
+          // cross-origin 例外: iframe がまだリダイレクト中（SAML/SSO 等）の可能性がある。
+          // _loadCount === 0（まだ許可 URL へ一度も到達していない）場合は
+          // 初期ロード中の中間リダイレクトとみなして「待機」とし、モーダルを閉じない。
+          if (KC.Popup._loadCount === 0) {
+            console.log('[KC.Popup] 初期ロード中の cross-origin 状態を検知、到達を待機します:', e.message || e);
+          } else {
+            // 許可 URL 到達後に別ドメインへ遷移 → 閉じる
+            console.log('[KC.Popup] cross-origin 遷移を検知、モーダルを閉じます:', e);
+            KC.Popup._close();
+          }
         }
       });
 
@@ -1727,6 +1756,9 @@
         try {
           var loc = iframe.contentWindow.location;
 
+          // about:blank は初期状態 or リセット中。ポーリングでは無視してスキップ。
+          if (loc.href === 'about:blank') return;
+
           // 保存成功の検知（SPA 遷移で load が発火しないケースを補完）
           if (KC.Popup._savePending && KC.Popup._isSaveSuccessUrl(loc)) {
             console.log('[KC.Popup] ポーリング: 保存成功を検知、カレンダー再描画してモーダルを閉じます:', loc.pathname + loc.hash);
@@ -1738,14 +1770,22 @@
             return;
           }
 
-          if (!KC.Popup._isAllowedUrl(loc)) {
+          if (KC.Popup._isAllowedUrl(loc)) {
+            // 許可 URL に到達（load ハンドラが発火しなかったケースを補完）
+            KC.Popup._loadCount++;
+          } else {
             console.log('[KC.Popup] ポーリング: 許可外 URL を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
             KC.Popup._close();
           }
         } catch (e) {
-          // cross-origin 例外: 想定外ドメインへ遷移した（ログイン画面等）→ 閉じる
-          console.log('[KC.Popup] ポーリング: cross-origin 遷移を検知、モーダルを閉じます:', e);
-          KC.Popup._close();
+          // cross-origin 例外: _loadCount === 0 の間は初期リダイレクト中とみなして待機。
+          if (KC.Popup._loadCount === 0) {
+            console.log('[KC.Popup] ポーリング: 初期ロード中の cross-origin 状態を検知、到達を待機します:', e.message || e);
+          } else {
+            // 許可 URL 到達後に別ドメインへ遷移 → 閉じる
+            console.log('[KC.Popup] ポーリング: cross-origin 遷移を検知、モーダルを閉じます:', e);
+            KC.Popup._close();
+          }
         }
       }, 500);
     },
