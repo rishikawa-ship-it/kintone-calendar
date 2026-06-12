@@ -1180,7 +1180,7 @@
           app:    relatedAppId,
           query:  step3Query,
           // relatedJoinField（関連先側）と resourceField を取得する
-          fields: [relatedJoinField, resourceField]
+          fields: [relatedJoinField, resourceField].filter(Boolean)
         });
       } catch (step3Err) {
         console.warn('[KC.Api.checkOverlapQueryModeB] 関連先アプリへの GET 失敗:', step3Err);
@@ -7043,8 +7043,9 @@
           if (field.type !== 'REFERENCE_TABLE') return;
           var refTable = field.referenceTable;
           if (!refTable) return;
+          // displayFields の fieldCode が空文字 / null のエントリを除去する（カーソル作成時の CB_VA01 対策）
           var displayFields = Array.isArray(refTable.displayFields)
-            ? refTable.displayFields
+            ? refTable.displayFields.filter(function (df) { return df && df.fieldCode; })
             : [];
           this._refTableDefs[code] = {
             appId: refTable.relatedApp && refTable.relatedApp.app
@@ -7109,7 +7110,8 @@
           {
             app: def.appId,
             size: 500,
-            fields: def.displayFields.map(function (df) { return df.fieldCode; }).concat(['$id'])
+            // .filter(Boolean) で万一空文字・null が混入しても CB_VA01 エラーを防ぐ（二重防御）
+            fields: def.displayFields.map(function (df) { return df.fieldCode; }).concat(['$id']).filter(Boolean)
           }
         );
         cursorId = createResp.id;
