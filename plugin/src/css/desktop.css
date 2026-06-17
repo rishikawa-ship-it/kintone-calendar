@@ -26,7 +26,7 @@
    * --kc-font-size-ui:   ヘッダー UI ボタン・ドロップダウン等（base + 4px）
    * ここを変更するだけで対応要素の文字サイズが一括変更される */
   --kc-font-size-base: 12px;
-  --kc-font-size-ui:   16px;
+  --kc-font-size-ui:   14px;
 
   --kc-col-count: 7;
   --kc-hours: 24;
@@ -1249,7 +1249,7 @@ body.kc-dnd-active * {
 
 /* 検索アイコン（装飾のみ） */
 .kc-search-icon {
-  font-size: 10px;
+  font-size: 14px;
   color: #777;
   flex: 0 0 auto;
   line-height: 1;
@@ -1259,7 +1259,7 @@ body.kc-dnd-active * {
 .kc-search-input {
   border: none;
   outline: none;
-  font-size: 10px;
+  font-size: 14px;
   width: 160px;
   background: transparent;
   color: var(--kc-text);
@@ -1275,7 +1275,7 @@ body.kc-dnd-active * {
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 14px;
   color: #777;
   padding: 0 2px;
   line-height: 1;
@@ -1288,7 +1288,7 @@ body.kc-dnd-active * {
 /* 0件メッセージ */
 .kc-search-empty {
   padding: 8px 12px;
-  font-size: 10px;
+  font-size: 14px;
   color: var(--kc-subtext);
   text-align: center;
   border: 1px dashed var(--kc-border);
