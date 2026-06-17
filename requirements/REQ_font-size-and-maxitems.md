@@ -70,6 +70,7 @@
 | **月ビュー `+N more`** | `.kc-month-more` | 12px | 変更なし | 既に小さい、現状維持 |
 | **月ビュー 祝日名（セル内）** | `.kc-month-holiday-name` | 12px | 変更なし | 既に小さい、現状維持 |
 | **祝日名（週/日ビューヘッダー）** | `.kc-holiday-name` | 12px | 変更なし | 既に小さい、現状維持 |
+| **ポップオーバー × ボタン** | `.kc-month-overflow-close` | 16px | **14px** | Q-3 対象（UI ボタン類） |
 | **設定ボタン** | `.kc-settings-btn` | 23px | 変更なし | 歯車アイコン用、現状維持 |
 | **検索欄・入力・クリア** | `.kc-search-input`, `.kc-search-clear`, `.kc-search-icon` | 14px | 変更なし | 既に 14px、変更なし |
 | **検索プルダウン各行** | `.kc-search-dropdown-item-title` | 14px | 変更なし | 現状維持 |
