@@ -4797,22 +4797,24 @@
     var MAX_CELL_ITEMS = 5;
 
     /**
-     * セル実高から表示可能な最大イベント件数を動的計算する（ダミー要素実測版）
+     * セル実高から表示可能な最大イベント件数を動的計算する（ダミー要素実測版・統一ピッチ方式）
      * DOM が未構築の場合は MAX_CELL_ITEMS をフォールバックとして返す
      *
-     * 計算前提:
-     *   - 月ビューはセル内に [日付行 + 終日バー領域 + chip 群 + +N more] が縦積み
-     *   - placeMonthEvents は冒頭で chip/more を全削除してから本関数を呼ぶため、
-     *     DOM 上に計測対象が存在しない。ダミー要素を一時挿入して getBoundingClientRect で
-     *     実高を取得し即削除する（呼び出しタイミングに依存しない安定実測）
-     *   - dateHeadH: .kc-month-dateline の実高（DOM 上に常に存在、フォールバック 28px）
-     *   - itemH: ダミー .kc-month-chip の実高 + margin-top（フォールバック BAR_H + 1）
-     *   - moreH: ダミー .kc-month-more の実高 + margin-top（フォールバック 20px）
+     * 設計: chip・adbar・span バーの縦ピッチを BAR_H + BAR_GAP = 23px に統一する
+     *   - adLayer バー（終日/span）: lane * (BAR_H + BAR_GAP) でピッチ 23px
+     *   - chip（.kc-month-chip）: CSS height = BAR_H(20px), margin-top = BAR_GAP(3px) → ピッチ 23px
+     *   - spacer: usedSlots * BAR_H + (usedSlots-1) * BAR_GAP = usedSlots * 23 - 3
+     *     （= adLayer 最下バーの底端高さと一致）
+     *   ⇒ 全スロットが同一ピッチなので available / PITCH が正確な収容本数になる
      *
-     * BAR_GAP 二重加算について:
-     *   chip の積み上げ間隔は CSS の margin-top: 1px のみ（BAR_GAP=3 は ad-bar 専用変数）。
-     *   getBoundingClientRect はマージンを含まないため、itemH = chipH + 1（margin-top）が正確値。
-     *   BAR_GAP は chip スタック計算には使用しない。
+     * PITCH 実測方式:
+     *   placeMonthEvents 冒頭で chip/more を全削除するため DOM 上に計測対象が存在しない。
+     *   ダミー chip を 2 本 in-flow（visibility:hidden）で挿入し、getBoundingClientRect の
+     *   top 差分でピッチを実測する。CSS の height・margin-top 変更に自動追従する。
+     *
+     *   dateHeadH: .kc-month-dateline は削除されないため常に実測可能。
+     *   moreH: ダミー .kc-month-more を 1 本 in-flow 挿入して実測。
+     *
      * @returns {number} 最低 0、最大 10
      */
     function _calcMaxItems() {
@@ -4834,39 +4836,42 @@
       // --- padding: セル自体の上下 padding ---
       var padding = 4;  // CSS: padding: 2px → 上下計 4px
 
-      // --- itemH: ダミー chip 1 本の実高 + margin-top で積み上げ 1 段分を計測 ---
-      // chip は placeMonthEvents 冒頭で削除済み → ダミーを一時挿入して実測
-      var itemH = BAR_H + 1;  // フォールバック（height:20px + margin-top:1px）
-      var dummyChip = document.createElement('div');
-      dummyChip.className = 'kc-month-chip';
-      dummyChip.style.cssText = 'visibility:hidden;position:absolute;left:-9999px;';
-      firstCell.appendChild(dummyChip);
+      // --- PITCH: chip・adbar 共通レーンピッチを 2 枚 in-flow ダミーの top 差分で実測 ---
+      // chip は placeMonthEvents 冒頭で削除済み → ダミー 2 枚を in-flow（visibility:hidden）で挿入
+      // top 差分 = height + margin-top = 実際の 1 レーン占有高（BAR_H + BAR_GAP）に一致
+      var PITCH = BAR_H + BAR_GAP;  // フォールバック（20 + 3 = 23px）
+      var dummy1 = document.createElement('div');
+      var dummy2 = document.createElement('div');
+      dummy1.className = 'kc-month-chip';
+      dummy2.className = 'kc-month-chip';
+      dummy1.style.cssText = 'visibility:hidden;';
+      dummy2.style.cssText = 'visibility:hidden;';
+      firstCell.appendChild(dummy1);
+      firstCell.appendChild(dummy2);
       try {
-        var chipH = dummyChip.getBoundingClientRect().height;
-        if (chipH > 0) {
-          // margin-top: 1px は getBoundingClientRect に含まれない → 手動加算
-          var chipMarginTop = 1;
-          var cs = window.getComputedStyle(dummyChip);
-          var mTop = parseFloat(cs.marginTop);
-          if (!isNaN(mTop)) chipMarginTop = mTop;
-          itemH = chipH + chipMarginTop;
-        }
+        var t1 = dummy1.getBoundingClientRect().top;
+        var t2 = dummy2.getBoundingClientRect().top;
+        var diff = t2 - t1;
+        if (diff > 0) PITCH = diff;
       } finally {
-        firstCell.removeChild(dummyChip);
+        firstCell.removeChild(dummy1);
+        firstCell.removeChild(dummy2);
       }
 
-      // --- moreH: ダミー .kc-month-more の実高 + margin-top ---
-      // more も placeMonthEvents 冒頭で削除済み → ダミーを一時挿入して実測
+      // --- moreH: ダミー .kc-month-more の実占有高（実高 + margin-top）---
+      // more も placeMonthEvents 冒頭で削除済み → ダミーを in-flow で挿入して実測
       var moreH = 20;  // フォールバック
       var dummyMore = document.createElement('div');
       dummyMore.className = 'kc-month-more';
-      dummyMore.style.cssText = 'visibility:hidden;position:absolute;left:-9999px;';
+      dummyMore.style.cssText = 'visibility:hidden;';
       dummyMore.textContent = '+1 more';
       firstCell.appendChild(dummyMore);
       try {
+        // more の占有高 = セル内での「前の要素 bottom」から「more bottom」までの距離
+        // ここでは margin-top 込みの実占有分として (mH + margin) を計算する
         var mH = dummyMore.getBoundingClientRect().height;
         if (mH > 0) {
-          var moreMarginTop = 1;
+          var moreMarginTop = 1;  // フォールバック（.kc-month-more: margin-top: 1px）
           var mcs = window.getComputedStyle(dummyMore);
           var mmTop = parseFloat(mcs.marginTop);
           if (!isNaN(mmTop)) moreMarginTop = mmTop;
@@ -4881,7 +4886,7 @@
       // 呼び出し元で hiddenCount > 0 なら more が追加され、more 単体（dateline + more ≈ 48px）は
       // min-height(90px) 未満の極小セルでも収まる。
       if (available <= 0) return 0;
-      var max = Math.floor(available / itemH);
+      var max = Math.floor(available / PITCH);
       return Math.min(max, 10);
     }
 

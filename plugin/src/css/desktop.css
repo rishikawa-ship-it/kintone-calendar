@@ -21,12 +21,12 @@
   --kc-sticky-shadow: 0 1px 0 rgba(0,0,0,.05), 0 2px 4px rgba(0,0,0,.05);
   --kc-radius: 12px;
 
-  /* フォントサイズ変数（REQ_font-size-and-maxitems: 16px → 14px 縮小）
-   * --kc-font-size-base: カレンダーコンテンツ本体（予定バー・chip・曜日ヘッダー・日付等）
-   * --kc-font-size-ui:   ヘッダー UI ボタン・ドロップダウン等（操作性維持のため同値）
-   * ここを変更するだけで全カレンダー要素の文字サイズが連動する */
+  /* フォントサイズ変数
+   * --kc-font-size-base: カレンダーコンテンツ本体（予定バー・chip・曜日ヘッダー・日付等）= 14px
+   * --kc-font-size-ui:   ヘッダー UI ボタン・ドロップダウン等（視認性向上のため base + 4px）= 18px
+   * ここを変更するだけで対応要素の文字サイズが一括変更される */
   --kc-font-size-base: 14px;
-  --kc-font-size-ui:   14px;
+  --kc-font-size-ui:   18px;
 
   --kc-col-count: 7;
   --kc-hours: 24;
@@ -937,7 +937,7 @@ body.kc-dnd-active * {
   border-radius: 10px;
   overflow: hidden;
   white-space: nowrap;
-  margin-top: 1px;
+  margin-top: var(--kc-ad-bar-gap);  /* chip ピッチ = BAR_H + BAR_GAP = adLayer バーのレーンピッチと統一 */
   pointer-events: auto;
   flex: 0 0 auto;
   position: relative;
@@ -1582,12 +1582,12 @@ body.kc-dnd-active * {
   text-decoration: underline;
 }
 
-/* × 閉じるボタン */
+/* × 閉じるボタン（ポップオーバー内 UI のためヘッダー UI と切り離し、base サイズに据え置き） */
 .kc-month-overflow-close {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: var(--kc-font-size-ui);
+  font-size: var(--kc-font-size-base);  /* --kc-font-size-ui(18px) だと × が大きすぎるため base(14px) で固定 */
   color: #6b7280;
   padding: 2px 6px;
   border-radius: 4px;
