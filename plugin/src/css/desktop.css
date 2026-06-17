@@ -25,8 +25,8 @@
    * --kc-font-size-base: カレンダーコンテンツ本体（予定バー・chip・曜日ヘッダー・日付等）= 14px
    * --kc-font-size-ui:   ヘッダー UI ボタン・ドロップダウン等（視認性向上のため base + 4px）= 18px
    * ここを変更するだけで対応要素の文字サイズが一括変更される */
-  --kc-font-size-base: 14px;
-  --kc-font-size-ui:   18px;
+  --kc-font-size-base: 10px;
+  --kc-font-size-ui:   14px;
 
   --kc-col-count: 7;
   --kc-hours: 24;
@@ -132,7 +132,7 @@
 .kc-range {
   white-space: nowrap;
   font-weight: 600;
-  font-size: 20px;
+  font-size: 16px;
 }
 
 /* ==========================================================================
@@ -164,7 +164,7 @@
   text-align: center;
   border: none;
   border-radius: 50%;
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 400;
 }
 .kc-btn--icon:hover {
@@ -401,7 +401,7 @@
   justify-content: center;
   cursor: pointer;
   pointer-events: auto;
-  font-size: 12px;
+  font-size: 8px;
   color: var(--kc-subtext);
   gap: 4px;
   white-space: nowrap;
@@ -451,7 +451,7 @@
 }
 
 .kc-time {
-  font-size: 12px;
+  font-size: 8px;
   color: var(--kc-subtext);
   padding: 2px 4px;
   border-bottom: 1px solid var(--kc-border);
@@ -531,7 +531,7 @@
 }
 .kc-event .kc-evt-meta {
   color: var(--kc-subtext);
-  font-size: 12px;
+  font-size: 8px;
   line-height: 1.25;
   margin-top: 1px;
 }
@@ -595,7 +595,7 @@
 
 /* ゴーストバー内の時刻ラベル（終日予定: "M/D ~ M/D"、時間予定: "HH:MM〜HH:MM"） */
 .kc-evt-ghost-time {
-  font-size: 12px;
+  font-size: 8px;
   font-weight: 600;
   margin-top: 2px;
   opacity: 0.9;
@@ -777,7 +777,7 @@ body.kc-dnd-active * {
 .kc-adcell--holiday { background: rgba(229, 62, 62, 0.03); }
 
 /* 祝日名表示 */
-.kc-holiday-name { font-size: 12px; color: #e53e3e; font-weight: 400; }
+.kc-holiday-name { font-size: 8px; color: #e53e3e; font-weight: 400; }
 
 /* ---------- 14. kintone 標準UIの非表示（カレンダービュー不要要素） ---------- */
 .gaia-argoui-app-index-pager {
@@ -973,7 +973,7 @@ body.kc-dnd-active * {
 
 /* +N more ラベル */
 .kc-month-more {
-  font-size: 12px;
+  font-size: 8px;
   color: var(--kc-subtext);
   padding: 1px 4px;
   cursor: pointer;
@@ -1049,7 +1049,7 @@ body.kc-dnd-active * {
  * flex: 1 で残幅を占有し、ellipsis で末尾を詰める。
  */
 .kc-month-holiday-name {
-  font-size: 12px;
+  font-size: 8px;
   color: #e53e3e;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1209,7 +1209,7 @@ body.kc-dnd-active * {
   border-radius: 5px;
   padding: 5px 10px;
   cursor: pointer;
-  font-size: 23px;
+  font-size: 19px;
   line-height: 1;
   color: #4a5568;
   margin-left: 8px;
@@ -1250,7 +1250,7 @@ body.kc-dnd-active * {
 
 /* 検索アイコン（装飾のみ） */
 .kc-search-icon {
-  font-size: 14px;
+  font-size: 10px;
   color: #777;
   flex: 0 0 auto;
   line-height: 1;
@@ -1260,7 +1260,7 @@ body.kc-dnd-active * {
 .kc-search-input {
   border: none;
   outline: none;
-  font-size: 14px;
+  font-size: 10px;
   width: 160px;
   background: transparent;
   color: var(--kc-text);
@@ -1276,7 +1276,7 @@ body.kc-dnd-active * {
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 10px;
   color: #777;
   padding: 0 2px;
   line-height: 1;
@@ -1289,7 +1289,7 @@ body.kc-dnd-active * {
 /* 0件メッセージ */
 .kc-search-empty {
   padding: 8px 12px;
-  font-size: 14px;
+  font-size: 10px;
   color: var(--kc-subtext);
   text-align: center;
   border: 1px dashed var(--kc-border);
@@ -1360,7 +1360,7 @@ body.kc-dnd-active * {
 
 /* 日時テキスト */
 .kc-search-dropdown-item-date {
-  font-size: 12px;
+  font-size: 8px;
   color: #6b7280;
   margin-bottom: 2px;
 }
@@ -1372,7 +1372,7 @@ body.kc-dnd-active * {
 
 /* タイトルテキスト */
 .kc-search-dropdown-item-title {
-  font-size: 14px;
+  font-size: 10px;
   color: #1f2937;
   font-weight: 500;
 }
@@ -1382,7 +1382,7 @@ body.kc-dnd-active * {
   padding: 16px;
   text-align: center;
   color: #6b7280;
-  font-size: 13px;
+  font-size: 9px;
 }
 
 /* ==========================================================================
@@ -1437,7 +1437,7 @@ body.kc-dnd-active * {
 .kc-modal-close {
   background: none;
   border: none;
-  font-size: 20px;
+  font-size: 16px;
   line-height: 1;
   cursor: pointer;
   color: #6b7280;
@@ -1462,7 +1462,7 @@ body.kc-dnd-active * {
   border: 1px solid #fca5a5;
   border-radius: 6px;
   margin: 6px 0;
-  font-size: 13px;
+  font-size: 9px;
   color: #991b1b;
   line-height: 1.4;
 }
@@ -1486,7 +1486,7 @@ body.kc-dnd-active * {
   border-radius: 4px;
   background: #fff;
   color: #991b1b;
-  font-size: 12px;
+  font-size: 8px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
@@ -1498,7 +1498,7 @@ body.kc-dnd-active * {
 
 .kc-error-banner__btn--close {
   padding: 3px 7px;
-  font-size: 14px;
+  font-size: 10px;
   font-weight: bold;
   line-height: 1;
 }
@@ -1517,7 +1517,7 @@ body.kc-dnd-active * {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 10px;
   color: #6b7280;
   background: #fff;
   z-index: 1;
@@ -1572,7 +1572,7 @@ body.kc-dnd-active * {
 
 /* 日付テキスト（クリックで日ビュー遷移） */
 .kc-month-overflow-header-label {
-  font-size: 14px;
+  font-size: 10px;
   font-weight: 600;
   color: #1f2937;
   cursor: pointer;
@@ -1587,7 +1587,7 @@ body.kc-dnd-active * {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: var(--kc-font-size-base);  /* --kc-font-size-ui(18px) だと × が大きすぎるため base(14px) で固定 */
+  font-size: var(--kc-font-size-base);  /* --kc-font-size-ui(14px) だと × が大きすぎるため base(10px) で固定 */
   color: #6b7280;
   padding: 2px 6px;
   border-radius: 4px;
@@ -1623,7 +1623,7 @@ body.kc-dnd-active * {
 
 /* 終日予定の色付きバー本体 */
 .kc-month-overflow-bar {
-  font-size: 13px;
+  font-size: 9px;
   padding: 3px 6px;
   border-radius: 4px;
   color: #ffffff;
@@ -1651,7 +1651,7 @@ body.kc-dnd-active * {
 
 /* 複数日 span 終日予定の期間ラベル */
 .kc-month-overflow-span-label {
-  font-size: 11px;
+  font-size: 8px;  /* 旧 11px - 4px = 7px → 8px 下限クランプ */
   color: #6b7280;
   padding: 1px 6px 2px;
 }
@@ -1675,14 +1675,14 @@ body.kc-dnd-active * {
 
 /* 開始時刻 */
 .kc-month-overflow-time {
-  font-size: 12px;
+  font-size: 8px;
   color: #6b7280;
   flex: 0 0 auto;
 }
 
 /* 予定タイトル */
 .kc-month-overflow-title {
-  font-size: 12px;
+  font-size: 8px;
   color: #1f2937;
   overflow: hidden;
   text-overflow: ellipsis;
