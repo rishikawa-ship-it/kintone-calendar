@@ -21,16 +21,23 @@
   --kc-sticky-shadow: 0 1px 0 rgba(0,0,0,.05), 0 2px 4px rgba(0,0,0,.05);
   --kc-radius: 12px;
 
+  /* フォントサイズ変数（REQ_font-size-and-maxitems: 16px → 14px 縮小）
+   * --kc-font-size-base: カレンダーコンテンツ本体（予定バー・chip・曜日ヘッダー・日付等）
+   * --kc-font-size-ui:   ヘッダー UI ボタン・ドロップダウン等（操作性維持のため同値）
+   * ここを変更するだけで全カレンダー要素の文字サイズが連動する */
+  --kc-font-size-base: 14px;
+  --kc-font-size-ui:   14px;
+
   --kc-col-count: 7;
   --kc-hours: 24;
   --kc-hour-height: 60px;
-  --kc-allday-h: 110px;         /* 折りたたみ時の最大高（3レーン分）: 4+27*3-3+4+24=110 */
-  --kc-allday-lane-h: 27px;     /* 1レーン分の高さ（bar-h + bar-gap = 24 + 3） */
-  --kc-ad-bar-h: 24px;          /* 終日イベントバー 1本の高さ（font-size 16px 対応で 22→24px） */
+  --kc-allday-h: 98px;          /* 折りたたみ時の最大高（3レーン分）: 4+23*3-3+4+24=98 (14px フォント対応: 旧 110px) */
+  --kc-allday-lane-h: 23px;     /* 1レーン分の高さ（bar-h + bar-gap = 20 + 3、旧 27px） */
+  --kc-ad-bar-h: 20px;          /* 終日イベントバー 1本の高さ（font-size 14px 対応: 旧 24px） */
   --kc-ad-bar-gap: 3px;         /* バー間の縦隙間 */
   --kc-ad-bar-top: 4px;         /* .kc-ad-events 上端からの最初のバーまでのオフセット */
   --kc-month-cell-min-h: 90px;  /* 月ビュー: セルの最小高（REQ_month-view §7.1 確定値） */
-  --kc-month-dateline-h: 28px;  /* 月ビュー: 日付行（dateline）の確保高（祝日名インライン対応で 24px + 4px バッファ） */
+  --kc-month-dateline-h: 24px;  /* 月ビュー: 日付行（dateline）の確保高（14px フォント対応: 旧 28px） */
   --kc-fullscreen-header-h: 0px; /* 全画面時 kintone ヘッダー高（kc-expanded は fixed で隠れるため 0px） */
   --kc-allday-toggle-h: 24px;   /* 行下部横断トグルバーの高さ */
   --kc-header-h: 48px;
@@ -137,7 +144,7 @@
   border-radius: 10px;
   height: 38px;
   padding: 0 18px;
-  font-size: 16px;
+  font-size: var(--kc-font-size-ui);
   cursor: pointer;
   transition: background .2s, border-color .2s;
 }
@@ -179,7 +186,7 @@
   border-radius: 10px;
   height: 38px;
   padding: 0 20px;
-  font-size: 16px;
+  font-size: var(--kc-font-size-ui);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -193,7 +200,7 @@
 }
 
 .kc-caret {
-  font-size: 16px;
+  font-size: var(--kc-font-size-ui);
   opacity: .8;
 }
 
@@ -217,7 +224,7 @@
 .kc-option {
   padding: 10px 12px;
   border-radius: 8px;
-  font-size: 16px;
+  font-size: var(--kc-font-size-ui);
   cursor: pointer;
 }
 .kc-option:hover  { background: #e9ecef; }
@@ -230,7 +237,7 @@
   border-radius: 10px;
   height: 38px;
   padding: 0 18px;
-  font-size: 16px;
+  font-size: var(--kc-font-size-ui);
   cursor: pointer;
   white-space: nowrap;
   transition: border-color .2s;
@@ -282,7 +289,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   line-height: 1;
 }
 .kc-days .kc-day .kc-day-head .w {
@@ -296,7 +303,7 @@
   width: 28px;
   height: 28px;
   border-radius: 999px;
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   font-weight: 700;
 }
 .kc-days .kc-day .kc-day-head.is-today .num {
@@ -304,8 +311,8 @@
   color: #fff;
 }
 
-.kc-day .kc-day-label { font-weight: 600; font-size: 16px; }
-.kc-day .kc-day-sub   { color: var(--kc-subtext); font-size: 16px; }
+.kc-day .kc-day-label { font-weight: 600; font-size: var(--kc-font-size-base); }
+.kc-day .kc-day-sub   { color: var(--kc-subtext); font-size: var(--kc-font-size-base); }
 
 /* ==========================================================================
  * 6. All-Day Slot
@@ -369,7 +376,7 @@
   border: 1px solid var(--kc-border);
   border-radius: 10px;
   padding: 0 8px;
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -418,7 +425,7 @@
 
 /* 件名（Google カレンダー方式: 単一行・件名のみ表示） */
 .kc-ad-evt-title {
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -508,7 +515,7 @@
   border: 1px solid var(--kc-border);
   background: #dbeafe;
   padding: 4px 8px;
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   line-height: 1.25;
   overflow: hidden;
   white-space: normal;
@@ -519,7 +526,7 @@
 }
 .kc-event .kc-evt-title {
   font-weight: 700;
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   line-height: 1.25;
 }
 .kc-event .kc-evt-meta {
@@ -700,7 +707,7 @@ body.kc-dnd-active * {
   border: 1px solid #1a73e8;
   background: #1a73e8;
   color: #fff;
-  font-size: 16px;
+  font-size: var(--kc-font-size-ui);
   font-weight: 600;
   display: inline-flex;
   align-items: center;
@@ -726,7 +733,7 @@ body.kc-dnd-active * {
   border-radius: 10px;
   background: #fff;
   color: #e53e3e;
-  font-size: 16px;
+  font-size: var(--kc-font-size-ui);
   font-weight: 600;
   cursor: pointer;
   transition: background .2s, border-color .2s;
@@ -804,7 +811,7 @@ body.kc-dnd-active * {
 /* 曜日ラベルセル */
 .kc-month-dayhead {
   text-align: center;
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   color: var(--kc-subtext);
   font-weight: 600;
   padding: 6px 0;
@@ -888,13 +895,13 @@ body.kc-dnd-active * {
   white-space: nowrap;
   overflow: hidden;
   flex: 0 0 auto;
-  min-height: var(--kc-month-dateline-h, 28px);
+  min-height: var(--kc-month-dateline-h, 24px);
   padding-bottom: 4px; /* 日付ヘッダーと終日バー/chip エリアの間の余白 */
 }
 
 /* セル内日付数字（左上）*/
 .kc-month-datehead {
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   font-weight: 500;
   text-align: center;
   padding: 2px;
@@ -913,7 +920,7 @@ body.kc-dnd-active * {
   position: absolute;
   left: 0;
   right: 0;
-  top: calc(var(--kc-month-dateline-h, 28px) + 4px); /* dateline min-height + padding-bottom 分 */
+  top: calc(var(--kc-month-dateline-h, 24px) + 4px); /* dateline min-height + padding-bottom 分 */
   pointer-events: none;
   z-index: 1;
 }
@@ -923,7 +930,8 @@ body.kc-dnd-active * {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 16px;
+  height: var(--kc-ad-bar-h);   /* BAR_H と高さ一致（JS の _calcMaxItems と連動） */
+  font-size: var(--kc-font-size-base);
   padding: 1px 4px;
   cursor: grab;
   border-radius: 10px;
@@ -949,7 +957,7 @@ body.kc-dnd-active * {
 
 /* chip の時刻 */
 .kc-month-chip-time {
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   flex: 0 0 auto;
   color: var(--kc-subtext);
 }
@@ -1109,7 +1117,8 @@ body.kc-dnd-active * {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 16px;
+  height: var(--kc-ad-bar-h);   /* BAR_H と高さ一致（JS の _calcMaxItems と連動） */
+  font-size: var(--kc-font-size-base);
   padding: 1px 6px;
   border-radius: 10px;
   overflow: hidden;
@@ -1128,7 +1137,7 @@ body.kc-dnd-active * {
 
 /* 時刻テキスト */
 .kc-month-chip--span-time {
-  font-size: 16px;
+  font-size: var(--kc-font-size-base);
   flex: 0 0 auto;
   color: inherit;
   opacity: 0.8;
@@ -1578,7 +1587,7 @@ body.kc-dnd-active * {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 16px;
+  font-size: var(--kc-font-size-ui);
   color: #6b7280;
   padding: 2px 6px;
   border-radius: 4px;

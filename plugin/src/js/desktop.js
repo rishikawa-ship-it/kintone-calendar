@@ -2070,7 +2070,7 @@
      * @param {number} lane - レーン番号（元バーの lane）
      */
     function _positionAlldayGhost(ghost, colStart, span, lane, colCount) {
-      var BAR_H   = 24;
+      var BAR_H   = 20;  /* --kc-ad-bar-h (font-size 14px 対応: 旧 24px) */
       var BAR_GAP = 3;
       var BAR_TOP = 4;
       var cc = colCount || _getWeekYMDs().length || 7;
@@ -3823,7 +3823,7 @@
      */
     function buildAlldayBar(ev, locator) {
       var colCount = (locator && locator.colCount > 0) ? locator.colCount : 7;
-      var BAR_H   = 24;
+      var BAR_H   = 20;  /* --kc-ad-bar-h (font-size 14px 対応: 旧 24px) */
       var BAR_GAP = 3;
       var BAR_TOP = 4;
 
@@ -4184,7 +4184,7 @@
       // ===== 行高の動的制御（AC 4.10・4.11・4.12 対応）=====
       if (alldayWrap) {
         // 高さ計算定数（CSS 変数と同値）
-        var BAR_H    = 24;   /* --kc-ad-bar-h */
+        var BAR_H    = 20;   /* --kc-ad-bar-h (font-size 14px 対応: 旧 24px) */
         var BAR_GAP  = 3;    /* --kc-ad-bar-gap */
         var BAR_TOP  = 4;    /* --kc-ad-bar-top */
         var BAR_BTM  = 4;    /* 下部パディング */
@@ -4787,7 +4787,7 @@
     }
 
     // バー高さ定数（週ビューの buildAlldayBar と同値）
-    var BAR_H   = 24;  /* --kc-ad-bar-h */
+    var BAR_H   = 20;  /* --kc-ad-bar-h (font-size 14px 対応: 旧 24px) */
     var BAR_GAP = 3;   /* --kc-ad-bar-gap */
     // BAR_TOP: .kc-month-ad-events の top が CSS で --kc-month-dateline-h (28px) に設定されたため
     // adLayer 自体が dateline の下から始まる。バー個別の top オフセットは 0 で OK。
@@ -4797,17 +4797,23 @@
     var MAX_CELL_ITEMS = 5;
 
     /**
-     * セル実高から表示可能な最大イベント件数を動的計算する
+     * セル実高から表示可能な最大イベント件数を動的計算する（ダミー要素実測版）
      * DOM が未構築の場合は MAX_CELL_ITEMS をフォールバックとして返す
      *
      * 計算前提:
      *   - 月ビューはセル内に [日付行 + 終日バー領域 + chip 群 + +N more] が縦積み
-     *   - .kc-month-dateline の min-height は 28px だが padding-bottom:4px (content-box) で
-     *     flex 上の占有高は 32px になる
-     *   - itemH は 1 件分の高さ（chip = BAR_H + BAR_GAP, 暗黙的に終日バーと同等）
-     *   - moreH は +N more の flex 占有高（font 12px × lh ≈ 1.4 + padding 2px + margin-top 1px ≈ 20px）
-     *   - .kc-month-ad-events の top が CSS で 28px に固定されるため safety マージンは不要
-     * @returns {number} 最低 1、最大 10
+     *   - placeMonthEvents は冒頭で chip/more を全削除してから本関数を呼ぶため、
+     *     DOM 上に計測対象が存在しない。ダミー要素を一時挿入して getBoundingClientRect で
+     *     実高を取得し即削除する（呼び出しタイミングに依存しない安定実測）
+     *   - dateHeadH: .kc-month-dateline の実高（DOM 上に常に存在、フォールバック 28px）
+     *   - itemH: ダミー .kc-month-chip の実高 + margin-top（フォールバック BAR_H + 1）
+     *   - moreH: ダミー .kc-month-more の実高 + margin-top（フォールバック 20px）
+     *
+     * BAR_GAP 二重加算について:
+     *   chip の積み上げ間隔は CSS の margin-top: 1px のみ（BAR_GAP=3 は ad-bar 専用変数）。
+     *   getBoundingClientRect はマージンを含まないため、itemH = chipH + 1（margin-top）が正確値。
+     *   BAR_GAP は chip スタック計算には使用しない。
+     * @returns {number} 最低 0、最大 10
      */
     function _calcMaxItems() {
       // _monthRoot スコープで検索（document-wide 検索は切り離されたツリーの要素を拾うリスクあり）
@@ -4815,13 +4821,64 @@
       if (!firstCell) return MAX_CELL_ITEMS;
       var cellH = firstCell.getBoundingClientRect().height;
       if (!cellH || cellH <= 0) return MAX_CELL_ITEMS;
-      var dateHeadH = 32;        // dateline 占有高: min-height(28px) + padding-bottom(4px, content-box)
-      var padding   = 4;         // セル padding 上下合計（CSS: padding 2px × 2）
-      var moreH     = 20;        // +N more 行占有高（font 12px×lh + padding 2px + margin-top 1px ≈ 20px）
-      var itemH     = BAR_H + BAR_GAP; // 1 件あたりの高さ（27px）
+
+      // --- dateHeadH: 日付行（dateline）の実占有高 ---
+      // dateline は placeMonthEvents で削除されないため常に DOM 上に存在する
+      var dateHeadH = 28;  // フォールバック（dateline min-height 24px + padding-bottom 4px）
+      var dateline = firstCell.querySelector('.kc-month-dateline');
+      if (dateline) {
+        var dlH = dateline.getBoundingClientRect().height;
+        if (dlH > 0) dateHeadH = dlH;
+      }
+
+      // --- padding: セル自体の上下 padding ---
+      var padding = 4;  // CSS: padding: 2px → 上下計 4px
+
+      // --- itemH: ダミー chip 1 本の実高 + margin-top で積み上げ 1 段分を計測 ---
+      // chip は placeMonthEvents 冒頭で削除済み → ダミーを一時挿入して実測
+      var itemH = BAR_H + 1;  // フォールバック（height:20px + margin-top:1px）
+      var dummyChip = document.createElement('div');
+      dummyChip.className = 'kc-month-chip';
+      dummyChip.style.cssText = 'visibility:hidden;position:absolute;left:-9999px;';
+      firstCell.appendChild(dummyChip);
+      try {
+        var chipH = dummyChip.getBoundingClientRect().height;
+        if (chipH > 0) {
+          // margin-top: 1px は getBoundingClientRect に含まれない → 手動加算
+          var chipMarginTop = 1;
+          var cs = window.getComputedStyle(dummyChip);
+          var mTop = parseFloat(cs.marginTop);
+          if (!isNaN(mTop)) chipMarginTop = mTop;
+          itemH = chipH + chipMarginTop;
+        }
+      } finally {
+        firstCell.removeChild(dummyChip);
+      }
+
+      // --- moreH: ダミー .kc-month-more の実高 + margin-top ---
+      // more も placeMonthEvents 冒頭で削除済み → ダミーを一時挿入して実測
+      var moreH = 20;  // フォールバック
+      var dummyMore = document.createElement('div');
+      dummyMore.className = 'kc-month-more';
+      dummyMore.style.cssText = 'visibility:hidden;position:absolute;left:-9999px;';
+      dummyMore.textContent = '+1 more';
+      firstCell.appendChild(dummyMore);
+      try {
+        var mH = dummyMore.getBoundingClientRect().height;
+        if (mH > 0) {
+          var moreMarginTop = 1;
+          var mcs = window.getComputedStyle(dummyMore);
+          var mmTop = parseFloat(mcs.marginTop);
+          if (!isNaN(mmTop)) moreMarginTop = mmTop;
+          moreH = mH + moreMarginTop;
+        }
+      } finally {
+        firstCell.removeChild(dummyMore);
+      }
+
       var available = cellH - dateHeadH - padding - moreH;
       // available <= 0 のときは chip を 1 本も置けない（more 行だけ確保する）ため 0 を返す。
-      // 呼び出し元で hiddenCount > 0 なら more が追加され、more 単体（dateline + more ≈ 52px）は
+      // 呼び出し元で hiddenCount > 0 なら more が追加され、more 単体（dateline + more ≈ 48px）は
       // min-height(90px) 未満の極小セルでも収まる。
       if (available <= 0) return 0;
       var max = Math.floor(available / itemH);
@@ -5260,9 +5317,9 @@
       // これにより more の描画位置 = dateline + spacer(usedSlots) + chip群 の直後となる。
       //
       // spacer 高さの設計:
-      //   .kc-month-ad-events の top は CSS で --kc-month-dateline-h (28px) に設定済み。
-      //   dateline が 28px を占有した後に spacer がバー群高さ分 (usedSlots 本分) を確保すれば
-      //   chip 開始位置 = dateline(28px) + spacer(usedSlots*BAR_H+...) = adLayer.top + バー群 下端 と一致する。
+      //   .kc-month-ad-events の top は CSS で --kc-month-dateline-h (24px) に設定済み。
+      //   dateline が 24px を占有した後に spacer がバー群高さ分 (usedSlots 本分) を確保すれば
+      //   chip 開始位置 = dateline(24px) + spacer(usedSlots*BAR_H+...) = adLayer.top + バー群 下端 と一致する。
       //   BAR_TOP は 0 のため spacerH = usedSlots * BAR_H + (usedSlots - 1) * BAR_GAP。
       if (usedSlots > 0) {
         var spacer = cellEl.querySelector('.kc-month-chip-spacer');
@@ -5707,7 +5764,7 @@
       });
 
       if (alldayWrap) {
-        var BAR_H    = 24;
+        var BAR_H    = 20;  /* --kc-ad-bar-h (font-size 14px 対応: 旧 24px) */
         var BAR_GAP  = 3;
         var BAR_TOP  = 4;
         var BAR_BTM  = 4;
