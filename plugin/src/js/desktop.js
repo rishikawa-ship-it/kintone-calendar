@@ -4885,9 +4885,19 @@
       // available <= 0 のときは chip を 1 本も置けない（more 行だけ確保する）ため 0 を返す。
       // 呼び出し元で hiddenCount > 0 なら more が追加され、more 単体（dateline + more ≈ 48px）は
       // min-height(90px) 未満の極小セルでも収まる。
-      if (available <= 0) return 0;
+      if (available <= 0) {
+        _log('[KC.maxitems] cellH=' + cellH + ' dateHeadH=' + dateHeadH + ' padding=' + padding +
+             ' moreH=' + moreH.toFixed(1) + ' PITCH=' + PITCH.toFixed(1) +
+             ' available=' + available.toFixed(1) + ' → max=0 (available<=0)');
+        return 0;
+      }
       var max = Math.floor(available / PITCH);
-      return Math.min(max, 10);
+      var result = Math.min(max, 10);
+      _log('[KC.maxitems] cellH=' + cellH.toFixed(1) + ' dateHeadH=' + dateHeadH.toFixed(1) +
+           ' padding=' + padding + ' moreH=' + moreH.toFixed(1) +
+           ' PITCH=' + PITCH.toFixed(1) + ' available=' + available.toFixed(1) +
+           ' floor=' + max + ' → maxItems=' + result);
+      return result;
     }
 
     /**
@@ -5502,6 +5512,19 @@
           var hiddenAllday = alldayResult.hiddenByCol[colIdx] || [];
           var hiddenSpan   = spanResult.hiddenByCol[colIdx]   || [];
           var hiddenCount  = hiddenAllday.length + hiddenSpan.length + hiddenTimed.length;
+          var alldayShown  = alldayResult.colLaneCounts[colIdx] || 0;
+          var spanShown    = Math.max(0, (spanResult.colLaneCounts[colIdx] || 0) - alldayShown);
+          _log('[KC.place] ' + ymd +
+               ' maxItems=' + maxItems +
+               ' usedSlots=' + usedSlots +
+               ' allday=' + alldayShown +
+               ' span=' + spanShown +
+               ' chip=' + chipsAdded +
+               ' total=' + (alldayShown + spanShown + chipsAdded) +
+               ' hidden=' + hiddenCount +
+               ' (hiddenAllday=' + hiddenAllday.length +
+               ' hiddenSpan=' + hiddenSpan.length +
+               ' hiddenTimed=' + hiddenTimed.length + ')');
           if (hiddenCount > 0) {
             // ポップオーバーには 終日超過（先）→ span 超過 → 時間予定超過（後）の順で渡す
             applyOverflow(cellEl, hiddenCount, hiddenAllday.concat(hiddenSpan).concat(hiddenTimed));

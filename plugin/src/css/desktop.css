@@ -22,11 +22,11 @@
   --kc-radius: 12px;
 
   /* フォントサイズ変数
-   * --kc-font-size-base: カレンダーコンテンツ本体（予定バー・chip・曜日ヘッダー・日付等）= 14px
-   * --kc-font-size-ui:   ヘッダー UI ボタン・ドロップダウン等（視認性向上のため base + 4px）= 18px
+   * --kc-font-size-base: カレンダーコンテンツ本体（予定バー・chip・曜日ヘッダー・日付等）
+   * --kc-font-size-ui:   ヘッダー UI ボタン・ドロップダウン等（base + 4px）
    * ここを変更するだけで対応要素の文字サイズが一括変更される */
-  --kc-font-size-base: 10px;
-  --kc-font-size-ui:   14px;
+  --kc-font-size-base: 12px;
+  --kc-font-size-ui:   16px;
 
   --kc-col-count: 7;
   --kc-hours: 24;
@@ -40,7 +40,7 @@
   --kc-month-dateline-h: 24px;  /* 月ビュー: 日付行（dateline）の確保高（14px フォント対応: 旧 28px） */
   --kc-fullscreen-header-h: 0px; /* 全画面時 kintone ヘッダー高（kc-expanded は fixed で隠れるため 0px） */
   --kc-allday-toggle-h: 24px;   /* 行下部横断トグルバーの高さ */
-  --kc-header-h: 48px;
+  --kc-header-h: 44px;  /* ボタン高 32px + ヘッダー上下パディング 6px×2 = 44px（16px UI フォント対応: 旧 48px） */
   --kc-time-col-w: 50px;
   --kc-scrollbar-w: 0px;       /* JSで上書き: 縦スクロールバー幅（ヘッダー補正用） */
   --kc-dnd-handle-h: 8px;      /* 時間予定リサイズハンドル高さ（NG#5 修正: :root に明示定義） */
@@ -103,7 +103,7 @@
   justify-content: space-between;
   flex-wrap: nowrap;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   border: 1px solid var(--kc-border);
   border-radius: var(--kc-radius);
   background: var(--kc-surface);
@@ -125,7 +125,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-right: 24px;
 }
 
 .kc-title,
@@ -142,8 +141,8 @@
   border: 1px solid #c1c5ca;
   background: #fff;
   border-radius: 10px;
-  height: 38px;
-  padding: 0 18px;
+  height: 32px;
+  padding: 0 14px;
   font-size: var(--kc-font-size-ui);
   cursor: pointer;
   transition: background .2s, border-color .2s;
@@ -184,8 +183,8 @@
   border: 1px solid #b6bcc2;
   background: #fff;
   border-radius: 10px;
-  height: 38px;
-  padding: 0 20px;
+  height: 32px;
+  padding: 0 16px;
   font-size: var(--kc-font-size-ui);
   cursor: pointer;
   display: inline-flex;
@@ -235,8 +234,8 @@
   border: 1px solid #c1c5ca;
   background: #fff;
   border-radius: 10px;
-  height: 38px;
-  padding: 0 18px;
+  height: 32px;
+  padding: 0 14px;
   font-size: var(--kc-font-size-ui);
   cursor: pointer;
   white-space: nowrap;
@@ -701,8 +700,8 @@ body.kc-dnd-active * {
 }
 .kc-fullscreen-btn {
   width: auto;
-  height: 38px;
-  padding: 0 16px;
+  height: 32px;
+  padding: 0 12px;
   border-radius: 10px;
   border: 1px solid #1a73e8;
   background: #1a73e8;
@@ -727,8 +726,8 @@ body.kc-dnd-active * {
   display: none;
   align-items: center;
   gap: 4px;
-  height: 38px;
-  padding: 0 16px;
+  height: 32px;
+  padding: 0 12px;
   border: 1px solid #e53e3e;
   border-radius: 10px;
   background: #fff;
