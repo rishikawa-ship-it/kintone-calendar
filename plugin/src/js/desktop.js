@@ -4886,14 +4886,16 @@
         firstCell.removeChild(dummyMore);
       }
 
-      var available = cellH - dateHeadH - padding - moreH;
+      // moreH は baseCapacity 計算には使わない（overflow 非確定の段階で more スロットを先取りしない）。
+      // overflow ありセルでのみ more 用 1 スロットが確保される（placeMonthEvents のセルループで制御）。
+      var available = cellH - dateHeadH - padding;
       // available <= 0 のときは chip を 1 本も置けない（more 行だけ確保する）ため 0 を返す。
       // 呼び出し元で hiddenCount > 0 なら more が追加され、more 単体（dateline + more ≈ 48px）は
       // min-height(90px) 未満の極小セルでも収まる。
       if (available <= 0) {
         _log('[KC.maxitems] cellH=' + cellH + ' dateHeadH=' + dateHeadH + ' padding=' + padding +
              ' moreH=' + moreH.toFixed(1) + ' PITCH=' + PITCH.toFixed(1) +
-             ' available=' + available.toFixed(1) + ' → max=0 (available<=0)');
+             ' available=' + available.toFixed(1) + ' → baseCapacity=0 (available<=0)');
         return 0;
       }
       var max = Math.floor(available / PITCH);
@@ -4901,7 +4903,7 @@
       _log('[KC.maxitems] cellH=' + cellH.toFixed(1) + ' dateHeadH=' + dateHeadH.toFixed(1) +
            ' padding=' + padding + ' moreH=' + moreH.toFixed(1) +
            ' PITCH=' + PITCH.toFixed(1) + ' available=' + available.toFixed(1) +
-           ' floor=' + max + ' → maxItems=' + result);
+           ' floor=' + max + ' → baseCapacity=' + result);
       return result;
     }
 
@@ -5161,7 +5163,7 @@
      *   colLaneCounts: 各列（0〜6）の実際に描画したレーン占有数（制限後）
      *   hiddenByCol: 各列（0〜6）で非表示になった終日イベント配列
      */
-    function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents, maxItems) {
+    function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents, baseCapacity) {
       var adLayer = weekEl.querySelector('.kc-month-ad-events');
       var result = {
         laneCount: 0,
@@ -5193,12 +5195,14 @@
       }, -1);
       result.laneCount = maxLane + 1;
 
-      // FR-4: maxItems が指定されている場合、各セルで終日バーが時間予定枠を1件以上残せるよう
-      // セルごとの表示上限レーン数を計算する（maxItems - 1 まで終日バーを許可）
+      // FR-4: baseCapacity が指定されている場合、各セルで終日バーが chip / more 枠を1件以上残せるよう
+      // セルごとの表示上限レーン数を計算する（baseCapacity - 1 まで終日バーを許可）
       // 上限を超えるレーンのバーは描画せず hiddenByCol に記録する
-      // maxItems=0 のとき（セルが極小で chip もバーも描けない場合）は alldayLimit=0 として
+      // baseCapacity=0 のとき（セルが極小で chip もバーも描けない場合）は alldayLimit=0 として
       // 終日バーも全件非表示にし、more だけを表示する。
-      var alldayLimit = (maxItems != null) ? Math.max(0, maxItems - 1) : Infinity;
+      // overflow なしセルでは終日バーが baseCapacity - 1 本を超えることがないため、
+      // この -1 は overflow 確定セルのみ実効化される（案 A 採用）。
+      var alldayLimit = (baseCapacity != null) ? Math.max(0, baseCapacity - 1) : Infinity;
 
       // effectiveLaneCount: 制限後に実際に描画される終日バーのレーン数（上限適用後）
       // placeMonthTimedSpanEvents のオフセット計算に使う（laneCount は制限前の全件数のため不適切）
@@ -5253,15 +5257,15 @@
      * @param {Array} spanEvents - 当週にかかる日跨ぎ時間予定
      * @param {number} alldayLaneCount - 終日バーの実効レーン数（下にずらすオフセット）。span バーの絶対配置 top 計算に使用（週共通値）
      * @param {number[]|null} [alldayColLaneCounts] - セル局所の終日バー描画数配列（7要素）。省略時は alldayLaneCount を全列に適用
-     * @param {number} [maxItems] - セル全体の最大表示件数（指定時は超過 span を非表示にして hiddenByCol に計上）
+     * @param {number} [baseCapacity] - セル物理収容スロット数（指定時は超過 span を非表示にして hiddenByCol に計上）
      * @returns {{ colLaneCounts: number[], hiddenByCol: Array[] }}
      *   colLaneCounts: 各列の使用スロット数（セル局所終日バー数 + span バー固有スロット数、制限後の実描画分）
      *   hiddenByCol:   各列で非表示になった日跨ぎ時間予定配列
      */
-    function placeMonthTimedSpanEvents(weekEl, weekYMD, spanEvents, alldayLaneCount, alldayColLaneCounts, maxItems) {
-      // 後方互換: alldayColLaneCounts が数値（旧シグネチャの maxItems の位置）の場合はシフトする
+    function placeMonthTimedSpanEvents(weekEl, weekYMD, spanEvents, alldayLaneCount, alldayColLaneCounts, baseCapacity) {
+      // 後方互換: alldayColLaneCounts が数値（旧シグネチャの baseCapacity の位置）の場合はシフトする
       if (typeof alldayColLaneCounts === 'number') {
-        maxItems = alldayColLaneCounts;
+        baseCapacity = alldayColLaneCounts;
         alldayColLaneCounts = null;
       }
       var result = {
@@ -5279,11 +5283,11 @@
       // 終日バーとは独立したレーン割り当て（0 始まり）
       KC.Lanes.assignLanes(weekEvents);
 
-      // maxItems が指定されている場合、終日レーン + span レーンの合計が maxItems を超えるものは非表示
+      // baseCapacity が指定されている場合、終日レーン + span レーンの合計が baseCapacity を超えるものは非表示
       // span バーはレーン位置固定（Google カレンダー方式）のため、
-      // offsetLane（= alldayLaneCount + ev.lane）>= maxItems のバーを丸ごと非表示にして
+      // offsetLane（= alldayLaneCount + ev.lane）>= baseCapacity のバーを丸ごと非表示にして
       // そのバーが跨ぐ全列の hiddenByCol に計上する。
-      var spanLimit = (maxItems != null) ? maxItems : Infinity;
+      var spanLimit = (baseCapacity != null) ? baseCapacity : Infinity;
 
       // adLayer 内の top は終日バーの下にオフセット
       weekEvents.forEach(function (ev) {
@@ -5363,7 +5367,7 @@
      * @param {HTMLElement} cellEl - .kc-month-cell 要素
      * @param {Array} timedEvents - 当日の時間予定（時刻昇順）
      * @param {number} usedSlots - 終日バーで使用済みのスロット数
-     * @param {number} maxItems - セルに表示できる最大件数（_calcMaxItems の結果を受け取る）
+     * @param {number} maxItems - セルに渡す chip 上限（chipCap: overflow 有無に応じて placeMonthEvents で算出）
      * @returns {number} 追加した chip 数
      */
     function placeMonthTimedEvents(cellEl, timedEvents, usedSlots, maxItems) {
@@ -5471,20 +5475,22 @@
         });
       });
 
-      // セル実高から表示可能件数を動的計算（画面サイズ・全画面モードに追従）
-      var maxItems = _calcMaxItems();
+      // セル実高から物理収容スロット数を動的計算（画面サイズ・全画面モードに追従）
+      // baseCapacity = moreH を差し引かない純粋な物理収容スロット数。
+      // overflow 有無はセルごとに判定し、overflow 時のみ more 用 1 スロットを確保する。
+      var baseCapacity = _calcMaxItems();
 
       var range = monthRange(S.current);
 
       // フィルタ適用（all: 全件, mine: 自分のみ, others: 他人のみ）→ 検索フィルタ
       var filteredMonthEvents = KC.SearchFilter.apply(KC.EventFilter.apply(S.events || []));
 
-      // デバッグ: イベント件数が 0 のとき、または maxItems が極小のときに原因調査用ログを出力
+      // デバッグ: イベント件数が 0 のとき、または baseCapacity が極小のときに原因調査用ログを出力
       if (filteredMonthEvents.length === 0 && (S.events || []).length > 0) {
         console.warn('[KC.RenderMonth] placeMonthEvents: フィルタ後のイベント数が 0 です。eventFilter=' + (KC.State.eventFilter || 'all'));
       }
-      if (maxItems === 0) {
-        console.warn('[KC.RenderMonth] placeMonthEvents: maxItems=0 (セル高不足)。chipは非表示になり +N more のみ表示されます。');
+      if (baseCapacity === 0) {
+        console.warn('[KC.RenderMonth] placeMonthEvents: baseCapacity=0 (セル高不足)。chipは非表示になり +N more のみ表示されます。');
       }
       if ((S.events || []).length === 0) {
         _log('[KC.RenderMonth] placeMonthEvents: S.events が空です (件数=0)。イベント配置をスキップします。');
@@ -5505,8 +5511,8 @@
         });
 
         // 終日バーを配置してセルごとのレーン使用数を取得（他月セルも含む）
-        // FR-4: maxItems を渡して終日バーの件数を制限し、超過分を hiddenByCol として受け取る
-        var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday, maxItems);
+        // FR-4: baseCapacity を渡して終日バーの件数を制限し、超過分を hiddenByCol として受け取る
+        var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday, baseCapacity);
 
         // 当週にかかる日跨ぎ時間予定を抽出（allday=false かつ複数日にまたがるもの）
         var weekTimedSpan = filteredMonthEvents.filter(function (evt) {
@@ -5516,15 +5522,15 @@
 
         // 日跨ぎ時間予定バーを終日バーの下層に配置
         // FR-4: オフセットには制限後の実効レーン数（effectiveLaneCount）を使う。
-        //       laneCount（制限前）を使うと終日バーが maxItems で制限されても
+        //       laneCount（制限前）を使うと終日バーが baseCapacity で制限されても
         //       日跨ぎバーが制限前レーン数分だけ下にずれてセル外（不可視位置）に描画される。
-        // span 件数制限: maxItems を渡して終日+span の合計スロット数が maxItems を超えないよう制御する。
+        // span 件数制限: baseCapacity を渡して終日+span の合計スロット数が baseCapacity を超えないよう制御する。
         //       超過 span は描画せず spanResult.hiddenByCol に記録し、後段で hiddenCount に加算する。
         var spanResult = placeMonthTimedSpanEvents(
           weekEl, weekYMD, weekTimedSpan,
           alldayResult.effectiveLaneCount,  // alldayColLaneCounts 未指定時のフォールバック用（週共通）
           alldayResult.colLaneCounts,       // セル局所終日バー数配列（中間案の localMax 計算に使用）
-          maxItems
+          baseCapacity
         );
 
         // セルごとに単日時間予定 chip を配置（他月セルも含む）
@@ -5546,8 +5552,19 @@
             return (a.start < b.start) ? -1 : (a.start > b.start) ? 1 : 0;
           });
 
-          // chip を配置（maxItems は placeMonthEvents 冒頭で _calcMaxItems により算出）
-          var chipsAdded = placeMonthTimedEvents(cellEl, dayTimedEvents, usedSlots, maxItems);
+          // overflow 判定: usedSlots（終日+span の実描画数）+ 単日予定全件数 が baseCapacity を超えるか
+          // total > baseCapacity のとき overflow 確定 → more 用に 1 スロットを確保する
+          var total = usedSlots + dayTimedEvents.length;
+          // chipCap: placeMonthTimedEvents に渡す chip 表示上限
+          //   overflow 時: more 用に 1 枠確保するため baseCapacity - 1 - usedSlots を上限とする
+          //   収まる時: 全件表示（上限を baseCapacity - usedSlots とする）
+          var chipCap = (total > baseCapacity)
+            ? Math.max(0, baseCapacity - 1 - usedSlots)   // overflow 時: more 用に 1 枠確保
+            : Math.max(0, baseCapacity - usedSlots);       // 収まる時: 全件
+
+          // chip を配置（chipCap が chip の表示上限）
+          // placeMonthTimedEvents の第4引数は「usedSlots + cap = 表示上限スロット数」として渡す
+          var chipsAdded = placeMonthTimedEvents(cellEl, dayTimedEvents, usedSlots, usedSlots + chipCap);
 
           // 非表示件数を計算して +N more を表示
           // 終日バー超過分・日跨ぎ時間予定超過分・単日時間予定超過分をすべて合算する
@@ -5558,12 +5575,14 @@
           var alldayShown  = alldayResult.colLaneCounts[colIdx] || 0;
           var spanShown    = Math.max(0, (spanResult.colLaneCounts[colIdx] || 0) - alldayShown);
           _log('[KC.place] ' + ymd +
-               ' maxItems=' + maxItems +
+               ' baseCapacity=' + baseCapacity +
                ' usedSlots=' + usedSlots +
+               ' total=' + total +
+               ' overflow=' + (total > baseCapacity) +
+               ' chipCap=' + chipCap +
                ' allday=' + alldayShown +
                ' span=' + spanShown +
                ' chip=' + chipsAdded +
-               ' total=' + (alldayShown + spanShown + chipsAdded) +
                ' hidden=' + hiddenCount +
                ' (hiddenAllday=' + hiddenAllday.length +
                ' hiddenSpan=' + hiddenSpan.length +
