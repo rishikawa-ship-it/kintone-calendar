@@ -3695,20 +3695,23 @@
 
     /**
      * 週イベント配列にレーン番号を付与する（破壊的変更）
-     * ソート規則: 自分の予定（color あり）降順 → 期間（end - start）降順 → created 昇順 → id 昇順
-     * 色付き予定を最上位レーンに配置し、期間の長い予定を優先する。
+     * ソート規則: 自分の予定（color あり）降順 → 開始日時昇順 → 終了日時降順 → created 昇順 → id 昇順
+     * 色付き予定を最上位レーンに配置し、開始が早い予定を優先、同開始なら終了が遅い予定を優先する。
      * @param {Array} weekEvents - { colStart, span, start, end, created, id } を含む配列
      * @returns {Array} lane プロパティが付与された配列
      */
     function assignLanes(weekEvents) {
-      // 色あり降順 → 期間降順 → 作成日時昇順 → ID 昇順でソート
+      // 色あり降順 → 開始日時昇順 → 終了日時降順 → 作成日時昇順 → ID 昇順でソート
       weekEvents.sort(function (a, b) {
         var aHasColor = KC.LoginContext.getPermission(a).bgColor ? 0 : 1;
         var bHasColor = KC.LoginContext.getPermission(b).bgColor ? 0 : 1;
         if (aHasColor !== bHasColor) return aHasColor - bHasColor;
-        var aDur = new Date(a.end).getTime() - new Date(a.start).getTime();
-        var bDur = new Date(b.end).getTime() - new Date(b.start).getTime();
-        if (bDur !== aDur) return bDur - aDur;
+        var aStart = new Date(a.start).getTime();
+        var bStart = new Date(b.start).getTime();
+        if (aStart !== bStart) return aStart - bStart;
+        var aEnd = new Date(a.end).getTime();
+        var bEnd = new Date(b.end).getTime();
+        if (bEnd !== aEnd) return bEnd - aEnd;
         if (a.created !== b.created) return a.created < b.created ? -1 : 1;
         return a.id < b.id ? -1 : 1;
       });
@@ -4792,6 +4795,8 @@
     // BAR_TOP: .kc-month-ad-events の top が CSS で --kc-month-dateline-h (28px) に設定されたため
     // adLayer 自体が dateline の下から始まる。バー個別の top オフセットは 0 で OK。
     var BAR_TOP = 0;   /* adLayer top = --kc-month-dateline-h (CSS) で日付行を回避済み */
+    // 横方向の隙間定数（隣接バーの境目を視覚的に分離するため width を右側に詰める）
+    var BAR_X_GAP = 3; /* px。left は据え置き、width を calc(xx% - BAR_X_GAP px) に設定 */
 
     /** セル内の表示件数上限（フォールバック用） */
     var MAX_CELL_ITEMS = 5;
@@ -4917,20 +4922,19 @@
 
       // 絶対配置の位置計算
       el.style.left   = ((ev.colStart / 7) * 100) + '%';
-      el.style.width  = ((ev.span / 7) * 100) + '%';
+      // 右端に BAR_X_GAP px の余白を設けて隣接バーの境目を視覚的に分離
+      el.style.width  = 'calc(' + ((ev.span / 7) * 100) + '% - ' + BAR_X_GAP + 'px)';
       el.style.top    = (BAR_TOP + ev.lane * (BAR_H + BAR_GAP)) + 'px';
       el.style.height = BAR_H + 'px';
       el.style.pointerEvents = 'auto';
 
-      // 月ビュー終日バーは左線ストライプ型（案 A）:
-      //   - bgColor を border-left-color に適用し、背景は固定 #e5e7eb
-      //   - 背景固定のため文字色も固定 #1f2937（isLightColor 判定不要）
-      var displayBgColor = perm.bgColor || ev.color || null;
-      if (displayBgColor) {
-        el.style.borderLeftColor = displayBgColor;
-        el.style.background      = '#e5e7eb';
-        el.style.color           = '#1f2937';
-      }
+      // 月ビュー終日バーは全面塗り型（Google カレンダー風）:
+      //   - bgColor を background に適用（フォールバック込みで必ず色を確定）
+      //   - 左線ストライプ廃止、isLightColor で文字色を自動判定
+      var displayBgColor = perm.bgColor || ev.color || '#818cf8';
+      el.style.background = displayBgColor;
+      el.style.borderLeft = 'none';  // 左線ストライプ廃止
+      el.style.color = perm.textColor || (KC.Lanes.isLightColor(displayBgColor) ? '#1f2937' : '#ffffff');
 
       el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
@@ -5002,12 +5006,10 @@
       if (!chipCanEdit) chip.style.cursor = 'pointer';
       chip.dataset.evId = evt.id;
       chip.dataset.eventId = evt.id;  // SearchFilter プルダウン逆引き用（evId と同値）
-      // プラグイン設定の配色をそのまま適用する（週/日ビュー・終日と同一方式）
-      // bgColor 未設定時は CSS デフォルト（.kc-month-chip の background）に委ねる
-      if (bgColor) {
-        chip.style.background = bgColor;
-        chip.style.color = chipPerm.textColor || (KC.Lanes.isLightColor(bgColor) ? '#1f2937' : '#ffffff');
-      }
+      // 透明背景に変更（Google カレンダー風: 先頭ドットで色を表現）
+      // bgColor の有無によらず background は transparent、文字色は濃色固定
+      chip.style.background = 'transparent';
+      chip.style.color = '#1f2937';  // kintone 白背景前提で濃色固定
 
       var dot = document.createElement('span');
       dot.className = 'kc-month-chip-dot';
@@ -5064,7 +5066,8 @@
 
       // 絶対配置（.kc-month-ad-events 内、終日バー下層）
       el.style.left   = ((ev.colStart / 7) * 100) + '%';
-      el.style.width  = ((ev.span / 7) * 100) + '%';
+      // 右端に BAR_X_GAP px の余白を設けて隣接バーの境目を視覚的に分離
+      el.style.width  = 'calc(' + ((ev.span / 7) * 100) + '% - ' + BAR_X_GAP + 'px)';
       el.style.top    = (BAR_TOP + ev.lane * (BAR_H + BAR_GAP)) + 'px';
       el.style.height = BAR_H + 'px';
       el.style.pointerEvents = 'auto';
@@ -5078,6 +5081,14 @@
       var timeStr = KC.Utils.pad2(evStart.getHours()) + ':' + KC.Utils.pad2(evStart.getMinutes());
       el.title = (ev.title || '(無題)') + '\n' + timeStr + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
+      // 時計アイコン（B案: DOM span）: 終日バーとの視覚区別用
+      // 擬似要素(A案)ではなく DOM span を採用した理由:
+      //   JS の appendChild パターンと一貫しており、
+      //   リサイズハンドルが後から追加されても先頭順序が確実に保持される。
+      var clockSpan = document.createElement('span');
+      clockSpan.className = 'kc-month-chip--span-icon';
+      clockSpan.textContent = '⏱';  // U+23F1 STOPWATCH
+
       var timeSpan = document.createElement('span');
       timeSpan.className = 'kc-month-chip--span-time';
       timeSpan.textContent = timeStr;
@@ -5086,6 +5097,7 @@
       titleSpan.className = 'kc-month-chip--span-title';
       titleSpan.textContent = ev.title || '(無題)';
 
+      el.appendChild(clockSpan);
       el.appendChild(timeSpan);
       el.appendChild(titleSpan);
 
