@@ -5239,13 +5239,19 @@
      * @param {HTMLElement} weekEl - .kc-month-week 要素
      * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
      * @param {Array} spanEvents - 当週にかかる日跨ぎ時間予定
-     * @param {number} alldayLaneCount - 終日バーの実効レーン数（下にずらすオフセット）
+     * @param {number} alldayLaneCount - 終日バーの実効レーン数（下にずらすオフセット）。span バーの絶対配置 top 計算に使用（週共通値）
+     * @param {number[]|null} [alldayColLaneCounts] - セル局所の終日バー描画数配列（7要素）。省略時は alldayLaneCount を全列に適用
      * @param {number} [maxItems] - セル全体の最大表示件数（指定時は超過 span を非表示にして hiddenByCol に計上）
      * @returns {{ colLaneCounts: number[], hiddenByCol: Array[] }}
-     *   colLaneCounts: 各列の使用スロット数（終日レーン含む合計、制限後の実描画分）
+     *   colLaneCounts: 各列の使用スロット数（セル局所終日バー数 + span バー固有スロット数、制限後の実描画分）
      *   hiddenByCol:   各列で非表示になった日跨ぎ時間予定配列
      */
-    function placeMonthTimedSpanEvents(weekEl, weekYMD, spanEvents, alldayLaneCount, maxItems) {
+    function placeMonthTimedSpanEvents(weekEl, weekYMD, spanEvents, alldayLaneCount, alldayColLaneCounts, maxItems) {
+      // 後方互換: alldayColLaneCounts が数値（旧シグネチャの maxItems の位置）の場合はシフトする
+      if (typeof alldayColLaneCounts === 'number') {
+        maxItems = alldayColLaneCounts;
+        alldayColLaneCounts = null;
+      }
       var result = {
         colLaneCounts: [0, 0, 0, 0, 0, 0, 0],
         hiddenByCol:   [[], [], [], [], [], [], []]
@@ -5269,7 +5275,23 @@
 
       // adLayer 内の top は終日バーの下にオフセット
       weekEvents.forEach(function (ev) {
-        var offsetLane = alldayLaneCount + (ev.lane || 0);
+        // 中間案: span バーが跨ぐ全列の alldayColLaneCounts の最大値（localMax）を求め、
+        // span バーの top（offsetLane）と spacer（colLaneCounts）の基準を localMax に統一する。
+        // これにより「そのバーが跨がない別日の終日バー（週共通値）による押し下げ」を除去しつつ、
+        // top と spacer の基準が一致するため chip と span バーの重なりも防ぐ。
+        var localMax = 0;
+        if (alldayColLaneCounts) {
+          for (var ci2 = ev.colStart; ci2 < ev.colStart + ev.span; ci2++) {
+            if (ci2 >= 0 && ci2 < 7) {
+              localMax = Math.max(localMax, alldayColLaneCounts[ci2] || 0);
+            }
+          }
+        } else {
+          // alldayColLaneCounts 未指定時は週共通値にフォールバック
+          localMax = alldayLaneCount;
+        }
+
+        var offsetLane = localMax + (ev.lane || 0);
 
         if (offsetLane >= spanLimit) {
           // 上限超え: 描画せず跨ぐ全列の hidden に計上
@@ -5285,6 +5307,12 @@
         var bar = buildMonthTimedSpanBar(evWithOffset);
         adLayer.appendChild(bar);
         // 各列のスロット数（終日 + span）を更新（制限内のもののみ）
+        // colLaneCounts は localMax（跨ぐ列の最大終日バー数）+ ev.lane + 1 を
+        // 全跨ぎ列に均一記録する。これにより spacer の基準が span バーの top 計算
+        // （offsetLane = localMax + ev.lane）と揃い、chip 重なりが発生しない。
+        // 初版（alldayColLaneCounts[ci] セル固有）から変更:
+        //   以前: 各セル固有の終日バー数で記録（top と spacer の基準が不一致）
+        //   現在: 跨ぐ列最大値（localMax）で全列に均一記録（top と spacer の基準が一致）
         for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
           if (ci >= 0 && ci < 7) {
             result.colLaneCounts[ci] = Math.max(
@@ -5481,7 +5509,10 @@
         // span 件数制限: maxItems を渡して終日+span の合計スロット数が maxItems を超えないよう制御する。
         //       超過 span は描画せず spanResult.hiddenByCol に記録し、後段で hiddenCount に加算する。
         var spanResult = placeMonthTimedSpanEvents(
-          weekEl, weekYMD, weekTimedSpan, alldayResult.effectiveLaneCount, maxItems
+          weekEl, weekYMD, weekTimedSpan,
+          alldayResult.effectiveLaneCount,  // alldayColLaneCounts 未指定時のフォールバック用（週共通）
+          alldayResult.colLaneCounts,       // セル局所終日バー数配列（中間案の localMax 計算に使用）
+          maxItems
         );
 
         // セルごとに単日時間予定 chip を配置（他月セルも含む）
