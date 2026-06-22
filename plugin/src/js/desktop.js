@@ -27,7 +27,7 @@
    * 実機でどのビルドが動いているか確認するためのスタンプ。
    * console.warn は KC_DEBUG によらず常に出力される（上記コメント参照）。
    * ==================================================================== */
-  var KC_BUILD = '2026-06-22-daygrid-phase1e';
+  var KC_BUILD = '2026-06-22-daygrid-phase2b';
   try { if (typeof window !== 'undefined') window.KC_BUILD = KC_BUILD; } catch (e) {}
   // eslint-disable-next-line no-console
   console.warn('[KC] build ' + KC_BUILD);
@@ -2123,9 +2123,15 @@
       var drag = _drag;
       _drag = null;
 
-      // ゴースト除去
+      // ゴースト除去（メイン + Phase2b クロス週追加セグ）
       if (drag.ghost && drag.ghost.parentNode) {
         drag.ghost.parentNode.removeChild(drag.ghost);
+      }
+      // Phase2b: ghostSegs（クロス週追加ゴーストセグメント）を全除去
+      if (drag.ghostSegs) {
+        drag.ghostSegs.forEach(function (seg) {
+          if (seg && seg.parentNode) seg.parentNode.removeChild(seg);
+        });
       }
 
       // 元バーの薄表示解除
@@ -2136,6 +2142,10 @@
       // 日跨ぎ時は全セグメントの薄表示も解除
       if (drag.origBars) {
         drag.origBars.forEach(function (b) { b.classList.remove('kc-event--dragging'); });
+      }
+      // dayGrid Phase2: allSegs（月ビュー複数日バーの全セグメント）の薄表示解除
+      if (drag.allSegs) {
+        drag.allSegs.forEach(function (s) { s.classList.remove('kc-ad-event--dragging'); });
       }
 
       // リスナ除去（終日 + 時間予定 + 月ビュー chip 全て）
@@ -2311,8 +2321,10 @@
         document.body.classList.add('kc-dnd-active');
         document.body.style.userSelect = 'none';
 
-        // 元バーを薄表示
-        if (_drag.origBar) {
+        // 元バーを薄表示（dayGrid Phase2: allSegs 方式で全セグメントを一括薄表示）
+        if (_drag.allSegs && _drag.allSegs.length > 0) {
+          _drag.allSegs.forEach(function (s) { s.classList.add('kc-ad-event--dragging'); });
+        } else if (_drag.origBar) {
           _drag.origBar.classList.add('kc-ad-event--dragging');
         }
 
@@ -2424,13 +2436,21 @@
       var drag = _drag;
       _drag = null;
 
-      // ゴースト除去
+      // ゴースト除去（メイン + Phase2b クロス週追加セグ）
       if (drag.ghost && drag.ghost.parentNode) {
         drag.ghost.parentNode.removeChild(drag.ghost);
       }
+      // Phase2b: ghostSegs（クロス週追加ゴーストセグメント）を全除去
+      if (drag.ghostSegs) {
+        drag.ghostSegs.forEach(function (seg) {
+          if (seg && seg.parentNode) seg.parentNode.removeChild(seg);
+        });
+      }
 
-      // 元バー薄表示解除
-      if (drag.origBar) {
+      // 元バー薄表示解除（dayGrid Phase2: allSegs 方式で全セグメントを一括解除）
+      if (drag.allSegs && drag.allSegs.length > 0) {
+        drag.allSegs.forEach(function (s) { s.classList.remove('kc-ad-event--dragging'); });
+      } else if (drag.origBar) {
         drag.origBar.classList.remove('kc-ad-event--dragging');
       }
 
@@ -3138,47 +3158,106 @@
     }
 
     /**
-     * 月ビュー終日ゴーストを body 直下 fixed で追従させる
-     * ゴースト幅は週末（土曜=colIdx 6）までの残り列数でクランプして週をまたぐ表示を防ぐ。
-     * @param {HTMLElement} ghost
-     * @param {string} dateYMD - ゴーストが乗るセルの YYYY-MM-DD
-     * @param {number} spanDays - 表示上の日数
-     * @param {number} [colIdx] - 開始セルの列インデックス（0=日曜...6=土曜）。省略時はセルの位置から算出
+     * 月ビュー終日ゴーストを body 直下 fixed で追従させる（dayGrid Phase2b: クロス週対応）
+     *
+     * 週をまたぐ場合は各週行ごとにゴーストセグメントを描画する（FullCalendar/Google カレンダー方式）。
+     * - 先頭週 (第1セグ): ghost 本体（_drag.ghost）を使用。ラベルも表示される。
+     * - 2週目以降 (追加セグ): ghost.cloneNode(true) で生成し body に追加。
+     * - 追加セグは _drag.ghostSegs 配列で管理し、mouseup/_cancel で全て除去する。
+     *
+     * 週内に収まる場合（spanDays <= 7 - colIdx）は追加セグなしで動作し、旧挙動と同じ。
+     *
+     * @param {HTMLElement} ghost - _drag.ghost（先頭セグ）
+     * @param {string} dateYMD   - バー開始日の YYYY-MM-DD
+     * @param {number} spanDays  - 総日数（= 終了表示日 - 開始日 + 1）
+     * @param {number} [colIdx]  - 開始日の列インデックス（0=日曜〜6=土曜）。省略時は DOM 順から算出
      */
     function _positionMonthGhost(ghost, dateYMD, spanDays, colIdx) {
-      var cell = document.querySelector('.kc-month-cell[data-date="' + dateYMD + '"]');
-      if (!cell) return;
-      var r    = cell.getBoundingClientRect();
-      var cellW = r.width;
+      var U = KC.Utils;
+
+      // 開始セルを取得
+      var startCell = document.querySelector('.kc-month-cell[data-date="' + dateYMD + '"]');
+      if (!startCell) return;
+      var firstR = startCell.getBoundingClientRect();
+      var cellW  = firstR.width;  // 全セルは均等幅を前提とする
 
       // colIdx が渡されない場合はセルの DOM 順から算出
       if (colIdx === undefined) {
-        var allCells = document.querySelectorAll('.kc-month-cell[data-date]');
-        var cellIdx = 0;
-        for (var i = 0; i < allCells.length; i++) {
-          if (allCells[i] === cell) { cellIdx = i; break; }
+        var allCellsTmp = document.querySelectorAll('.kc-month-cell[data-date]');
+        var cellIdxTmp = 0;
+        for (var ti = 0; ti < allCellsTmp.length; ti++) {
+          if (allCellsTmp[ti] === startCell) { cellIdxTmp = ti; break; }
         }
-        colIdx = cellIdx % 7;
+        colIdx = cellIdxTmp % 7;
       }
 
-      // 週末（土曜=6）までの残り列数でクランプ（翌週にはみ出さないようにする）
-      var remainingCols = 7 - colIdx;
-      var clampedSpan = Math.min(spanDays, remainingCols);
+      // --- 追加セグ（前回の ghostSegs）を先に全除去してから再描画 ---
+      if (_drag && _drag.ghostSegs) {
+        _drag.ghostSegs.forEach(function (seg) {
+          if (seg && seg.parentNode) seg.parentNode.removeChild(seg);
+        });
+      }
+      if (_drag) _drag.ghostSegs = [];
 
-      ghost.style.position = 'fixed';
-      ghost.style.left     = r.left + 'px';
-      ghost.style.top      = (r.top + 4) + 'px';
-      ghost.style.width    = (cellW * clampedSpan) + 'px';
-      ghost.style.height   = '22px';
+      // --- 週ごとにゴーストセグメントを配置する ---
+      // weekOffset: 今が何週目か（0始まり）。0=開始週、1=次週、...
+      var remainingDays = spanDays;
+      var currentColIdx = colIdx;
+      var weekOffset = 0;
+      var currentYMD = dateYMD;
+
+      while (remainingDays > 0) {
+        // この週に何列分入るか
+        var colsThisWeek = Math.min(remainingDays, 7 - currentColIdx);
+        if (colsThisWeek < 1) break;
+
+        // この週の先頭セルを取得（位置計算用）
+        var weekStartCell = document.querySelector('.kc-month-cell[data-date="' + currentYMD + '"]');
+        if (!weekStartCell) break;
+        var weekR = weekStartCell.getBoundingClientRect();
+
+        if (weekOffset === 0) {
+          // 第1週: ghost 本体（_drag.ghost）を配置
+          ghost.style.position = 'fixed';
+          ghost.style.left   = weekR.left + 'px';
+          ghost.style.top    = (weekR.top + 4) + 'px';
+          ghost.style.width  = (cellW * colsThisWeek) + 'px';
+          ghost.style.height = '22px';
+        } else {
+          // 2週目以降: ghost をクローンして body に追加
+          var seg = ghost.cloneNode(true);
+          seg.style.position = 'fixed';
+          seg.style.left   = weekR.left + 'px';
+          seg.style.top    = (weekR.top + 4) + 'px';
+          seg.style.width  = (cellW * colsThisWeek) + 'px';
+          seg.style.height = '22px';
+          // 追加セグにはラベル（日付範囲テキスト）を非表示にする
+          // （ラベルは先頭ゴーストだけで十分）
+          var labelEl = seg.querySelector('.kc-ad-ghost-label');
+          if (labelEl) labelEl.style.display = 'none';
+          document.body.appendChild(seg);
+          if (_drag) _drag.ghostSegs.push(seg);
+        }
+
+        remainingDays -= colsThisWeek;
+        weekOffset++;
+        if (remainingDays > 0) {
+          // 翌週の開始日（日曜）= currentYMD + colsThisWeek 日後
+          var nextDate = U.addDays(new Date(currentYMD + 'T00:00:00'), colsThisWeek);
+          currentYMD = U.fmtYMD(nextDate);
+          currentColIdx = 0;  // 翌週以降は日曜（列 0）から始まる
+        }
+      }
     }
 
     /**
-     * 月ビュー終日バー移動 DnD を開始する（スコープ A）
+     * 月ビュー終日バー移動 DnD を開始する（スコープ A / dayGrid Phase2）
      * @param {Object} ev - KcEvent
      * @param {MouseEvent} mousedown
-     * @param {HTMLElement} barEl - .kc-ad-event 要素
+     * @param {HTMLElement} barEl - mousedown したセグメント要素
+     * @param {HTMLElement[]} [allSegs] - 同一イベントの全セグメント要素（薄表示を全体に適用するため）
      */
-    function startMoveAlldayMonth(ev, mousedown, barEl) {
+    function startMoveAlldayMonth(ev, mousedown, barEl, allSegs) {
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -3187,17 +3266,19 @@
       ghost.style.pointerEvents = 'none';
 
       _drag = {
-        view:     'month',
-        type:     'move-allday',
-        ev:       ev,
-        ghost:    ghost,
-        origBar:  barEl,
-        startX:   mousedown.clientX,
-        startY:   mousedown.clientY,
-        started:  false,
-        lane:     ev.lane || 0,
-        newStart: null,
-        newEnd:   null
+        view:      'month',
+        type:      'move-allday',
+        ev:        ev,
+        ghost:     ghost,
+        ghostSegs: [],          // Phase2b: クロス週追加ゴーストセグメント
+        origBar:   barEl,
+        allSegs:   allSegs || (barEl ? [barEl] : []),  // Phase2: 全セグメントを保持
+        startX:    mousedown.clientX,
+        startY:    mousedown.clientY,
+        started:   false,
+        lane:      ev.lane || 0,
+        newStart:  null,
+        newEnd:    null
       };
 
       document.addEventListener('mousemove', _onMouseMoveAllday);
@@ -3205,13 +3286,14 @@
     }
 
     /**
-     * 月ビュー終日バーリサイズ DnD を開始する（スコープ B）
+     * 月ビュー終日バーリサイズ DnD を開始する（スコープ B / dayGrid Phase2）
      * @param {Object} ev - KcEvent
      * @param {'left'|'right'} side
      * @param {MouseEvent} mousedown
-     * @param {HTMLElement} barEl - .kc-ad-event 要素
+     * @param {HTMLElement} barEl - mousedown したセグメント要素（isStart のみ左ハンドル / isEnd のみ右ハンドル）
+     * @param {HTMLElement[]} [allSegs] - 同一イベントの全セグメント要素（薄表示用）
      */
-    function startResizeAlldayMonth(ev, side, mousedown, barEl) {
+    function startResizeAlldayMonth(ev, side, mousedown, barEl, allSegs) {
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -3220,17 +3302,19 @@
       ghost.style.pointerEvents = 'none';
 
       _drag = {
-        view:     'month',
-        type:     side === 'left' ? 'resize-left' : 'resize-right',
-        ev:       ev,
-        ghost:    ghost,
-        origBar:  barEl,
-        startX:   mousedown.clientX,
-        startY:   mousedown.clientY,
-        started:  false,
-        lane:     ev.lane || 0,
-        newStart: null,
-        newEnd:   null
+        view:      'month',
+        type:      side === 'left' ? 'resize-left' : 'resize-right',
+        ev:        ev,
+        ghost:     ghost,
+        ghostSegs: [],          // Phase2b: クロス週追加ゴーストセグメント
+        origBar:   barEl,
+        allSegs:   allSegs || (barEl ? [barEl] : []),  // Phase2: 全セグメントを保持
+        startX:    mousedown.clientX,
+        startY:    mousedown.clientY,
+        started:   false,
+        lane:      ev.lane || 0,
+        newStart:  null,
+        newEnd:    null
       };
 
       document.addEventListener('mousemove', _onMouseMoveAllday);
@@ -3417,15 +3501,16 @@
     }
 
     /**
-     * 月ビュー日跨ぎ時間予定バーのリサイズ DnD を開始する（スコープ C-resize）
+     * 月ビュー日跨ぎ時間予定バーのリサイズ DnD を開始する（スコープ C-resize / dayGrid Phase2）
      * 終日の startResizeAlldayMonth と同構造だが type が異なり、
      * mousemove 側で時刻維持ロジック（_onResizeTimedSpanMoveMonth）を呼ぶ。
      * @param {Object} ev - KcEvent（時間予定）
      * @param {'left'|'right'} side
      * @param {MouseEvent} mousedown
-     * @param {HTMLElement} barEl - .kc-month-chip--span 要素
+     * @param {HTMLElement} barEl - mousedown したセグメント要素
+     * @param {HTMLElement[]} [allSegs] - 同一イベントの全セグメント要素（薄表示用）
      */
-    function startResizeMonthTimedSpan(ev, side, mousedown, barEl) {
+    function startResizeMonthTimedSpan(ev, side, mousedown, barEl, allSegs) {
       mousedown.preventDefault();
 
       var ghost = _buildMonthChipGhost(ev);
@@ -3434,17 +3519,19 @@
       ghost.style.pointerEvents = 'none';
 
       _drag = {
-        view:     'month',
-        type:     side === 'left' ? 'resize-left-timed-span' : 'resize-right-timed-span',
-        ev:       ev,
-        ghost:    ghost,
-        origBar:  barEl,
-        startX:   mousedown.clientX,
-        startY:   mousedown.clientY,
-        started:  false,
-        lane:     ev.lane || 0,
-        newStart: null,
-        newEnd:   null
+        view:      'month',
+        type:      side === 'left' ? 'resize-left-timed-span' : 'resize-right-timed-span',
+        ev:        ev,
+        ghost:     ghost,
+        ghostSegs: [],          // Phase2b: クロス週追加ゴーストセグメント
+        origBar:   barEl,
+        allSegs:   allSegs || (barEl ? [barEl] : []),  // Phase2: 全セグメントを保持
+        startX:    mousedown.clientX,
+        startY:    mousedown.clientY,
+        started:   false,
+        lane:      ev.lane || 0,
+        newStart:  null,
+        newEnd:    null
       };
 
       document.addEventListener('mousemove', _onMouseMoveAllday);
@@ -5122,45 +5209,39 @@
         KC.Popup.openEdit(ev.id);
       });
 
-      // フェーズ1: DnD は最小対応（isDndEnabled=false のときはハンドルを非表示に保つ）
-      // mousedown は一応付けるが、barEl が seg-layer 内の 1 要素のみを指すため
-      // DnD は全セグメントにわたって正常動作しない。フェーズ2 で全面再配線予定。
-      if (isDndEnabled && canEdit) {
-        // 左端リサイズハンドル（開始セグメントにのみ有意）
-        if (isStart) {
-          var leftHandle = document.createElement('div');
-          leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
-          leftHandle.addEventListener('mousedown', function (mdEvt) {
-            if (mdEvt.button !== 0) return;
-            mdEvt.stopPropagation();
-            KC.DnD.startResizeAlldayMonth(ev, 'left', mdEvt, el);
-          });
-          el.appendChild(leftHandle);
-        }
-        // 右端リサイズハンドル（終了セグメントにのみ有意）
-        if (isEnd) {
-          var rightHandle = document.createElement('div');
-          rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
-          rightHandle.addEventListener('mousedown', function (mdEvt) {
-            if (mdEvt.button !== 0) return;
-            mdEvt.stopPropagation();
-            KC.DnD.startResizeAlldayMonth(ev, 'right', mdEvt, el);
-          });
-          el.appendChild(rightHandle);
-        }
-        el.addEventListener('mousedown', function (mdEvt) {
+      // dayGrid Phase2: DnD ハンドル要素の生成（mousedown 配線は placeMonthAlldayEvents で実施）
+      // ハンドラは全セグメント収集後に allSegs を渡して配線するため、ここでは要素生成のみ行う。
+      // canEdit チェックは配線側（placeMonthAlldayEvents）で行う。
+      if (isStart && canEdit) {
+        // 左端リサイズハンドル（開始セグメントのみ）
+        var leftHandle = document.createElement('div');
+        leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
+        leftHandle.dataset.resizeSide = 'left';  // 配線側がセレクタで参照する
+        leftHandle.addEventListener('mousedown', function (mdEvt) {
+          // バブリング防止のみ（実際のハンドラは placeMonthAlldayEvents で付ける）
           if (mdEvt.button !== 0) return;
           mdEvt.stopPropagation();
-          KC.DnD.startMoveAlldayMonth(ev, mdEvt, el);
         });
-      } else {
-        // フェーズ1: mousedown の伝播を止めてセル click（新規作成）を誤爆させない
-        el.addEventListener('mousedown', function (mdEvt) {
-          if (mdEvt.button !== 0) return;
-          mdEvt.stopPropagation();
-          // DnD は無効（フェーズ2 で再配線）
-        });
+        el.appendChild(leftHandle);
       }
+      if (isEnd && canEdit) {
+        // 右端リサイズハンドル（終了セグメントのみ）
+        var rightHandle = document.createElement('div');
+        rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
+        rightHandle.dataset.resizeSide = 'right';  // 配線側がセレクタで参照する
+        rightHandle.addEventListener('mousedown', function (mdEvt) {
+          // バブリング防止のみ（実際のハンドラは placeMonthAlldayEvents で付ける）
+          if (mdEvt.button !== 0) return;
+          mdEvt.stopPropagation();
+        });
+        el.appendChild(rightHandle);
+      }
+      // mousedown 伝播停止（セル click ≒ 新規作成を誤爆させない）
+      // 実際の DnD 配線は placeMonthAlldayEvents が allSegs 収集後に付ける
+      el.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        mdEvt.stopPropagation();
+      });
 
       return el;
     }
@@ -5257,7 +5338,28 @@
         KC.Popup.openEdit(ev.id);
       });
 
-      // フェーズ1: DnD は無効（mousedown 伝播のみ止める）
+      // dayGrid Phase2: リサイズハンドル要素生成（mousedown 配線は placeMonthTimedSpanEvents で実施）
+      if (isStart && canEdit) {
+        var lHandle = document.createElement('div');
+        lHandle.className = 'kc-resize-handle kc-resize-handle--left';
+        lHandle.dataset.resizeSide = 'left';
+        lHandle.addEventListener('mousedown', function (mdEvt) {
+          if (mdEvt.button !== 0) return;
+          mdEvt.stopPropagation();
+        });
+        el.appendChild(lHandle);
+      }
+      if (isEnd && canEdit) {
+        var rHandle = document.createElement('div');
+        rHandle.className = 'kc-resize-handle kc-resize-handle--right';
+        rHandle.dataset.resizeSide = 'right';
+        rHandle.addEventListener('mousedown', function (mdEvt) {
+          if (mdEvt.button !== 0) return;
+          mdEvt.stopPropagation();
+        });
+        el.appendChild(rHandle);
+      }
+      // mousedown 伝播停止（DnD 配線は placeMonthTimedSpanEvents が allSegs 収集後に付ける）
       el.addEventListener('mousedown', function (mdEvt) {
         if (mdEvt.button !== 0) return;
         mdEvt.stopPropagation();
@@ -5514,11 +5616,61 @@
           var seg = buildMonthAlldaySegment(ev, isStart, isEnd, false, isVisibleStart, visibleCells, ci);
           adEventsEl.appendChild(seg);
 
-          // seg-layer の高さ確保（バー描画はしないが、chip 押し下げのための height セットは継続）
+          // dayGrid Phase2: イベントID別にセグメントを収集（DnD 配線用）
+          if (!result._segElsMap) result._segElsMap = {};
+          if (!result._evMap)     result._evMap     = {};
+          if (!result._segElsMap[ev.id]) result._segElsMap[ev.id] = [];
+          result._segElsMap[ev.id].push(seg);
+          result._evMap[ev.id] = ev;
+
           // colLaneCounts を更新（描画確定したセグメントの lane+1 が使用スロット数）
           result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], lane + 1);
         }
       });
+
+      // dayGrid Phase2: 全セグメント収集後に DnD ハンドラを配線する
+      // allSegs（同一イベントの全セグメント）を渡すことで、ドラッグ中に全セグメントを一括薄表示できる。
+      if (result._segElsMap) {
+        Object.keys(result._segElsMap).forEach(function (evId) {
+          var segs = result._segElsMap[evId];
+          var capEv = result._evMap[evId];
+          if (!segs || !segs.length || !capEv) return;
+          var perm = KC.LoginContext.getPermission(capEv);
+          if (!perm.canEdit) return;  // 編集権限なしは DnD 不可
+
+          segs.forEach(function (seg) {
+            // バー本体 mousedown → 移動 DnD
+            // ※ リサイズハンドルの mousedown は stopPropagation するため、
+            //   ハンドル上のクリックはここに来ない（ハンドル側で別途配線）
+            seg.addEventListener('mousedown', function (mdEvt) {
+              if (mdEvt.button !== 0) return;
+              // リサイズハンドル上のクリックはそちらで stopPropagation されるためここには届かない
+              mdEvt.stopPropagation();
+              KC.DnD.startMoveAlldayMonth(capEv, mdEvt, seg, segs);
+            });
+
+            // 左端リサイズハンドル（isStart セグメントのみ存在する）
+            var lHandle = seg.querySelector('.kc-resize-handle--left[data-resize-side="left"]');
+            if (lHandle) {
+              lHandle.addEventListener('mousedown', function (mdEvt) {
+                if (mdEvt.button !== 0) return;
+                mdEvt.stopPropagation();
+                KC.DnD.startResizeAlldayMonth(capEv, 'left', mdEvt, seg, segs);
+              });
+            }
+
+            // 右端リサイズハンドル（isEnd セグメントのみ存在する）
+            var rHandle = seg.querySelector('.kc-resize-handle--right[data-resize-side="right"]');
+            if (rHandle) {
+              rHandle.addEventListener('mousedown', function (mdEvt) {
+                if (mdEvt.button !== 0) return;
+                mdEvt.stopPropagation();
+                KC.DnD.startResizeAlldayMonth(capEv, 'right', mdEvt, seg, segs);
+              });
+            }
+          });
+        });
+      }
 
       return result;
     }
@@ -5616,6 +5768,15 @@
           var seg = buildMonthTimedSpanSegment(evWithOffset, isStart, isEnd, isVisibleStart, visibleCells, ci);
           adEventsEl.appendChild(seg);
 
+          // dayGrid Phase2: イベントID別にセグメントを収集（DnD 配線用）
+          // spanEvent のオリジナル ev.id を使う（evWithOffset は lane を上書きしているが id は同じ）
+          if (!result._segElsMap) result._segElsMap = {};
+          if (!result._evMap)     result._evMap     = {};
+          if (!result._segElsMap[ev.id]) result._segElsMap[ev.id] = [];
+          result._segElsMap[ev.id].push(seg);
+          // evMap には オリジナル ev（start/end 時刻を含む）を保存する
+          if (!result._evMap[ev.id]) result._evMap[ev.id] = ev;
+
           // colLaneCounts を更新（終日 + span の合計スロット数）
           result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], offsetLane + 1);
         }
@@ -5631,6 +5792,47 @@
           }
         }
       });
+
+      // dayGrid Phase2: 全セグメント収集後に DnD ハンドラを配線する（日跨ぎ時間予定）
+      // startResizeMonthTimedSpan を allSegs 付きで呼ぶことで全セグメントを一括薄表示できる。
+      if (result._segElsMap) {
+        Object.keys(result._segElsMap).forEach(function (evId) {
+          var segs = result._segElsMap[evId];
+          var capEv = result._evMap[evId];
+          if (!segs || !segs.length || !capEv) return;
+          var perm = KC.LoginContext.getPermission(capEv);
+          if (!perm.canEdit) return;
+
+          segs.forEach(function (seg) {
+            // バー本体 mousedown → 移動 DnD（startMoveAlldayMonth を流用: 終日と同じ座標ロジック）
+            seg.addEventListener('mousedown', function (mdEvt) {
+              if (mdEvt.button !== 0) return;
+              mdEvt.stopPropagation();
+              KC.DnD.startMoveAlldayMonth(capEv, mdEvt, seg, segs);
+            });
+
+            // 左端リサイズハンドル
+            var lHandle = seg.querySelector('.kc-resize-handle--left[data-resize-side="left"]');
+            if (lHandle) {
+              lHandle.addEventListener('mousedown', function (mdEvt) {
+                if (mdEvt.button !== 0) return;
+                mdEvt.stopPropagation();
+                KC.DnD.startResizeMonthTimedSpan(capEv, 'left', mdEvt, seg, segs);
+              });
+            }
+
+            // 右端リサイズハンドル
+            var rHandle = seg.querySelector('.kc-resize-handle--right[data-resize-side="right"]');
+            if (rHandle) {
+              rHandle.addEventListener('mousedown', function (mdEvt) {
+                if (mdEvt.button !== 0) return;
+                mdEvt.stopPropagation();
+                KC.DnD.startResizeMonthTimedSpan(capEv, 'right', mdEvt, seg, segs);
+              });
+            }
+          });
+        });
+      }
 
       return result;
     }
