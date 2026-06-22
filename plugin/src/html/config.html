@@ -397,6 +397,40 @@
                   + 行を追加
                 </button>
               </div>
+
+              <!-- デフォルト権限設定 (REQ_default-permission) -->
+              <div class="kc-default-permission-section" id="kc-default-permission-section">
+                <h4 class="kc-config-subsection-title kc-default-permission-title">
+                  デフォルト設定（上のいずれの条件にも一致しない場合）
+                </h4>
+                <p class="kc-config-hint">
+                  権限フィールド設定・権限ユーザー設定のどの行にも一致しないレコードに適用します。
+                  チェックを外すと従来の動作（設定あり非マッチ: 閲覧のみ、設定なし: 全員編集可）を維持します。
+                </p>
+                <label class="kc-config-checkbox-label">
+                  <input type="checkbox" id="kc-default-permission-enabled" name="defaultPermissionEnabled" />
+                  デフォルト設定を使用する
+                </label>
+                <div class="kc-default-permission-fields" id="kc-default-permission-fields">
+                  <div class="kc-default-permission-row">
+                    <div class="kc-default-permission-cell kc-default-permission-col-perm">
+                      <label class="kc-config-label" for="kc-default-permission-perm">権限</label>
+                      <select id="kc-default-permission-perm" class="kc-config-select kc-default-perm-select">
+                        <option value="edit">編集者</option>
+                        <option value="view" selected>閲覧者</option>
+                      </select>
+                    </div>
+                    <div class="kc-default-permission-cell kc-default-permission-col-bgcolor">
+                      <label class="kc-config-label">背景色</label>
+                      <!-- buildDefaultPermissionColorWidgets() で JS から挿入 -->
+                    </div>
+                    <div class="kc-default-permission-cell kc-default-permission-col-textcolor">
+                      <label class="kc-config-label">文字色</label>
+                      <!-- buildDefaultPermissionColorWidgets() で JS から挿入 -->
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
 

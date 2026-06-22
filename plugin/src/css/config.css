@@ -1322,3 +1322,75 @@ body {
 .kc-fieldvalue-row.kc-drag-over-bottom {
   border-bottom: 2px solid #0078d4;
 }
+
+/* ====================================================================
+ * デフォルト権限設定エリア (REQ_default-permission)
+ * ==================================================================== */
+
+.kc-default-permission-section {
+  margin-top: 16px;
+  padding: 14px 16px 16px;
+  border-top: 1px solid #d0d5df;
+  background: #f9f9fb;
+  border-radius: 0 0 6px 6px;
+}
+
+.kc-default-permission-title {
+  margin-top: 0;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: bold;
+  color: #444;
+}
+
+.kc-config-hint {
+  font-size: 12px;
+  color: #777;
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.kc-config-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+
+.kc-config-checkbox-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.kc-default-permission-fields {
+  transition: opacity 0.15s;
+}
+
+.kc-default-permission-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.kc-default-permission-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kc-default-permission-col-perm {
+  min-width: 120px;
+}
+
+.kc-default-permission-col-bgcolor,
+.kc-default-permission-col-textcolor {
+  align-items: flex-start;
+}
+
+.kc-default-perm-select {
+  width: 100%;
+}

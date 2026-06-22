@@ -144,15 +144,21 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 9)
-   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, views: Object }}
+   * setConfig で保存する全体設定オブジェクト (version 10)
+   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, views: Object }}
    */
   var currentConfig = {
-    version: 9,
+    version: 10,
     fieldMapping: {},
     permissionRules: [],
     fieldValueRules: [],
     searchTargets: [],
+    defaultPermission: {
+      enabled:    false,
+      permission: 'view',
+      bgColor:    '#bdbdbd',
+      textColor:  '#000000'
+    },
     views: {}
   };
 
@@ -1587,6 +1593,85 @@
     return result;
   }
 
+  /* ====================================================================
+   * デフォルト権限設定 UI ヘルパー (REQ_default-permission)
+   * ==================================================================== */
+
+  /**
+   * チェックボックス ON/OFF に連動して kc-default-permission-fields 配下の
+   * select と native input の disabled 属性をトグルする
+   * @param {boolean} enabled
+   */
+  function _syncDefaultPermissionEnabled(enabled) {
+    var elFields = document.getElementById('kc-default-permission-fields');
+    if (!elFields) { return; }
+    var inputs = elFields.querySelectorAll('select, input[type="color"], input[type="text"]');
+    for (var i = 0; i < inputs.length; i++) {
+      inputs[i].disabled = !enabled;
+    }
+    elFields.style.opacity = enabled ? '1' : '0.5';
+  }
+
+  /**
+   * 保存済み defaultPermission をデフォルト設定エリアに反映する
+   * @param {Object|null} obj - defaultPermission オブジェクト
+   */
+  function applyDefaultPermission(obj) {
+    var elEnabled = document.getElementById('kc-default-permission-enabled');
+    var elPerm    = document.getElementById('kc-default-permission-perm');
+    var elFields  = document.getElementById('kc-default-permission-fields');
+    if (!elEnabled) { return; }
+
+    var enabled = obj && obj.enabled === true;
+    elEnabled.checked = enabled;
+
+    if (obj && obj.permission) { elPerm.value = obj.permission; }
+
+    // カラーピッカーの native input を取得して値を反映
+    var bgInput   = elFields ? elFields.querySelector('.kc-default-perm-bgcolor')   : null;
+    var textInput = elFields ? elFields.querySelector('.kc-default-perm-textcolor') : null;
+    if (bgInput   && obj && obj.bgColor)   { bgInput.value   = obj.bgColor;   }
+    if (textInput && obj && obj.textColor) { textInput.value = obj.textColor; }
+
+    // カラープレビューボタンの背景色も同期する
+    if (bgInput) {
+      var bgWrapper = bgInput.closest('.kc-color-picker-wrapper');
+      if (bgWrapper) {
+        var bgBtn = bgWrapper.querySelector('.kc-color-preview-btn');
+        if (bgBtn && obj && obj.bgColor) { bgBtn.style.backgroundColor = obj.bgColor; }
+      }
+    }
+    if (textInput) {
+      var textWrapper = textInput.closest('.kc-color-picker-wrapper');
+      if (textWrapper) {
+        var textBtn = textWrapper.querySelector('.kc-color-preview-btn');
+        if (textBtn && obj && obj.textColor) { textBtn.style.backgroundColor = obj.textColor; }
+      }
+    }
+
+    // 活性/非活性の同期
+    _syncDefaultPermissionEnabled(enabled);
+  }
+
+  /**
+   * デフォルト設定エリアの DOM から defaultPermission を収集する
+   * @returns {{ enabled: boolean, permission: string, bgColor: string, textColor: string }}
+   */
+  function collectDefaultPermission() {
+    var elEnabled = document.getElementById('kc-default-permission-enabled');
+    var elPerm    = document.getElementById('kc-default-permission-perm');
+    var elFields  = document.getElementById('kc-default-permission-fields');
+    var bgInput   = elFields ? elFields.querySelector('.kc-default-perm-bgcolor')   : null;
+    var textInput = elFields ? elFields.querySelector('.kc-default-perm-textcolor') : null;
+
+    return {
+      enabled:    elEnabled  ? elEnabled.checked        : false,
+      permission: elPerm     ? (elPerm.value || 'view') : 'view',
+      bgColor:    bgInput    ? bgInput.value             : '#bdbdbd',
+      textColor:  textInput  ? textInput.value           : '#000000'
+    };
+  }
+
   /**
    * 保存済み fieldValueRules をフォームに反映する
    * rules が空配列の場合は空の入力行を 1 つ表示する（UX 向上のため）
@@ -2082,11 +2167,17 @@
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
       currentConfig = {
-        version: 9,
+        version: 10,
         fieldMapping: {},
         permissionRules: [],
         fieldValueRules: [],
         searchTargets: [],
+        defaultPermission: {
+          enabled:    false,
+          permission: 'view',
+          bgColor:    '#bdbdbd',
+          textColor:  '#000000'
+        },
         views: {}
       };
       return;
@@ -2147,6 +2238,20 @@
       parsed.version = 9;
     }
 
+    // version 9 → 10 マイグレーション（defaultPermission 追加）
+    if (Number(parsed.version) < 10) {
+      console.log('[KC Config] version 9 → 10 へマイグレーション実行');
+      if (!parsed.defaultPermission) {
+        parsed.defaultPermission = {
+          enabled:    false,
+          permission: 'view',
+          bgColor:    '#bdbdbd',
+          textColor:  '#000000'
+        };
+      }
+      parsed.version = 10;
+    }
+
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
@@ -2161,12 +2266,18 @@
     }
 
     currentConfig = {
-      version:         9,
-      fieldMapping:    fm,
-      permissionRules: rules,
-      fieldValueRules: Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
-      searchTargets:   Array.isArray(parsed.searchTargets) ? parsed.searchTargets : [],
-      views:           parsed.views || {}
+      version:           10,
+      fieldMapping:      fm,
+      permissionRules:   rules,
+      fieldValueRules:   Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
+      searchTargets:     Array.isArray(parsed.searchTargets) ? parsed.searchTargets : [],
+      defaultPermission: parsed.defaultPermission || {
+        enabled:    false,
+        permission: 'view',
+        bgColor:    '#bdbdbd',
+        textColor:  '#000000'
+      },
+      views:             parsed.views || {}
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
   }
@@ -2669,6 +2780,9 @@
     // 権限フィールド設定を収集して currentConfig.fieldValueRules を更新
     currentConfig.fieldValueRules = collectFieldValueRules();
 
+    // デフォルト権限設定を収集して currentConfig.defaultPermission を更新 (REQ_default-permission)
+    currentConfig.defaultPermission = collectDefaultPermission();
+
     // 検索対象フィールド設定を収集して currentConfig.searchTargets を更新
     currentConfig.searchTargets = collectSearchTargets();
 
@@ -2781,14 +2895,17 @@
         mailLoginUserDefault: mailLoginUserDefault
       });
 
-      // 最終的な保存オブジェクト (version 9 形式: permissionRules + fieldValueRules + searchTargets + overlapMode/refTable を含む)
+      // 最終的な保存オブジェクト (version 10 形式: permissionRules + fieldValueRules + searchTargets + defaultPermission + overlapMode/refTable を含む)
       var finalConfig = {
-        version: 9,
-        fieldMapping:    updatedFieldMapping,
-        permissionRules: currentConfig.permissionRules || [],
-        fieldValueRules: currentConfig.fieldValueRules || [],
-        searchTargets:   currentConfig.searchTargets || [],
-        views:           mergedViews
+        version: 10,
+        fieldMapping:       updatedFieldMapping,
+        permissionRules:    currentConfig.permissionRules    || [],
+        fieldValueRules:    currentConfig.fieldValueRules    || [],
+        searchTargets:      currentConfig.searchTargets      || [],
+        defaultPermission:  currentConfig.defaultPermission  || {
+          enabled: false, permission: 'view', bgColor: '#bdbdbd', textColor: '#000000'
+        },
+        views:              mergedViews
       };
 
       // kintone の required_params チェックは setConfig 第1引数の最上位キーと照合する仕様。
@@ -2964,6 +3081,28 @@
     // 3.6. 権限フィールド設定 (fieldValueRules) をフォームに反映
     // loadFields + loadStatuses 完了後に呼ぶこと
     applyFieldValueRules(currentConfig.fieldValueRules || []);
+
+    // 3.61. デフォルト権限設定エリアにカラーピッカーウィジェットを挿入 (REQ_default-permission)
+    // applyDefaultPermission より先に挿入しておく必要がある
+    var elDefaultBgCell   = document.querySelector('#kc-default-permission-fields .kc-default-permission-col-bgcolor');
+    var elDefaultTextCell = document.querySelector('#kc-default-permission-fields .kc-default-permission-col-textcolor');
+    if (elDefaultBgCell) {
+      elDefaultBgCell.appendChild(buildColorPickerWidget('#bdbdbd', 'kc-default-perm-bgcolor'));
+    }
+    if (elDefaultTextCell) {
+      elDefaultTextCell.appendChild(buildColorPickerWidget('#000000', 'kc-default-perm-textcolor'));
+    }
+
+    // 3.62. デフォルト権限設定をフォームに反映
+    applyDefaultPermission(currentConfig.defaultPermission || null);
+
+    // 3.63. デフォルト権限有効チェックボックスのイベント登録
+    var elDefaultEnabled = document.getElementById('kc-default-permission-enabled');
+    if (elDefaultEnabled) {
+      elDefaultEnabled.addEventListener('change', function () {
+        _syncDefaultPermissionEnabled(elDefaultEnabled.checked);
+      });
+    }
 
     // 3.65. 検索対象フィールド設定 (searchTargets) をフォームに反映
     // loadFields 完了後に呼ぶこと（searchTargetFieldOptions が確定している必要があるため）

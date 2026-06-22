@@ -27,7 +27,7 @@
    * 実機でどのビルドが動いているか確認するためのスタンプ。
    * console.warn は KC_DEBUG によらず常に出力される（上記コメント参照）。
    * ==================================================================== */
-  var KC_BUILD = '2026-06-22-daygrid-phase2b';
+  var KC_BUILD = '2026-06-22-default-perm';
   try { if (typeof window !== 'undefined') window.KC_BUILD = KC_BUILD; } catch (e) {}
   // eslint-disable-next-line no-console
   console.warn('[KC] build ' + KC_BUILD);
@@ -309,6 +309,10 @@
       // v7 マイグレーション済みの場合はタイトルフィールドが含まれるため、タイトル検索は継続する
       KC.Config.SEARCH_TARGETS = Array.isArray(config.searchTargets) ? config.searchTargets : [];
 
+      // デフォルト権限設定 (version 10 以降)
+      // v9 以前の設定では defaultPermission が存在しないため null として初期化（ハードコードフォールバックを維持）
+      KC.Config.DEFAULT_PERMISSION = config.defaultPermission || null;
+
       // メールアドレス初期値設定 (fieldMapping.mailLoginUserDefault が存在しない場合は false: 後方互換デフォルト)
       KC.Config.MAIL_LOGIN_USER_DEFAULT =
         (config.fieldMapping && config.fieldMapping.mailLoginUserDefault === true);
@@ -370,6 +374,12 @@
    * @type {boolean}
    */
   KC.Config.MAIL_LOGIN_USER_DEFAULT = false;
+  /**
+   * デフォルト権限設定 (REQ_default-permission)
+   * loadFromPluginConfig で上書きされる。null = ハードコードフォールバックを維持
+   * @type {{ enabled: boolean, permission: string, bgColor: string, textColor: string }|null}
+   */
+  KC.Config.DEFAULT_PERMISSION = null;
   /**
    * DnD 重複チェック判定モード (REQ_dnd-overlap-block §9B)
    * loadFromPluginConfig で上書きされる。
@@ -3652,6 +3662,32 @@
     }
 
     /**
+     * デフォルト設定が有効な場合はその値を返し、無効な場合はハードコードフォールバックを返す (REQ_default-permission)
+     * @param {boolean} isFallbackCase - true: 両配列空（全員 edit ケース） / false: 設定あり非マッチ
+     * @returns {{ canEdit, canDelete, canOpenDialog, bgColor, textColor, source }}
+     */
+    function _applyDefaultPermissionOrFallback(isFallbackCase) {
+      var def = KC.Config.DEFAULT_PERMISSION;
+      if (def && def.enabled === true) {
+        return {
+          canEdit:       _permLevel(def.permission) >= 2,
+          canDelete:     false,
+          canOpenDialog: true,
+          bgColor:       def.bgColor   || null,
+          textColor:     def.textColor || null,
+          source:        'default'
+        };
+      }
+      // enabled でない場合は従来のハードコードフォールバックを維持
+      if (isFallbackCase) {
+        // 両配列空: 全員 edit（従来の source: 'fallback' 動作）
+        return { canEdit: true, canDelete: false, canOpenDialog: true, bgColor: null, textColor: null, source: 'fallback' };
+      }
+      // 設定あり非マッチ: 閲覧のみ・色なし（従来の source: 'user' 動作）
+      return { canEdit: false, canDelete: false, canOpenDialog: true, bgColor: null, textColor: null, source: 'user' };
+    }
+
+    /**
      * イベントに対するログインユーザーの権限と表示色を返す（v6: フィールド値ルール優先）
      * 優先順位: fieldValueRules → permissionRules → フォールバック（§5.10）
      * - 両配列が空配列の場合: edit 相当（フォールバック: 全員編集可）・bgColor/textColor: null
@@ -3697,12 +3733,12 @@
             source:        'user'
           };
         }
-        // 設定あり・非マッチ: view 相当・色なし
-        return { canEdit: false, canDelete: false, canOpenDialog: true, bgColor: null, textColor: null, source: 'user' };
+        // 設定あり・非マッチ: デフォルト設定 or 旧動作（閲覧のみ・色なし）
+        return _applyDefaultPermissionOrFallback(false);
       }
 
-      // 3. 両配列空: フォールバック（全員 edit）
-      return { canEdit: true, canDelete: false, canOpenDialog: true, bgColor: null, textColor: null, source: 'fallback' };
+      // 3. 両配列空: デフォルト設定 or フォールバック（全員 edit）
+      return _applyDefaultPermissionOrFallback(true);
     }
 
     return {
