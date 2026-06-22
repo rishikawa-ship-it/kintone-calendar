@@ -22,6 +22,16 @@
    * ==================================================================== */
   var KC_DEBUG = (typeof window !== 'undefined' && window.KC_DEBUG === true);
 
+  /* ====================================================================
+   * ビルド識別子
+   * 実機でどのビルドが動いているか確認するためのスタンプ。
+   * console.warn は KC_DEBUG によらず常に出力される（上記コメント参照）。
+   * ==================================================================== */
+  var KC_BUILD = '2026-06-22-daygrid-phase1';
+  try { if (typeof window !== 'undefined') window.KC_BUILD = KC_BUILD; } catch (e) {}
+  // eslint-disable-next-line no-console
+  console.warn('[KC] build ' + KC_BUILD);
+
   /**
    * デバッグログ出力（KC_DEBUG が true の場合のみ出力）
    * console.log の直接呼び出しをこれに置き換えることで本番ログを抑制する
@@ -4744,6 +4754,16 @@
 
         cell.appendChild(dateline);
 
+        // dayGrid Phase1: セル内セグメント配置レイヤ
+        // .kc-month-seg-layer は dateline の直後に配置される絶対配置レイヤ。
+        // セル幅いっぱいに広がり、セグメント要素を top: lane*(BAR_H+BAR_GAP) で絶対配置する。
+        // chip/more は引き続き in-flow（flex 子）として dateline の下に積まれるが、
+        // spacer の代わりに seg-layer の height（= usedSlots * PITCH）が確保した空間の上に
+        // chip が来るよう、seg-layer は flex-shrink: 0 / height を JS でセット。
+        var segLayer = document.createElement('div');
+        segLayer.className = 'kc-month-seg-layer';
+        cell.appendChild(segLayer);
+
         // セルクリック → 新規作成（Phase 1B-1: クリックハンドラ配線）
         cell.addEventListener('click', (function (capturedYMD) {
           return function (e) {
@@ -4754,7 +4774,8 @@
         weekEl.appendChild(cell);
       }
 
-      // 終日バー専用絶対配置レイヤ（Phase 1B-2 で使用）
+      // 終日バー専用絶対配置レイヤ（週行全幅。DnD ゴーストの配置基準として残す。
+      // Phase1 ではセグメント描画には使わず DOM 構造だけ維持する）
       var adEvents = document.createElement('div');
       adEvents.className = 'kc-month-ad-events';
       weekEl.appendChild(adEvents);
@@ -4993,6 +5014,186 @@
     }
 
     /**
+     * 月ビュー終日バーのセグメント要素（dayGrid Phase1）を生成する
+     * 各セル（.kc-month-seg-layer）に配置される幅 100% の絶対配置要素。
+     * isStart/isEnd フラグで左右端の角丸を制御し、隣接セル間で視覚的に連結した 1 本のバーに見せる。
+     *
+     * @param {Object} ev       - 位置情報付き KcEvent（lane, adDateRange を含む）
+     * @param {boolean} isStart - このセグメントがイベント開始日（または週先頭）か
+     * @param {boolean} isEnd   - このセグメントがイベント終了日（または週末尾）か
+     * @param {boolean} [isDndEnabled=false] - DnD ハンドラを付ける（フェーズ2用、Phase1 では false）
+     * @returns {HTMLElement}
+     */
+    function buildMonthAlldaySegment(ev, isStart, isEnd, isDndEnabled) {
+      var perm    = KC.LoginContext.getPermission(ev);
+      var canEdit = perm.canEdit;
+      var el = document.createElement('div');
+      // kc-ad-event--month: 月ビュー専用デザイン（全面塗り型）を適用
+      el.className = 'kc-ad-event kc-ad-event--month kc-ad-event--seg';
+      if (!canEdit) el.style.cursor = 'pointer';
+      el.dataset.eventId = ev.id;
+
+      // セグメントは seg-layer（セル幅 100%）内に絶対配置
+      // left: 0, width: 100% だが右端セグメント（isEnd）には BAR_X_GAP の隙間を付ける
+      el.style.position = 'absolute';
+      el.style.left   = '0';
+      el.style.width  = isEnd ? ('calc(100% - ' + BAR_X_GAP + 'px)') : '100%';
+      el.style.top    = (ev.lane * (BAR_H + BAR_GAP)) + 'px';
+      el.style.height = BAR_H + 'px';
+      el.style.pointerEvents = 'auto';
+
+      // 角丸制御: Google カレンダー方式
+      //   isStart && isEnd → 両端角丸（単セル）
+      //   isStart のみ    → 左端のみ角丸（バー先頭）
+      //   isEnd のみ      → 右端のみ角丸（バー末尾）
+      //   どちらでもない   → 角丸なし（中間セル: 連結して見える）
+      var rl = isStart ? '4px' : '0';
+      var rr = isEnd   ? '4px' : '0';
+      el.style.borderRadius = rl + ' ' + rr + ' ' + rr + ' ' + rl;
+
+      // 色設定（buildMonthAlldayBar と同一ロジック）
+      var displayBgColor = perm.bgColor || ev.color || '#818cf8';
+      el.style.background = displayBgColor;
+      el.style.borderLeft = 'none';
+      el.style.color = perm.textColor || (KC.Lanes.isLightColor(displayBgColor) ? '#1f2937' : '#ffffff');
+
+      el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
+
+      // テキスト: isStart のセグメントのみタイトルを表示（中間・末尾は空）
+      if (isStart) {
+        var dot = document.createElement('span');
+        dot.className = 'dot';
+        var titleSpan = document.createElement('span');
+        titleSpan.className = 'kc-ad-evt-title';
+        titleSpan.textContent = ev.title || '(無題)';
+        el.appendChild(dot);
+        el.appendChild(titleSpan);
+      }
+
+      // クリック → ダイアログ（全セグメントに付ける）
+      el.addEventListener('click', function (clickEvt) {
+        clickEvt.stopPropagation();
+        KC.Popup.openEdit(ev.id);
+      });
+
+      // フェーズ1: DnD は最小対応（isDndEnabled=false のときはハンドルを非表示に保つ）
+      // mousedown は一応付けるが、barEl が seg-layer 内の 1 要素のみを指すため
+      // DnD は全セグメントにわたって正常動作しない。フェーズ2 で全面再配線予定。
+      if (isDndEnabled && canEdit) {
+        // 左端リサイズハンドル（開始セグメントにのみ有意）
+        if (isStart) {
+          var leftHandle = document.createElement('div');
+          leftHandle.className = 'kc-resize-handle kc-resize-handle--left';
+          leftHandle.addEventListener('mousedown', function (mdEvt) {
+            if (mdEvt.button !== 0) return;
+            mdEvt.stopPropagation();
+            KC.DnD.startResizeAlldayMonth(ev, 'left', mdEvt, el);
+          });
+          el.appendChild(leftHandle);
+        }
+        // 右端リサイズハンドル（終了セグメントにのみ有意）
+        if (isEnd) {
+          var rightHandle = document.createElement('div');
+          rightHandle.className = 'kc-resize-handle kc-resize-handle--right';
+          rightHandle.addEventListener('mousedown', function (mdEvt) {
+            if (mdEvt.button !== 0) return;
+            mdEvt.stopPropagation();
+            KC.DnD.startResizeAlldayMonth(ev, 'right', mdEvt, el);
+          });
+          el.appendChild(rightHandle);
+        }
+        el.addEventListener('mousedown', function (mdEvt) {
+          if (mdEvt.button !== 0) return;
+          mdEvt.stopPropagation();
+          KC.DnD.startMoveAlldayMonth(ev, mdEvt, el);
+        });
+      } else {
+        // フェーズ1: mousedown の伝播を止めてセル click（新規作成）を誤爆させない
+        el.addEventListener('mousedown', function (mdEvt) {
+          if (mdEvt.button !== 0) return;
+          mdEvt.stopPropagation();
+          // DnD は無効（フェーズ2 で再配線）
+        });
+      }
+
+      return el;
+    }
+
+    /**
+     * 月ビュー日跨ぎ時間予定バーのセグメント要素（dayGrid Phase1）を生成する
+     * buildMonthAlldaySegment と同様の構造だが、時計アイコン・時刻表示が追加される。
+     *
+     * @param {Object} ev       - 位置情報付き KcEvent（lane, adDateRange を含む）
+     * @param {boolean} isStart - このセグメントがイベント開始日（または週先頭）か
+     * @param {boolean} isEnd   - このセグメントがイベント終了日（または週末尾）か
+     * @returns {HTMLElement}
+     */
+    function buildMonthTimedSpanSegment(ev, isStart, isEnd) {
+      var perm    = KC.LoginContext.getPermission(ev);
+      var canEdit = perm.canEdit;
+      var bgColor = perm.bgColor || ev.color || null;
+      var el = document.createElement('div');
+      el.className = 'kc-month-chip--span kc-ad-event--seg';
+      if (!canEdit) el.style.cursor = 'pointer';
+      el.dataset.evId    = ev.id;
+      el.dataset.eventId = ev.id;
+
+      // セグメント絶対配置
+      el.style.position = 'absolute';
+      el.style.left   = '0';
+      el.style.width  = isEnd ? ('calc(100% - ' + BAR_X_GAP + 'px)') : '100%';
+      el.style.top    = (ev.lane * (BAR_H + BAR_GAP)) + 'px';
+      el.style.height = BAR_H + 'px';
+      el.style.pointerEvents = 'auto';
+
+      // 角丸制御（buildMonthAlldaySegment と同一ロジック）
+      var rl = isStart ? '4px' : '0';
+      var rr = isEnd   ? '4px' : '0';
+      el.style.borderRadius = rl + ' ' + rr + ' ' + rr + ' ' + rl;
+
+      if (bgColor) {
+        el.style.background = bgColor;
+        el.style.color = perm.textColor || (KC.Lanes.isLightColor(bgColor) ? '#1f2937' : '#ffffff');
+      }
+
+      var evStart = new Date(ev.start);
+      var timeStr = KC.Utils.pad2(evStart.getHours()) + ':' + KC.Utils.pad2(evStart.getMinutes());
+      el.title = (ev.title || '(無題)') + '\n' + timeStr + (ev.adDateRange ? '\n' + ev.adDateRange : '');
+
+      // isStart セグメントのみ時計アイコン・時刻・タイトルを表示
+      if (isStart) {
+        var clockSpan = document.createElement('span');
+        clockSpan.className = 'kc-month-chip--span-icon';
+        clockSpan.textContent = '⏱';
+
+        var timeSpan = document.createElement('span');
+        timeSpan.className = 'kc-month-chip--span-time';
+        timeSpan.textContent = timeStr;
+
+        var titleSpan = document.createElement('span');
+        titleSpan.className = 'kc-month-chip--span-title';
+        titleSpan.textContent = ev.title || '(無題)';
+
+        el.appendChild(clockSpan);
+        el.appendChild(timeSpan);
+        el.appendChild(titleSpan);
+      }
+
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        KC.Popup.openEdit(ev.id);
+      });
+
+      // フェーズ1: DnD は無効（mousedown 伝播のみ止める）
+      el.addEventListener('mousedown', function (mdEvt) {
+        if (mdEvt.button !== 0) return;
+        mdEvt.stopPropagation();
+      });
+
+      return el;
+    }
+
+    /**
      * .kc-month-chip 要素を生成する
      * @param {Object} evt - KcEvent
      * @returns {HTMLElement}
@@ -5148,37 +5349,35 @@
     }
 
     /**
-     * 月ビューの終日イベントを配置する
-     * 他月セルを含む全 7 列を対象とする（当月クランプなし）
+     * 月ビューの終日イベントを dayGrid セグメント方式で配置する（Phase1 改修版）
+     *
+     * 変更点:
+     *   - 従来: 1 要素が週全幅を横断する絶対配置（.kc-month-ad-events 内）
+     *   - 新方式: イベントを日ごとのセグメントとして各セルの .kc-month-seg-layer に配置
+     *   - overflow 判定はセル単位: lane < cellCapacity のセルのみ描画、超えるセルは hiddenByCol に計上
+     *   - セグメントが連続する場合、中間セルは角丸なし → 視覚的に 1 本のバーに見える
+     *
      * @param {HTMLElement} weekEl - .kc-month-week 要素
      * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
      * @param {Array} alldayEvents - 当週の終日イベント配列
-     * @param {number} [maxItems] - セルの最大表示件数（FR-4: 終日バーの件数制限用）
-     *   指定時は各セルで maxItems-1 を超えるレーンのバーを非表示（描画しない）にする。
-     *   指定なしの場合は全件描画（後方互換）。
-     * @returns {{ laneCount: number, effectiveLaneCount: number, colLaneCounts: number[], hiddenByCol: Array[] }}
-     *   laneCount:         週全体の最大レーン数（制限前・全終日バー対象）
-     *   effectiveLaneCount: 制限後に実際に描画される終日バーのレーン数
-     *                       placeMonthTimedSpanEvents のオフセットにはこちらを使うこと
-     *   colLaneCounts: 各列（0〜6）の実際に描画したレーン占有数（制限後）
-     *   hiddenByCol: 各列（0〜6）で非表示になった終日イベント配列
+     * @param {number} [baseCapacity] - セルの物理収容スロット数（省略時は全件描画）
+     * @param {HTMLElement[]} cellEls - .kc-month-cell 要素配列（7要素）
+     * @returns {{ colLaneCounts: number[], hiddenByCol: Array[] }}
+     *   colLaneCounts: 各列（0〜6）で実際に描画したレーン数（= usedSlots の終日分）
+     *   hiddenByCol:   各列（0〜6）で非表示になった終日イベント配列
      */
-    function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents, baseCapacity) {
-      var adLayer = weekEl.querySelector('.kc-month-ad-events');
+    function placeMonthAlldayEvents(weekEl, weekYMD, alldayEvents, baseCapacity, cellEls) {
       var result = {
-        laneCount: 0,
-        effectiveLaneCount: 0,
         colLaneCounts: [0, 0, 0, 0, 0, 0, 0],
         hiddenByCol:   [[], [], [], [], [], [], []]
       };
-      if (!adLayer || !alldayEvents || alldayEvents.length === 0) return result;
+      if (!alldayEvents || alldayEvents.length === 0) return result;
 
       // 各イベントに対して barPosition を求める（他月セルも含む全列が対象）
       var weekEvents = [];
       alldayEvents.forEach(function (evt) {
         var pos = KC.Lanes.eventToBarPosition(evt, weekYMD);
         if (!pos) return;
-
         weekEvents.push(Object.assign({}, evt, {
           colStart:    pos.colStart,
           span:        pos.span,
@@ -5188,82 +5387,84 @@
 
       if (weekEvents.length === 0) return result;
 
+      // 週内で lane を割り当て（ソート: 色あり降順→開始昇順→終了降順→created昇順→id昇順）
       KC.Lanes.assignLanes(weekEvents);
 
-      var maxLane = weekEvents.reduce(function (m, ev) {
-        return Math.max(m, ev.lane || 0);
-      }, -1);
-      result.laneCount = maxLane + 1;
-
-      // FR-4: baseCapacity が指定されている場合、各セルで終日バーが chip / more 枠を1件以上残せるよう
-      // セルごとの表示上限レーン数を計算する（baseCapacity - 1 まで終日バーを許可）
-      // 上限を超えるレーンのバーは描画せず hiddenByCol に記録する
-      // baseCapacity=0 のとき（セルが極小で chip もバーも描けない場合）は alldayLimit=0 として
-      // 終日バーも全件非表示にし、more だけを表示する。
-      // overflow なしセルでは終日バーが baseCapacity - 1 本を超えることがないため、
-      // この -1 は overflow 確定セルのみ実効化される（案 A 採用）。
-      var alldayLimit = (baseCapacity != null) ? Math.max(0, baseCapacity - 1) : Infinity;
-
-      // effectiveLaneCount: 制限後に実際に描画される終日バーのレーン数（上限適用後）
-      // placeMonthTimedSpanEvents のオフセット計算に使う（laneCount は制限前の全件数のため不適切）
-      result.effectiveLaneCount = (alldayLimit === Infinity)
-        ? result.laneCount
-        : Math.min(result.laneCount, alldayLimit);
-
-      // 各セル列ごとのレーン占有数を計算（制限後の実描画分のみ）
+      // イベントの元の開始日・終了日を YYYY-MM-DD で持っておく（isStart/isEnd 判定用）
       weekEvents.forEach(function (ev) {
+        var s = new Date(ev.start);
+        var e = new Date(ev.end);
+        ev._evStartYMD = KC.Utils.fmtYMD(new Date(s.getFullYear(), s.getMonth(), s.getDate()));
+        var endDate = new Date(e.getFullYear(), e.getMonth(), e.getDate() - 1);
+        ev._evEndYMD = KC.Utils.fmtYMD(endDate);
+      });
+
+      // セルごとにセグメントを配置
+      weekEvents.forEach(function (ev) {
+        var lane = ev.lane || 0;
+
         for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
-          if (ci >= 0 && ci < 7) {
-            var lanePlusOne = (ev.lane || 0) + 1;
-            if (lanePlusOne <= alldayLimit) {
-              // 表示範囲内: そのセルにかかるレーン番号の最大値 + 1 = 使用スロット数
-              result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], lanePlusOne);
-            }
+          if (ci < 0 || ci >= 7) continue;
+
+          // セル単位の overflow 判定
+          // baseCapacity が指定されている場合:
+          //   overflow 時（hiddenCount > 0 になり得る場合）は more 用に 1 スロット確保するため
+          //   lane < baseCapacity - 1（= alldayLimit）のセグメントのみ描画する。
+          //   overflow なし確定は後段で判明するため、ここでは「lane >= baseCapacity - 1」
+          //   を初期条件として非表示候補に入れる（後段のセルループで more の有無を確認）。
+          //   → 設計書 §3.4 の「lane が baseCapacity を超えるものを overflow リスト入り」に準拠。
+          //   ただし baseCapacity=0 の場合は全件非表示。
+          var cellCap = (baseCapacity != null) ? baseCapacity : Infinity;
+          // overflow 判定はセルループで行うため、ここでは lane を cellCap-1 と比較するだけでは
+          // 「overflow 確定時のみ -1 確保」ができない（chipCap は後段で計算）。
+          // → Phase1 の簡略方式: lane < cellCap のセグメントを「候補」として描画し、
+          //   後段の chipCap 計算で実際に「lane が可視スロット数に収まるか」を確認する。
+          //   ここでは lane >= cellCap のものだけ必ず非表示にして hiddenByCol に追加する。
+          if (lane >= cellCap) {
+            result.hiddenByCol[ci].push(ev);
+            continue;
           }
+
+          // セグメントの isStart/isEnd を判定
+          // isStart: イベント開始日 = このセルの日付、または週先頭（前週から続く場合）
+          var cellYMD = weekYMD[ci];
+          var isStart = (cellYMD === ev._evStartYMD) || (ci === ev.colStart && ev._evStartYMD < weekYMD[0]);
+          var isEnd   = (cellYMD === ev._evEndYMD)   || (ci === ev.colStart + ev.span - 1 && ev._evEndYMD > weekYMD[6]);
+
+          var segLayer = cellEls[ci] ? cellEls[ci].querySelector('.kc-month-seg-layer') : null;
+          if (!segLayer) continue;
+
+          var seg = buildMonthAlldaySegment(ev, isStart, isEnd, false);
+          segLayer.appendChild(seg);
+
+          // colLaneCounts を更新（描画確定したセグメントの lane+1 が使用スロット数）
+          result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], lane + 1);
         }
       });
-
-      // バーを描画（FR-4: 全セルで上限超えのバーは描画しない）
-      weekEvents.forEach(function (ev) {
-        // このバーがかかる各セルで、いずれかのセルで制限内に収まれば描画する。
-        // ただし FR-4 の「セルごとの制限」に最も厳しく合わせるため、
-        // バーが span する全列でレーンが上限を超えているかを確認する。
-        // → バーの lane が alldayLimit を超えていれば全セルで非表示扱い。
-        var lanePlusOne = (ev.lane || 0) + 1;
-        if (lanePlusOne > alldayLimit) {
-          // このバーが span するセル全列に非表示として記録
-          for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
-            if (ci >= 0 && ci < 7) {
-              result.hiddenByCol[ci].push(ev);
-            }
-          }
-          return; // 描画しない
-        }
-        var bar = buildMonthAlldayBar(ev);
-        adLayer.appendChild(bar);
-      });
-
-      // adLayer 高さは CSS に委ねる（height: auto / bottom: 0 は CSS側で削除済み）
-      // JS から height を設定すると週全体 laneCount 基準になりセル個別の spacer と不一致になるため廃止
 
       return result;
     }
 
     /**
-     * 当週の日跨ぎ時間予定バーを配置する（終日バーと同じ .kc-month-ad-events レイヤ）
-     * 終日バーのレーン数の下に積む（laneOffset）。
+     * 当週の日跨ぎ時間予定バーを dayGrid セグメント方式で配置する（Phase1 改修版）
+     *
+     * 変更点:
+     *   - 従来: 1 要素が週全幅を横断する絶対配置（.kc-month-ad-events 内）、localMax オフセット方式
+     *   - 新方式: 終日バーと同じ seg-layer に、終日バーの colLaneCounts[ci] の下にオフセットして配置
+     *   - offsetLane = alldayColLaneCounts[ci] + ev.lane （セル局所値を使用）
+     *   - overflow 判定はセル単位: offsetLane >= baseCapacity のセルは非表示
+     *
      * @param {HTMLElement} weekEl - .kc-month-week 要素
      * @param {string[]} weekYMD - 7要素 YYYY-MM-DD 配列
      * @param {Array} spanEvents - 当週にかかる日跨ぎ時間予定
-     * @param {number} alldayLaneCount - 終日バーの実効レーン数（下にずらすオフセット）。span バーの絶対配置 top 計算に使用（週共通値）
-     * @param {number[]|null} [alldayColLaneCounts] - セル局所の終日バー描画数配列（7要素）。省略時は alldayLaneCount を全列に適用
-     * @param {number} [baseCapacity] - セル物理収容スロット数（指定時は超過 span を非表示にして hiddenByCol に計上）
+     * @param {number} alldayLaneCount - 後方互換（現在は alldayColLaneCounts を優先）
+     * @param {number[]|null} alldayColLaneCounts - セル局所の終日バー描画数配列（7要素）
+     * @param {number} [baseCapacity] - セル物理収容スロット数
+     * @param {HTMLElement[]} cellEls - .kc-month-cell 要素配列（7要素）
      * @returns {{ colLaneCounts: number[], hiddenByCol: Array[] }}
-     *   colLaneCounts: 各列の使用スロット数（セル局所終日バー数 + span バー固有スロット数、制限後の実描画分）
-     *   hiddenByCol:   各列で非表示になった日跨ぎ時間予定配列
      */
-    function placeMonthTimedSpanEvents(weekEl, weekYMD, spanEvents, alldayLaneCount, alldayColLaneCounts, baseCapacity) {
-      // 後方互換: alldayColLaneCounts が数値（旧シグネチャの baseCapacity の位置）の場合はシフトする
+    function placeMonthTimedSpanEvents(weekEl, weekYMD, spanEvents, alldayLaneCount, alldayColLaneCounts, baseCapacity, cellEls) {
+      // 後方互換: alldayColLaneCounts が数値の場合はシフトする
       if (typeof alldayColLaneCounts === 'number') {
         baseCapacity = alldayColLaneCounts;
         alldayColLaneCounts = null;
@@ -5272,10 +5473,7 @@
         colLaneCounts: [0, 0, 0, 0, 0, 0, 0],
         hiddenByCol:   [[], [], [], [], [], [], []]
       };
-      var adLayer = weekEl.querySelector('.kc-month-ad-events');
-      if (!adLayer || !spanEvents || spanEvents.length === 0) {
-        return result;
-      }
+      if (!spanEvents || spanEvents.length === 0) return result;
 
       var weekEvents = _buildTimedSpanWeekEvents(spanEvents, weekYMD);
       if (weekEvents.length === 0) return result;
@@ -5283,59 +5481,52 @@
       // 終日バーとは独立したレーン割り当て（0 始まり）
       KC.Lanes.assignLanes(weekEvents);
 
-      // baseCapacity が指定されている場合、終日レーン + span レーンの合計が baseCapacity を超えるものは非表示
-      // span バーはレーン位置固定（Google カレンダー方式）のため、
-      // offsetLane（= alldayLaneCount + ev.lane）>= baseCapacity のバーを丸ごと非表示にして
-      // そのバーが跨ぐ全列の hiddenByCol に計上する。
       var spanLimit = (baseCapacity != null) ? baseCapacity : Infinity;
 
-      // adLayer 内の top は終日バーの下にオフセット
+      // イベントの元の開始日・終了日を YYYY-MM-DD で保持（isStart/isEnd 判定用）
       weekEvents.forEach(function (ev) {
-        // 中間案: span バーが跨ぐ全列の alldayColLaneCounts の最大値（localMax）を求め、
-        // span バーの top（offsetLane）と spacer（colLaneCounts）の基準を localMax に統一する。
-        // これにより「そのバーが跨がない別日の終日バー（週共通値）による押し下げ」を除去しつつ、
-        // top と spacer の基準が一致するため chip と span バーの重なりも防ぐ。
-        var localMax = 0;
-        if (alldayColLaneCounts) {
-          for (var ci2 = ev.colStart; ci2 < ev.colStart + ev.span; ci2++) {
-            if (ci2 >= 0 && ci2 < 7) {
-              localMax = Math.max(localMax, alldayColLaneCounts[ci2] || 0);
-            }
-          }
-        } else {
-          // alldayColLaneCounts 未指定時は週共通値にフォールバック
-          localMax = alldayLaneCount;
+        var s = new Date(ev.start);
+        var startDate = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+        ev._evStartYMD = KC.Utils.fmtYMD(startDate);
+        var e = new Date(ev.end);
+        var endDate = new Date(e.getFullYear(), e.getMonth(), e.getDate());
+        if (e.getHours() === 0 && e.getMinutes() === 0 && e.getSeconds() === 0) {
+          endDate = new Date(endDate.getTime() - 86400000);
         }
+        ev._evEndYMD = KC.Utils.fmtYMD(endDate);
+      });
 
-        var offsetLane = localMax + (ev.lane || 0);
+      weekEvents.forEach(function (ev) {
+        var spanLane = ev.lane || 0;
 
-        if (offsetLane >= spanLimit) {
-          // 上限超え: 描画せず跨ぐ全列の hidden に計上
-          for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
-            if (ci >= 0 && ci < 7) {
-              result.hiddenByCol[ci].push(ev);
-            }
-          }
-          return;
-        }
-
-        var evWithOffset = Object.assign({}, ev, { lane: offsetLane });
-        var bar = buildMonthTimedSpanBar(evWithOffset);
-        adLayer.appendChild(bar);
-        // 各列のスロット数（終日 + span）を更新（制限内のもののみ）
-        // colLaneCounts は localMax（跨ぐ列の最大終日バー数）+ ev.lane + 1 を
-        // 全跨ぎ列に均一記録する。これにより spacer の基準が span バーの top 計算
-        // （offsetLane = localMax + ev.lane）と揃い、chip 重なりが発生しない。
-        // 初版（alldayColLaneCounts[ci] セル固有）から変更:
-        //   以前: 各セル固有の終日バー数で記録（top と spacer の基準が不一致）
-        //   現在: 跨ぐ列最大値（localMax）で全列に均一記録（top と spacer の基準が一致）
         for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
-          if (ci >= 0 && ci < 7) {
-            result.colLaneCounts[ci] = Math.max(
-              result.colLaneCounts[ci],
-              offsetLane + 1
-            );
+          if (ci < 0 || ci >= 7) continue;
+
+          // セル局所の終日バー占有数を取得（alldayColLaneCounts が有効な場合はそれを使用）
+          var adLanes = alldayColLaneCounts
+            ? (alldayColLaneCounts[ci] || 0)
+            : alldayLaneCount;
+
+          var offsetLane = adLanes + spanLane;
+
+          if (offsetLane >= spanLimit) {
+            result.hiddenByCol[ci].push(ev);
+            continue;
           }
+
+          var cellYMD = weekYMD[ci];
+          var isStart = (cellYMD === ev._evStartYMD) || (ci === ev.colStart && ev._evStartYMD < weekYMD[0]);
+          var isEnd   = (cellYMD === ev._evEndYMD)   || (ci === ev.colStart + ev.span - 1 && ev._evEndYMD > weekYMD[6]);
+
+          var segLayer = cellEls && cellEls[ci] ? cellEls[ci].querySelector('.kc-month-seg-layer') : null;
+          if (!segLayer) continue;
+
+          var evWithOffset = Object.assign({}, ev, { lane: offsetLane });
+          var seg = buildMonthTimedSpanSegment(evWithOffset, isStart, isEnd);
+          segLayer.appendChild(seg);
+
+          // colLaneCounts を更新（終日 + span の合計スロット数）
+          result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], offsetLane + 1);
         }
       });
 
@@ -5363,39 +5554,30 @@
     }
 
     /**
-     * セルに時間予定 chip を配置する
+     * セルに時間予定 chip を配置する（dayGrid Phase1 改修版）
+     *
+     * 変更点:
+     *   - 旧 spacer（.kc-month-chip-spacer）廃止
+     *   - 代わりに .kc-month-seg-layer の height を JS でセットし、chip との位置関係を確保する
+     *   - seg-layer は in-flow（flex 子, flex-shrink:0）のため、高さを設定するだけで
+     *     chip が seg-layer の下に来る
+     *
      * @param {HTMLElement} cellEl - .kc-month-cell 要素
      * @param {Array} timedEvents - 当日の時間予定（時刻昇順）
-     * @param {number} usedSlots - 終日バーで使用済みのスロット数
-     * @param {number} maxItems - セルに渡す chip 上限（chipCap: overflow 有無に応じて placeMonthEvents で算出）
+     * @param {number} usedSlots - 終日バー+span バーで使用済みのスロット数
+     * @param {number} maxItems - chip 表示上限（usedSlots + chipCap）
      * @returns {number} 追加した chip 数
      */
     function placeMonthTimedEvents(cellEl, timedEvents, usedSlots, maxItems) {
-      // spacer 生成は timedEvents の有無によらず usedSlots > 0 なら常に行う。
-      // chip が 0 本でもバー（終日・span）が占有するスロット分の in-flow スペースが必要なため。
-      // これにより more の描画位置 = dateline + spacer(usedSlots) + chip群 の直後となる。
-      //
-      // spacer 高さの設計:
-      //   .kc-month-ad-events の top は CSS で --kc-month-dateline-h (24px) に設定済み。
-      //   dateline が 24px を占有した後に spacer がバー群高さ分 (usedSlots 本分) を確保すれば
-      //   chip 開始位置 = dateline(24px) + spacer(usedSlots*BAR_H+...) = adLayer.top + バー群 下端 と一致する。
-      //   BAR_TOP は 0 のため spacerH = usedSlots * BAR_H + (usedSlots - 1) * BAR_GAP。
+      // dayGrid Phase1: spacer の代わりに seg-layer の高さをセットする
+      // seg-layer は in-flow (display: block, flex: 0 0 auto) で dateline の次に来るため、
+      // seg-layer.height = usedSlots 本分のバー高 = chip の開始位置として機能する。
+      // usedSlots=0 のときは seg-layer.height=0 のまま（クリア時に 0 にリセット済み）。
       if (usedSlots > 0) {
-        var spacer = cellEl.querySelector('.kc-month-chip-spacer');
-        if (!spacer) {
-          spacer = document.createElement('div');
-          spacer.className = 'kc-month-chip-spacer';
-          // adLayer.top が CSS で固定されたため BAR_TOP 分は不要。バー群の正味高さのみ確保する。
-          var spacerH = usedSlots * BAR_H + (usedSlots - 1) * BAR_GAP;
-          spacer.style.height = spacerH + 'px';
-          spacer.style.flex = '0 0 auto';
-          spacer.style.pointerEvents = 'none';
-          // dateline（祝日名を含む行）の直後を基準にする。dateline がない場合は
-          // 旧構造の datehead 直接 children へのフォールバック。
-          var dateline = cellEl.querySelector('.kc-month-dateline');
-          var anchor = dateline || cellEl.querySelector('.kc-month-datehead');
-          var insertBefore = anchor ? anchor.nextSibling : null;
-          cellEl.insertBefore(spacer, insertBefore);
+        var segLayer = cellEl.querySelector('.kc-month-seg-layer');
+        if (segLayer) {
+          var segLayerH = usedSlots * BAR_H + (usedSlots - 1) * BAR_GAP;
+          segLayer.style.height = segLayerH + 'px';
         }
       }
 
@@ -5458,14 +5640,25 @@
       // DnD ゴースト（.kc-event--ghost）は DnD 操作中も視覚的に残す必要があるため除外する。
       // クリア対象:
       //   - .kc-month-cell 内の .kc-month-chip（単日時間予定 chip）
-      //   - .kc-month-cell 内の .kc-month-chip-spacer（終日/日跨ぎバー高さ分の余白）
+      //   - .kc-month-cell 内の .kc-month-chip-spacer（旧 spacer: 残存している場合に備え除去）
       //   - .kc-month-cell 内の .kc-month-more（+N more ラベル）
-      //   - .kc-month-ad-events 内の全子要素（終日バー .kc-ad-event、日跨ぎバー .kc-month-chip--span）
+      //   - .kc-month-seg-layer 内の全子要素（Phase1: セグメント要素）
+      //   - .kc-month-ad-events 内の全子要素（旧バー要素 / DnD ゴーストは除外）
       Array.from(gridEl.querySelectorAll(
         '.kc-month-cell .kc-month-chip:not(.kc-event--ghost),' +
         '.kc-month-cell .kc-month-chip-spacer,' +
         '.kc-month-cell .kc-month-more'
       )).forEach(function (el) { el.parentNode.removeChild(el); });
+
+      // seg-layer 内をクリア（高さリセット込み）
+      Array.from(gridEl.querySelectorAll('.kc-month-seg-layer')).forEach(function (layer) {
+        Array.from(layer.children).forEach(function (el) {
+          if (!el.classList.contains('kc-event--ghost')) {
+            layer.removeChild(el);
+          }
+        });
+        layer.style.height = '0px';
+      });
 
       Array.from(gridEl.querySelectorAll('.kc-month-ad-events')).forEach(function (layer) {
         Array.from(layer.children).forEach(function (el) {
@@ -5504,15 +5697,18 @@
           weekYMD.push(U.fmtYMD(U.addDays(range.start, weekIdx * 7 + d)));
         }
 
+        // dayGrid Phase1: cellEls を週ループ先頭で取得し、各関数に渡す
+        var cellEls = Array.from(weekEl.querySelectorAll('.kc-month-cell'));
+
         // 当週にかかる終日イベントを抽出（週内に 1 日でも重なるもの）
         var weekAllday = filteredMonthEvents.filter(function (evt) {
           if (!evt.allday) return false;
           return KC.Lanes.eventToBarPosition(evt, weekYMD) !== null;
         });
 
-        // 終日バーを配置してセルごとのレーン使用数を取得（他月セルも含む）
-        // FR-4: baseCapacity を渡して終日バーの件数を制限し、超過分を hiddenByCol として受け取る
-        var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday, baseCapacity);
+        // 終日バーをセグメント方式で配置（dayGrid Phase1）
+        // baseCapacity を渡してセル単位の overflow 判定を行う
+        var alldayResult = placeMonthAlldayEvents(weekEl, weekYMD, weekAllday, baseCapacity, cellEls);
 
         // 当週にかかる日跨ぎ時間予定を抽出（allday=false かつ複数日にまたがるもの）
         var weekTimedSpan = filteredMonthEvents.filter(function (evt) {
@@ -5520,25 +5716,31 @@
           return KC.Lanes.timedEventToBarPosition(evt, weekYMD) !== null;
         });
 
-        // 日跨ぎ時間予定バーを終日バーの下層に配置
-        // FR-4: オフセットには制限後の実効レーン数（effectiveLaneCount）を使う。
-        //       laneCount（制限前）を使うと終日バーが baseCapacity で制限されても
-        //       日跨ぎバーが制限前レーン数分だけ下にずれてセル外（不可視位置）に描画される。
-        // span 件数制限: baseCapacity を渡して終日+span の合計スロット数が baseCapacity を超えないよう制御する。
-        //       超過 span は描画せず spanResult.hiddenByCol に記録し、後段で hiddenCount に加算する。
+        // 日跨ぎ時間予定バーをセグメント方式で配置（dayGrid Phase1）
+        // alldayResult.colLaneCounts: セル局所終日バー数（オフセット計算に使用）
+        // セル局所オフセットにより「そのセルに終日バーがない場合は余白なし」を実現
         var spanResult = placeMonthTimedSpanEvents(
           weekEl, weekYMD, weekTimedSpan,
-          alldayResult.effectiveLaneCount,  // alldayColLaneCounts 未指定時のフォールバック用（週共通）
-          alldayResult.colLaneCounts,       // セル局所終日バー数配列（中間案の localMax 計算に使用）
-          baseCapacity
+          0,                            // alldayLaneCount: 後方互換フォールバック（未使用）
+          alldayResult.colLaneCounts,   // セル局所終日バー数配列（セル別オフセット計算に使用）
+          baseCapacity,
+          cellEls
         );
 
         // セルごとに単日時間予定 chip を配置（他月セルも含む）
-        var cellEls = Array.from(weekEl.querySelectorAll('.kc-month-cell'));
+        // dayGrid Phase1: placeMonthAlldayEvents / placeMonthTimedSpanEvents が
+        // セル単位 overflow 判定を行うため、ここではバー超過分の hiddenByCol を参照する。
+        // ただし「lane >= baseCapacity のセグメントを全て非表示」の方式では
+        // overflow 確定時の -1 補正（more 用スロット確保）がバー側でできない。
+        // → セルループで hiddenAllday/hiddenSpan を計算してから chipCap を調整する。
         cellEls.forEach(function (cellEl, colIdx) {
           var ymd = weekYMD[colIdx];
 
-          // このセルの使用済みスロット数（終日バー + 日跨ぎバーのレーン占有数、FR-4 制限後の実描画数）
+          // hiddenByCol からセル単位の非表示バー数を取得
+          var hiddenAllday = alldayResult.hiddenByCol[colIdx] || [];
+          var hiddenSpan   = spanResult.hiddenByCol[colIdx]   || [];
+
+          // usedSlots: このセルで実際に描画されたバーのスロット数（終日+span 合計）
           var usedSlots = spanResult.colLaneCounts[colIdx] || alldayResult.colLaneCounts[colIdx] || 0;
 
           // このセルの単日時間予定を抽出（開始日 = このセルの日付、かつ日跨ぎなし）
@@ -5552,25 +5754,36 @@
             return (a.start < b.start) ? -1 : (a.start > b.start) ? 1 : 0;
           });
 
-          // overflow 判定: usedSlots（終日+span の実描画数）+ 単日予定全件数 が baseCapacity を超えるか
-          // total > baseCapacity のとき overflow 確定 → more 用に 1 スロットを確保する
-          var total = usedSlots + dayTimedEvents.length;
+          // overflow 判定（dayGrid Phase1 改良版）:
+          // placeMonthAlldayEvents では lane >= baseCapacity を単純に非表示にしているが、
+          // overflow 確定時の「more 用に -1」補正は後段のセルループで行う。
+          //
+          // 手順:
+          //   1. 実際の hiddenAllday/hiddenSpan + timedEvents 全件で overflow を判定
+          //   2. overflow 確定なら usedSlots を再計算して chipCap から -1 する
+          //      （バー側で「overflow 時に lane = baseCapacity-1 を表示しない」補正が
+          //        できていないため、chipCap で吸収する）
+          //
+          // なお placeMonthAlldayEvents の lane >= cellCap 判定は「baseCapacity 以上の lane を
+          // 非表示にする」であり、overflow 確定時の最終スロットは表示されたまま。
+          // chipCap = 0 になれば chip は表示されないので実質的に同じ結果になる。
+          var hiddenBarCount = hiddenAllday.length + hiddenSpan.length;
+          var total = usedSlots + dayTimedEvents.length + hiddenBarCount;
+          var isOverflow = total > baseCapacity;
+
           // chipCap: placeMonthTimedEvents に渡す chip 表示上限
-          //   overflow 時: more 用に 1 枠確保するため baseCapacity - 1 - usedSlots を上限とする
-          //   収まる時: 全件表示（上限を baseCapacity - usedSlots とする）
-          var chipCap = (total > baseCapacity)
+          //   overflow 時: more 用に 1 枠確保 → baseCapacity - 1 - usedSlots
+          //   収まる時: 全件表示 → baseCapacity - usedSlots
+          // ただし非表示バーがある時点で overflow 確定なので hiddenBarCount > 0 も overflow
+          var chipCap = (isOverflow || hiddenBarCount > 0)
             ? Math.max(0, baseCapacity - 1 - usedSlots)   // overflow 時: more 用に 1 枠確保
             : Math.max(0, baseCapacity - usedSlots);       // 収まる時: 全件
 
-          // chip を配置（chipCap が chip の表示上限）
-          // placeMonthTimedEvents の第4引数は「usedSlots + cap = 表示上限スロット数」として渡す
+          // chip を配置
           var chipsAdded = placeMonthTimedEvents(cellEl, dayTimedEvents, usedSlots, usedSlots + chipCap);
 
           // 非表示件数を計算して +N more を表示
-          // 終日バー超過分・日跨ぎ時間予定超過分・単日時間予定超過分をすべて合算する
           var hiddenTimed  = dayTimedEvents.slice(chipsAdded);
-          var hiddenAllday = alldayResult.hiddenByCol[colIdx] || [];
-          var hiddenSpan   = spanResult.hiddenByCol[colIdx]   || [];
           var hiddenCount  = hiddenAllday.length + hiddenSpan.length + hiddenTimed.length;
           var alldayShown  = alldayResult.colLaneCounts[colIdx] || 0;
           var spanShown    = Math.max(0, (spanResult.colLaneCounts[colIdx] || 0) - alldayShown);
@@ -5578,7 +5791,7 @@
                ' baseCapacity=' + baseCapacity +
                ' usedSlots=' + usedSlots +
                ' total=' + total +
-               ' overflow=' + (total > baseCapacity) +
+               ' overflow=' + isOverflow +
                ' chipCap=' + chipCap +
                ' allday=' + alldayShown +
                ' span=' + spanShown +

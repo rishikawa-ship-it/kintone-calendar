@@ -910,11 +910,29 @@ body.kc-dnd-active * {
   width: 24px;
 }
 
-/* 終日バー専用絶対配置レイヤ（週行全幅に張る）*/
-/* position: absolute により grid フローから外れるが height は内部バー依存（height: auto）*/
-/* bottom: 0 を設定するとセル全体を覆いクリック競合が生じるため除去（NG#5対応）*/
-/* top を --kc-month-dateline-h + 4px に設定することで日付行と終日バーが被らなくなる。
- * adLayer を dateline の下（+ 4px の余白）から開始させ、BAR_TOP (JS) は 0 に変更して整合させる。 */
+/* dayGrid Phase1: セグメント配置レイヤ（各セル内に配置）
+ * .kc-month-seg-layer は dateline の直後に配置される in-flow 要素。
+ * セグメント（.kc-ad-event--seg）を top: lane*(BAR_H+BAR_GAP) で絶対配置する基準になる。
+ * height は JS の placeMonthTimedEvents で usedSlots に応じて設定される。
+ * height=0 のとき: seg-layer は in-flow に存在するが高さ 0 → chip が dateline 直後から並ぶ。
+ * height>0 のとき: seg-layer 分のスペースが確保され、chip がバーの下から並ぶ。
+ * position: relative / overflow: visible でセグメント（絶対配置）がはみ出して隣接セルの
+ * セグメントと隙間なく連結されて見える（セルの overflow: hidden でクリップされるが
+ * 各セルが 100% 幅を使い隙間ゼロで並ぶため、隣接セルのセグメントと連続して見える）。
+ */
+.kc-month-seg-layer {
+  position: relative;
+  overflow: visible;
+  flex: 0 0 auto;
+  height: 0px;   /* JS で usedSlots に応じて上書きされる */
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 終日バー専用絶対配置レイヤ（週行全幅に張る）
+ * dayGrid Phase1 ではセグメントは .kc-month-seg-layer に配置するため、
+ * .kc-month-ad-events は DOM 構造として残す（DnD ゴーストの基準位置として利用）が
+ * セグメント描画には使わない。 */
 .kc-month-ad-events {
   position: absolute;
   left: 0;
@@ -1106,6 +1124,40 @@ body.kc-dnd-active * {
 /* 月ビュー終日バーのホバー: 全面塗り色上での視認性向上のため輝度を強く下げる */
 .kc-ad-event--month:hover {
   filter: brightness(0.92);
+}
+
+/* ==========================================================================
+ * 17.1a dayGrid Phase1: セグメント要素（.kc-ad-event--seg）スタイル
+ *   - buildMonthAlldaySegment / buildMonthTimedSpanSegment が付与するクラス
+ *   - .kc-month-seg-layer（position: relative）内で絶対配置（JS で top/height を設定）
+ *   - left/width/border-radius は JS の isStart/isEnd フラグで制御（連続バー見た目の実現）
+ *   - pointer-events: auto でクリック・hover を有効化
+ * ========================================================================== */
+
+/* セグメント要素の基本: seg-layer 内絶対配置の共通設定 */
+.kc-ad-event--seg {
+  position: absolute;   /* JS で left/width/top/height を設定 */
+  pointer-events: auto;
+}
+
+/* セグメントが seg-layer のサイズを超えて隣接セルに連続して見えるよう
+ * セル境界での overflow を visible にする（セル自体の overflow: hidden はそのまま）。
+ * ただし kc-month-seg-layer の overflow: visible で対応済み。 */
+
+/* セグメントホバー: .kc-ad-event--month と同じ輝度変化 */
+.kc-ad-event--month.kc-ad-event--seg:hover {
+  filter: brightness(0.92);
+}
+
+/* 日跨ぎ span バーのセグメントホバー */
+.kc-month-chip--span.kc-ad-event--seg:hover {
+  filter: brightness(0.95);
+}
+
+/* セグメントを含む seg-layer の pointer-events を auto に戻す
+ * （seg-layer 自体は pointer-events:none だが子要素は auto） */
+.kc-month-seg-layer .kc-ad-event--seg {
+  pointer-events: auto;
 }
 
 /* ==========================================================================
