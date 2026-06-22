@@ -27,7 +27,7 @@
    * 実機でどのビルドが動いているか確認するためのスタンプ。
    * console.warn は KC_DEBUG によらず常に出力される（上記コメント参照）。
    * ==================================================================== */
-  var KC_BUILD = '2026-06-22-daygrid-phase1';
+  var KC_BUILD = '2026-06-22-daygrid-phase1e';
   try { if (typeof window !== 'undefined') window.KC_BUILD = KC_BUILD; } catch (e) {}
   // eslint-disable-next-line no-console
   console.warn('[KC] build ' + KC_BUILD);
@@ -5014,17 +5014,22 @@
     }
 
     /**
-     * 月ビュー終日バーのセグメント要素（dayGrid Phase1）を生成する
-     * 各セル（.kc-month-seg-layer）に配置される幅 100% の絶対配置要素。
-     * isStart/isEnd フラグで左右端の角丸を制御し、隣接セル間で視覚的に連結した 1 本のバーに見せる。
+     * 月ビュー終日バーのセグメント要素（dayGrid Phase1e）を生成する
+     * .kc-month-ad-events（週行全幅オーバーレイ）に配置される絶対配置要素。
+     * left = colIndex/7 * 100%, width = 100%/7 で週行基準の座標を使用し、
+     * セルの border-left より高い z-index（.kc-month-ad-events の z-index で制御）で描画する。
+     * これにより複数日バーがセルの縦罫線を上から覆い、1本に連続して見える。
      *
-     * @param {Object} ev       - 位置情報付き KcEvent（lane, adDateRange を含む）
-     * @param {boolean} isStart - このセグメントがイベント開始日（または週先頭）か
-     * @param {boolean} isEnd   - このセグメントがイベント終了日（または週末尾）か
+     * @param {Object} ev              - 位置情報付き KcEvent（lane, adDateRange を含む）
+     * @param {boolean} isStart        - このセグメントがイベント開始日（または週先頭）か
+     * @param {boolean} isEnd          - このセグメントがイベント終了日（または週末尾）か
      * @param {boolean} [isDndEnabled=false] - DnD ハンドラを付ける（フェーズ2用、Phase1 では false）
+     * @param {boolean} [isVisibleStart=false] - 可視セグメントの先頭か（+more 非表示後の先頭）
+     * @param {number}  [visibleCells=1]       - この可視先頭から末尾まで連続して可視なセル数
+     * @param {number}  [colIndex=0]           - セルの列インデックス（0〜6）。週行基準の left 計算に使用
      * @returns {HTMLElement}
      */
-    function buildMonthAlldaySegment(ev, isStart, isEnd, isDndEnabled) {
+    function buildMonthAlldaySegment(ev, isStart, isEnd, isDndEnabled, isVisibleStart, visibleCells, colIndex) {
       var perm    = KC.LoginContext.getPermission(ev);
       var canEdit = perm.canEdit;
       var el = document.createElement('div');
@@ -5033,14 +5038,21 @@
       if (!canEdit) el.style.cursor = 'pointer';
       el.dataset.eventId = ev.id;
 
-      // セグメントは seg-layer（セル幅 100%）内に絶対配置
-      // left: 0, width: 100% だが右端セグメント（isEnd）には BAR_X_GAP の隙間を付ける
+      // dayGrid Phase1e: 週行オーバーレイ（.kc-month-ad-events）内に週行基準座標で絶対配置
+      // left  = colIndex / 7 * 100%（週行の左端から何列目か）
+      // width = 1/7 * 100% だが右端セグメント（isEnd）には BAR_X_GAP の隙間を付ける
+      // この方式により、セルの border-left（罫線）より高い z-index の adEvents 層に描かれ
+      // バーが罫線を上書きして連続して見える。
+      var ci = colIndex || 0;
       el.style.position = 'absolute';
-      el.style.left   = '0';
-      el.style.width  = isEnd ? ('calc(100% - ' + BAR_X_GAP + 'px)') : '100%';
+      el.style.left   = (ci / 7 * 100) + '%';
+      el.style.width  = isEnd ? ('calc(100% / 7 - ' + BAR_X_GAP + 'px)') : 'calc(100% / 7)';
       el.style.top    = (ev.lane * (BAR_H + BAR_GAP)) + 'px';
       el.style.height = BAR_H + 'px';
       el.style.pointerEvents = 'auto';
+      // タイトルが可視幅いっぱいに伸びるために overflow: visible にする
+      // （タイトル span は position:absolute で後述の幅制限を使う）
+      el.style.overflow = 'visible';
 
       // 角丸制御: Google カレンダー方式
       //   isStart && isEnd → 両端角丸（単セル）
@@ -5059,13 +5071,47 @@
 
       el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
-      // テキスト: isStart のセグメントのみタイトルを表示（中間・末尾は空）
-      if (isStart) {
+      // テキスト: 可視先頭セグメント（isVisibleStart）のみタイトルを表示
+      // タイトルは position:absolute で可視区間幅いっぱいに伸ばし、末尾を ellipsis でクリップする
+      //
+      // 幅の計算:
+      //   可視先頭 seg-layer の left=0 を基準に、visibleCells 個分のセル幅を確保する。
+      //   1セル = seg-layer 幅 100% なので、visibleCells セル = visibleCells * 100%。
+      //   ただし末尾セルの BAR_X_GAP(3px) と padding(6px*2) を差し引く。
+      //   タイトル span 自体は position:absolute なのでセグメントの overflow:visible から
+      //   はみ出すが、幅が可視区間内に収まるため別バー・別予定の上には被さらない。
+      if (isVisibleStart) {
+        var vc = visibleCells || 1;
         var dot = document.createElement('span');
         dot.className = 'dot';
+
         var titleSpan = document.createElement('span');
-        titleSpan.className = 'kc-ad-evt-title';
+        titleSpan.className = 'kc-ad-evt-title kc-seg-title';
         titleSpan.textContent = ev.title || '(無題)';
+        // 可視区間幅いっぱいのタイトル領域を確保する
+        // position: absolute で left=0 から可視区間末端まで伸ばし、overflow:hidden でクリップ。
+        //
+        // 100% の基準 = セグメント幅（position:absolute の包含ブロック）
+        //   - vc=1 (単セル): セグメント幅 = calc(セル幅 - BAR_X_GAP) なので 100%=セル幅-3px
+        //     タイトル幅 = 100% - padding12px = calc(100% - 12px)
+        //   - vc>1 (複数セル先頭): セグメント幅 = セル幅（width:100%）なので 100%=セル幅
+        //     タイトル幅 = vc*セル幅 - BAR_X_GAP - padding12px = calc(vc*100% - 3px - 12px)
+        titleSpan.style.position = 'absolute';
+        titleSpan.style.left = '0';
+        titleSpan.style.top = '0';
+        titleSpan.style.height = '100%';
+        titleSpan.style.width = vc > 1
+          ? ('calc(' + vc + ' * 100% - ' + BAR_X_GAP + 'px - 12px)')
+          : 'calc(100% - 12px)';  // 単セル: セグメント自体が BAR_X_GAP 分短いので引かない
+        titleSpan.style.display = 'flex';
+        titleSpan.style.alignItems = 'center';
+        titleSpan.style.overflow = 'hidden';
+        titleSpan.style.whiteSpace = 'nowrap';
+        titleSpan.style.textOverflow = 'ellipsis';
+        titleSpan.style.paddingLeft = '6px';
+        titleSpan.style.paddingRight = '6px';
+        titleSpan.style.boxSizing = 'border-box';
+
         el.appendChild(dot);
         el.appendChild(titleSpan);
       }
@@ -5120,15 +5166,18 @@
     }
 
     /**
-     * 月ビュー日跨ぎ時間予定バーのセグメント要素（dayGrid Phase1）を生成する
-     * buildMonthAlldaySegment と同様の構造だが、時計アイコン・時刻表示が追加される。
+     * 月ビュー日跨ぎ時間予定バーのセグメント要素（dayGrid Phase1e）を生成する
+     * buildMonthAlldaySegment と同様の週行オーバーレイ方式。時計アイコン・時刻表示が追加される。
      *
-     * @param {Object} ev       - 位置情報付き KcEvent（lane, adDateRange を含む）
-     * @param {boolean} isStart - このセグメントがイベント開始日（または週先頭）か
-     * @param {boolean} isEnd   - このセグメントがイベント終了日（または週末尾）か
+     * @param {Object} ev              - 位置情報付き KcEvent（lane, adDateRange を含む）
+     * @param {boolean} isStart        - このセグメントがイベント開始日（または週先頭）か
+     * @param {boolean} isEnd          - このセグメントがイベント終了日（または週末尾）か
+     * @param {boolean} [isVisibleStart=false] - 可視セグメントの先頭か
+     * @param {number}  [visibleCells=1]       - 可視先頭から末尾まで連続して可視なセル数
+     * @param {number}  [colIndex=0]           - セルの列インデックス（0〜6）
      * @returns {HTMLElement}
      */
-    function buildMonthTimedSpanSegment(ev, isStart, isEnd) {
+    function buildMonthTimedSpanSegment(ev, isStart, isEnd, isVisibleStart, visibleCells, colIndex) {
       var perm    = KC.LoginContext.getPermission(ev);
       var canEdit = perm.canEdit;
       var bgColor = perm.bgColor || ev.color || null;
@@ -5138,13 +5187,16 @@
       el.dataset.evId    = ev.id;
       el.dataset.eventId = ev.id;
 
-      // セグメント絶対配置
+      // dayGrid Phase1e: 週行オーバーレイ（.kc-month-ad-events）内に週行基準座標で絶対配置
+      var ci = colIndex || 0;
       el.style.position = 'absolute';
-      el.style.left   = '0';
-      el.style.width  = isEnd ? ('calc(100% - ' + BAR_X_GAP + 'px)') : '100%';
+      el.style.left   = (ci / 7 * 100) + '%';
+      el.style.width  = isEnd ? ('calc(100% / 7 - ' + BAR_X_GAP + 'px)') : 'calc(100% / 7)';
       el.style.top    = (ev.lane * (BAR_H + BAR_GAP)) + 'px';
       el.style.height = BAR_H + 'px';
       el.style.pointerEvents = 'auto';
+      // タイトルが可視幅いっぱいに伸びるために overflow: visible にする
+      el.style.overflow = 'visible';
 
       // 角丸制御（buildMonthAlldaySegment と同一ロジック）
       var rl = isStart ? '4px' : '0';
@@ -5160,8 +5212,10 @@
       var timeStr = KC.Utils.pad2(evStart.getHours()) + ':' + KC.Utils.pad2(evStart.getMinutes());
       el.title = (ev.title || '(無題)') + '\n' + timeStr + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
-      // isStart セグメントのみ時計アイコン・時刻・タイトルを表示
-      if (isStart) {
+      // 可視先頭セグメントのみ時計アイコン・時刻・タイトルを表示
+      // タイトルは可視区間幅いっぱいに伸ばす
+      if (isVisibleStart) {
+        var vc = visibleCells || 1;
         var clockSpan = document.createElement('span');
         clockSpan.className = 'kc-month-chip--span-icon';
         clockSpan.textContent = '⏱';
@@ -5170,9 +5224,28 @@
         timeSpan.className = 'kc-month-chip--span-time';
         timeSpan.textContent = timeStr;
 
+        // タイトルを可視区間幅いっぱいに伸ばす（position:absolute で幅確保）
         var titleSpan = document.createElement('span');
-        titleSpan.className = 'kc-month-chip--span-title';
+        titleSpan.className = 'kc-month-chip--span-title kc-seg-title';
         titleSpan.textContent = ev.title || '(無題)';
+        titleSpan.style.position = 'absolute';
+        // アイコン(9px+margin)+時刻(~30px)+gap(4px*2) ≒ 50px を left オフセットとして確保
+        titleSpan.style.left = '50px';
+        titleSpan.style.top = '0';
+        titleSpan.style.height = '100%';
+        // 幅 = visibleCells × 100% - left(50px) - BAR_X_GAP(末尾) - right padding(6px)
+        // 100% の基準 = セグメント幅
+        //   vc=1 (単セル): セグメント幅 = calc(セル幅-BAR_X_GAP) → calc(100% - 50px - 6px)
+        //   vc>1 (複数): セグメント幅 = セル幅 → calc(vc*100% - 50px - BAR_X_GAP - 6px)
+        titleSpan.style.width = vc > 1
+          ? ('calc(' + vc + ' * 100% - 50px - ' + BAR_X_GAP + 'px - 6px)')
+          : 'calc(100% - 50px - 6px)';  // 単セル: セグメント自体が BAR_X_GAP 分短い
+        titleSpan.style.display = 'flex';
+        titleSpan.style.alignItems = 'center';
+        titleSpan.style.overflow = 'hidden';
+        titleSpan.style.whiteSpace = 'nowrap';
+        titleSpan.style.textOverflow = 'ellipsis';
+        titleSpan.style.boxSizing = 'border-box';
 
         el.appendChild(clockSpan);
         el.appendChild(timeSpan);
@@ -5373,6 +5446,10 @@
       };
       if (!alldayEvents || alldayEvents.length === 0) return result;
 
+      // Phase1e: バーの描画先は .kc-month-ad-events（週行全幅オーバーレイ）
+      // これによりセルの border-left（罫線）より高い z-index 層にバーが描かれ、罫線を覆う。
+      var adEventsEl = weekEl.querySelector('.kc-month-ad-events');
+
       // 各イベントに対して barPosition を求める（他月セルも含む全列が対象）
       var weekEvents = [];
       alldayEvents.forEach(function (evt) {
@@ -5399,44 +5476,45 @@
         ev._evEndYMD = KC.Utils.fmtYMD(endDate);
       });
 
-      // セルごとにセグメントを配置
+      // セルごとにセグメントを生成して adEventsEl（週行オーバーレイ）に追加
       weekEvents.forEach(function (ev) {
         var lane = ev.lane || 0;
+        var cellCap = (baseCapacity != null) ? baseCapacity : Infinity;
 
-        for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
-          if (ci < 0 || ci >= 7) continue;
-
-          // セル単位の overflow 判定
-          // baseCapacity が指定されている場合:
-          //   overflow 時（hiddenCount > 0 になり得る場合）は more 用に 1 スロット確保するため
-          //   lane < baseCapacity - 1（= alldayLimit）のセグメントのみ描画する。
-          //   overflow なし確定は後段で判明するため、ここでは「lane >= baseCapacity - 1」
-          //   を初期条件として非表示候補に入れる（後段のセルループで more の有無を確認）。
-          //   → 設計書 §3.4 の「lane が baseCapacity を超えるものを overflow リスト入り」に準拠。
-          //   ただし baseCapacity=0 の場合は全件非表示。
-          var cellCap = (baseCapacity != null) ? baseCapacity : Infinity;
-          // overflow 判定はセルループで行うため、ここでは lane を cellCap-1 と比較するだけでは
-          // 「overflow 確定時のみ -1 確保」ができない（chipCap は後段で計算）。
-          // → Phase1 の簡略方式: lane < cellCap のセグメントを「候補」として描画し、
-          //   後段の chipCap 計算で実際に「lane が可視スロット数に収まるか」を確認する。
-          //   ここでは lane >= cellCap のものだけ必ず非表示にして hiddenByCol に追加する。
-          if (lane >= cellCap) {
-            result.hiddenByCol[ci].push(ev);
-            continue;
+        if (lane >= cellCap) {
+          // このイベントは全セルで容量超え → hidden に全列分登録して描画しない
+          for (var hci = ev.colStart; hci < ev.colStart + ev.span; hci++) {
+            if (hci >= 0 && hci < 7) result.hiddenByCol[hci].push(ev);
           }
+          return;
+        }
 
-          // セグメントの isStart/isEnd を判定
-          // isStart: イベント開始日 = このセルの日付、または週先頭（前週から続く場合）
+        // 可視セグメントを先行列挙して「可視先頭」と「残り可視セル数」を確定する
+        var visibleCols = [];
+        for (var ci2 = ev.colStart; ci2 < ev.colStart + ev.span; ci2++) {
+          if (ci2 >= 0 && ci2 < 7) visibleCols.push(ci2);
+        }
+
+        // 各セルのセグメントを adEventsEl に追加
+        for (var cii = 0; cii < visibleCols.length; cii++) {
+          var ci = visibleCols[cii];
+
           var cellYMD = weekYMD[ci];
           var isStart = (cellYMD === ev._evStartYMD) || (ci === ev.colStart && ev._evStartYMD < weekYMD[0]);
           var isEnd   = (cellYMD === ev._evEndYMD)   || (ci === ev.colStart + ev.span - 1 && ev._evEndYMD > weekYMD[6]);
 
-          var segLayer = cellEls[ci] ? cellEls[ci].querySelector('.kc-month-seg-layer') : null;
-          if (!segLayer) continue;
+          // isVisibleStart: 可視セグメントの先頭（この週内では常に最初のセル）
+          var isVisibleStart = (cii === 0);
+          // visibleCells: 可視先頭から末尾まで連続して可視なセル数（タイトル幅計算に使用）
+          var visibleCells = visibleCols.length - cii;
 
-          var seg = buildMonthAlldaySegment(ev, isStart, isEnd, false);
-          segLayer.appendChild(seg);
+          if (!adEventsEl) continue;
 
+          // colIndex(ci) を渡して週行基準の left/width を計算させる（Phase1e）
+          var seg = buildMonthAlldaySegment(ev, isStart, isEnd, false, isVisibleStart, visibleCells, ci);
+          adEventsEl.appendChild(seg);
+
+          // seg-layer の高さ確保（バー描画はしないが、chip 押し下げのための height セットは継続）
           // colLaneCounts を更新（描画確定したセグメントの lane+1 が使用スロット数）
           result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], lane + 1);
         }
@@ -5475,6 +5553,9 @@
       };
       if (!spanEvents || spanEvents.length === 0) return result;
 
+      // Phase1e: バーの描画先は .kc-month-ad-events（週行全幅オーバーレイ）
+      var adEventsEl = weekEl.querySelector('.kc-month-ad-events');
+
       var weekEvents = _buildTimedSpanWeekEvents(spanEvents, weekYMD);
       if (weekEvents.length === 0) return result;
 
@@ -5499,34 +5580,55 @@
       weekEvents.forEach(function (ev) {
         var spanLane = ev.lane || 0;
 
-        for (var ci = ev.colStart; ci < ev.colStart + ev.span; ci++) {
-          if (ci < 0 || ci >= 7) continue;
+        // 可視セルを先行列挙（isVisibleStart / visibleCells 計算用）
+        // offsetLane が spanLimit 未満のセルのみ可視とする
+        var visibleCols = [];
+        for (var ci2 = ev.colStart; ci2 < ev.colStart + ev.span; ci2++) {
+          if (ci2 < 0 || ci2 >= 7) continue;
+          var adLanes2 = alldayColLaneCounts
+            ? (alldayColLaneCounts[ci2] || 0)
+            : alldayLaneCount;
+          var offsetLane2 = adLanes2 + spanLane;
+          if (offsetLane2 < spanLimit) {
+            visibleCols.push(ci2);
+          }
+        }
 
-          // セル局所の終日バー占有数を取得（alldayColLaneCounts が有効な場合はそれを使用）
+        for (var cii = 0; cii < visibleCols.length; cii++) {
+          var ci = visibleCols[cii];
+
           var adLanes = alldayColLaneCounts
             ? (alldayColLaneCounts[ci] || 0)
             : alldayLaneCount;
-
           var offsetLane = adLanes + spanLane;
-
-          if (offsetLane >= spanLimit) {
-            result.hiddenByCol[ci].push(ev);
-            continue;
-          }
 
           var cellYMD = weekYMD[ci];
           var isStart = (cellYMD === ev._evStartYMD) || (ci === ev.colStart && ev._evStartYMD < weekYMD[0]);
           var isEnd   = (cellYMD === ev._evEndYMD)   || (ci === ev.colStart + ev.span - 1 && ev._evEndYMD > weekYMD[6]);
 
-          var segLayer = cellEls && cellEls[ci] ? cellEls[ci].querySelector('.kc-month-seg-layer') : null;
-          if (!segLayer) continue;
+          var isVisibleStart = (cii === 0);
+          var visibleCells = visibleCols.length - cii;
 
+          if (!adEventsEl) continue;
+
+          // colIndex(ci) を渡して週行基準の left/width を計算させる（Phase1e）
           var evWithOffset = Object.assign({}, ev, { lane: offsetLane });
-          var seg = buildMonthTimedSpanSegment(evWithOffset, isStart, isEnd);
-          segLayer.appendChild(seg);
+          var seg = buildMonthTimedSpanSegment(evWithOffset, isStart, isEnd, isVisibleStart, visibleCells, ci);
+          adEventsEl.appendChild(seg);
 
           // colLaneCounts を更新（終日 + span の合計スロット数）
           result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], offsetLane + 1);
+        }
+
+        // overflow セルを hidden に登録（可視でないセル）
+        for (var ci3 = ev.colStart; ci3 < ev.colStart + ev.span; ci3++) {
+          if (ci3 < 0 || ci3 >= 7) continue;
+          var adLanes3 = alldayColLaneCounts
+            ? (alldayColLaneCounts[ci3] || 0)
+            : alldayLaneCount;
+          if (adLanes3 + spanLane >= spanLimit) {
+            result.hiddenByCol[ci3].push(ev);
+          }
         }
       });
 

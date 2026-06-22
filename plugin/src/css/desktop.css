@@ -884,8 +884,14 @@ body.kc-dnd-active * {
 
 /* 日付行ラッパー（datehead + 祝日名を横並びに）
  * セル上端に配置し、祝日名は ellipsis で詰める。
- * .kc-month-cell--today の青丸は datehead 自体に当たるため、ラッパー化しても影響なし。
- * padding-bottom: 4px で日付ヘッダーと予定エリアの間に 4px の余白を確保する。
+ *
+ * 【課題2対応: dateline 高さ固定】
+ * height を --kc-month-dateline-h + padding-bottom の合計で固定する。
+ * 今日セルの青丸（datehead に width/height 24px が付く）があっても dateline の高さが
+ * 変化しないよう、height を固定値にして青丸がはみ出す場合は overflow: hidden でクリップする。
+ * これにより全セルで seg-layer の開始位置（= バーの段位置）が週内で揃う。
+ *
+ * 28px = --kc-month-dateline-h(24px) + padding-bottom(4px)
  */
 .kc-month-dateline {
   display: flex;
@@ -894,8 +900,10 @@ body.kc-dnd-active * {
   white-space: nowrap;
   overflow: hidden;
   flex: 0 0 auto;
-  min-height: var(--kc-month-dateline-h, 24px);
+  height: calc(var(--kc-month-dateline-h, 24px) + 4px); /* 24px + padding-bottom 4px = 28px 固定 */
+  min-height: calc(var(--kc-month-dateline-h, 24px) + 4px);
   padding-bottom: 4px; /* 日付ヘッダーと終日バー/chip エリアの間の余白 */
+  box-sizing: border-box;
 }
 
 /* セル内日付数字（左上）*/
@@ -906,7 +914,7 @@ body.kc-dnd-active * {
   padding: 2px;
   line-height: 1;
   flex: 0 0 auto;
-  align-self: center;
+  align-self: flex-start; /* center から変更: dateline 高さを広げないため */
   width: 24px;
 }
 
@@ -914,32 +922,46 @@ body.kc-dnd-active * {
  * .kc-month-seg-layer は dateline の直後に配置される in-flow 要素。
  * セグメント（.kc-ad-event--seg）を top: lane*(BAR_H+BAR_GAP) で絶対配置する基準になる。
  * height は JS の placeMonthTimedEvents で usedSlots に応じて設定される。
- * height=0 のとき: seg-layer は in-flow に存在するが高さ 0 → chip が dateline 直後から並ぶ。
- * height>0 のとき: seg-layer 分のスペースが確保され、chip がバーの下から並ぶ。
- * position: relative / overflow: visible でセグメント（絶対配置）がはみ出して隣接セルの
- * セグメントと隙間なく連結されて見える（セルの overflow: hidden でクリップされるが
- * 各セルが 100% 幅を使い隙間ゼロで並ぶため、隣接セルのセグメントと連続して見える）。
+ *
+ * 【連続バー実現のための負マージン方式】
+ * .kc-month-cell の padding: 2px のため、flex 子要素は左右に 2px ずつ内側に入る。
+ * seg-layer に margin: 0 -2px を適用してセル padding を打ち消し、セルの左右 border まで
+ * 幅を広げる（width: calc(100% + 4px) と同等）。
+ * これにより各セルのセグメントがセル境界まで描画され、隣接セルのセグメントと隙間ゼロで接する。
+ * セグメントの left:0 / width:100% が seg-layer 幅（= セル全幅）を基準にするため連続して見える。
  */
 .kc-month-seg-layer {
   position: relative;
   overflow: visible;
   flex: 0 0 auto;
-  height: 0px;   /* JS で usedSlots に応じて上書きされる */
+  height: 0px;            /* JS で usedSlots に応じて上書きされる */
+  margin: 0 -2px;         /* セル padding(2px) を打ち消してセル端まで広げる */
+  width: calc(100% + 4px); /* margin の分だけ幅を補正（box-sizing: content-box 前提） */
+  box-sizing: content-box;
   pointer-events: none;
   z-index: 1;
 }
 
-/* 終日バー専用絶対配置レイヤ（週行全幅に張る）
- * dayGrid Phase1 ではセグメントは .kc-month-seg-layer に配置するため、
- * .kc-month-ad-events は DOM 構造として残す（DnD ゴーストの基準位置として利用）が
- * セグメント描画には使わない。 */
+/* 終日バー＋日跨ぎ時間予定バーのオーバーレイ層（週行全幅に張る）
+ *
+ * dayGrid Phase1e: バーのセグメントをこの層（.kc-month-ad-events）に描画する。
+ * .kc-month-week（position:relative）を包含ブロックとして left:0/right:0 で週行全幅を占有。
+ * z-index: 2 により .kc-month-cell の border-left（罫線、z-index:auto）より前面に描画され、
+ * 複数日バーがセル境界の縦罫線を上から覆って1本に連続して見える。
+ *
+ * セルの border-left は phase1d 前（通常の border 方式）に戻す。
+ * 空白エリアの罫線は従来通り border として描かれる。バーのある高さ帯のみバーが上書きする。
+ *
+ * top = dateline 固定高（28px）。JS の BAR_TOP=0 と整合。
+ * pointer-events: none にして子要素（セグメント）の pointer-events: auto で個別に制御する。
+ */
 .kc-month-ad-events {
   position: absolute;
   left: 0;
   right: 0;
-  top: calc(var(--kc-month-dateline-h, 24px) + 4px); /* dateline min-height + padding-bottom 分 */
+  top: calc(var(--kc-month-dateline-h, 24px) + 4px); /* dateline 固定高(24px) + padding-bottom(4px) = 28px */
   pointer-events: none;
-  z-index: 1;
+  z-index: 2;  /* Phase1e: セルの border-left（罫線）より前面にしてバーが罫線を覆う */
 }
 
 /* 時間予定 chip */
