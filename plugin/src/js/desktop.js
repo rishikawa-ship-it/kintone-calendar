@@ -27,7 +27,7 @@
    * 実機でどのビルドが動いているか確認するためのスタンプ。
    * console.warn は KC_DEBUG によらず常に出力される（上記コメント参照）。
    * ==================================================================== */
-  var KC_BUILD = '2026-06-22-default-perm';
+  var KC_BUILD = '2026-06-22-daygrid-title-fix';
   try { if (typeof window !== 'undefined') window.KC_BUILD = KC_BUILD; } catch (e) {}
   // eslint-disable-next-line no-console
   console.warn('[KC] build ' + KC_BUILD);
@@ -5194,50 +5194,9 @@
 
       el.title = (ev.title || '(無題)') + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
-      // テキスト: 可視先頭セグメント（isVisibleStart）のみタイトルを表示
-      // タイトルは position:absolute で可視区間幅いっぱいに伸ばし、末尾を ellipsis でクリップする
-      //
-      // 幅の計算:
-      //   可視先頭 seg-layer の left=0 を基準に、visibleCells 個分のセル幅を確保する。
-      //   1セル = seg-layer 幅 100% なので、visibleCells セル = visibleCells * 100%。
-      //   ただし末尾セルの BAR_X_GAP(3px) と padding(6px*2) を差し引く。
-      //   タイトル span 自体は position:absolute なのでセグメントの overflow:visible から
-      //   はみ出すが、幅が可視区間内に収まるため別バー・別予定の上には被さらない。
-      if (isVisibleStart) {
-        var vc = visibleCells || 1;
-        var dot = document.createElement('span');
-        dot.className = 'dot';
-
-        var titleSpan = document.createElement('span');
-        titleSpan.className = 'kc-ad-evt-title kc-seg-title';
-        titleSpan.textContent = ev.title || '(無題)';
-        // 可視区間幅いっぱいのタイトル領域を確保する
-        // position: absolute で left=0 から可視区間末端まで伸ばし、overflow:hidden でクリップ。
-        //
-        // 100% の基準 = セグメント幅（position:absolute の包含ブロック）
-        //   - vc=1 (単セル): セグメント幅 = calc(セル幅 - BAR_X_GAP) なので 100%=セル幅-3px
-        //     タイトル幅 = 100% - padding12px = calc(100% - 12px)
-        //   - vc>1 (複数セル先頭): セグメント幅 = セル幅（width:100%）なので 100%=セル幅
-        //     タイトル幅 = vc*セル幅 - BAR_X_GAP - padding12px = calc(vc*100% - 3px - 12px)
-        titleSpan.style.position = 'absolute';
-        titleSpan.style.left = '0';
-        titleSpan.style.top = '0';
-        titleSpan.style.height = '100%';
-        titleSpan.style.width = vc > 1
-          ? ('calc(' + vc + ' * 100% - ' + BAR_X_GAP + 'px - 12px)')
-          : 'calc(100% - 12px)';  // 単セル: セグメント自体が BAR_X_GAP 分短いので引かない
-        titleSpan.style.display = 'flex';
-        titleSpan.style.alignItems = 'center';
-        titleSpan.style.overflow = 'hidden';
-        titleSpan.style.whiteSpace = 'nowrap';
-        titleSpan.style.textOverflow = 'ellipsis';
-        titleSpan.style.paddingLeft = '6px';
-        titleSpan.style.paddingRight = '6px';
-        titleSpan.style.boxSizing = 'border-box';
-
-        el.appendChild(dot);
-        el.appendChild(titleSpan);
-      }
+      // タイトル表示は placeMonthAlldayEvents がタイトルオーバーレイ要素として別途追加する。
+      // （疑い1修正: 先頭セグメント内のタイトルが継続セグメントの背景に隠れる問題を解消するため、
+      //   全セグメントより後の DOM 位置にタイトル専用要素を配置して前面を確保する）
 
       // クリック → ダイアログ（全セグメントに付ける）
       el.addEventListener('click', function (clickEvt) {
@@ -5329,10 +5288,11 @@
       var timeStr = KC.Utils.pad2(evStart.getHours()) + ':' + KC.Utils.pad2(evStart.getMinutes());
       el.title = (ev.title || '(無題)') + '\n' + timeStr + (ev.adDateRange ? '\n' + ev.adDateRange : '');
 
-      // 可視先頭セグメントのみ時計アイコン・時刻・タイトルを表示
-      // タイトルは可視区間幅いっぱいに伸ばす
+      // 可視先頭セグメントのみ時計アイコン・時刻を表示する
+      // タイトルは placeMonthTimedSpanEvents がタイトルオーバーレイ要素として別途追加する
+      // （疑い1修正: 継続セグメントの背景がタイトルを覆う問題を解消するため、
+      //   全セグメントより後の DOM 位置にタイトル専用要素を配置）
       if (isVisibleStart) {
-        var vc = visibleCells || 1;
         var clockSpan = document.createElement('span');
         clockSpan.className = 'kc-month-chip--span-icon';
         clockSpan.textContent = '⏱';
@@ -5341,32 +5301,8 @@
         timeSpan.className = 'kc-month-chip--span-time';
         timeSpan.textContent = timeStr;
 
-        // タイトルを可視区間幅いっぱいに伸ばす（position:absolute で幅確保）
-        var titleSpan = document.createElement('span');
-        titleSpan.className = 'kc-month-chip--span-title kc-seg-title';
-        titleSpan.textContent = ev.title || '(無題)';
-        titleSpan.style.position = 'absolute';
-        // アイコン(9px+margin)+時刻(~30px)+gap(4px*2) ≒ 50px を left オフセットとして確保
-        titleSpan.style.left = '50px';
-        titleSpan.style.top = '0';
-        titleSpan.style.height = '100%';
-        // 幅 = visibleCells × 100% - left(50px) - BAR_X_GAP(末尾) - right padding(6px)
-        // 100% の基準 = セグメント幅
-        //   vc=1 (単セル): セグメント幅 = calc(セル幅-BAR_X_GAP) → calc(100% - 50px - 6px)
-        //   vc>1 (複数): セグメント幅 = セル幅 → calc(vc*100% - 50px - BAR_X_GAP - 6px)
-        titleSpan.style.width = vc > 1
-          ? ('calc(' + vc + ' * 100% - 50px - ' + BAR_X_GAP + 'px - 6px)')
-          : 'calc(100% - 50px - 6px)';  // 単セル: セグメント自体が BAR_X_GAP 分短い
-        titleSpan.style.display = 'flex';
-        titleSpan.style.alignItems = 'center';
-        titleSpan.style.overflow = 'hidden';
-        titleSpan.style.whiteSpace = 'nowrap';
-        titleSpan.style.textOverflow = 'ellipsis';
-        titleSpan.style.boxSizing = 'border-box';
-
         el.appendChild(clockSpan);
         el.appendChild(timeSpan);
-        el.appendChild(titleSpan);
       }
 
       el.addEventListener('click', function (e) {
@@ -5708,6 +5644,67 @@
         });
       }
 
+      // title-fix: タイトルオーバーレイを全セグメントより後の DOM 位置に追加する
+      // （疑い1修正: 全セグメントが DOM 追加された後にタイトル要素を追加することで、
+      //   継続セグメントの背景がタイトルを覆う問題を解消。z-index 不要で最前面になる）
+      //
+      // タイトル要素の座標:
+      //   left  = 可視先頭セグメントの colIndex / 7 * 100%（週行幅基準）
+      //   width = visibleCells / 7 * 100% - BAR_X_GAP - padding(12px)
+      //   top   = ev.lane * (BAR_H + BAR_GAP)px（セグメントと同じ上端）
+      //   height = BAR_H（セグメントと同じ高さ）
+      //   pointer-events: none（クリック・DnD はセグメントに透過）
+      if (adEventsEl && result._evMap) {
+        weekEvents.forEach(function (ev) {
+          var lane = ev.lane || 0;
+          var cellCap = (baseCapacity != null) ? baseCapacity : Infinity;
+          if (lane >= cellCap) return;  // hiddenByCol と同じ除外条件
+
+          // 可視先頭列インデックスと可視セル数を計算
+          var visibleCols2 = [];
+          for (var ci3 = ev.colStart; ci3 < ev.colStart + ev.span; ci3++) {
+            if (ci3 >= 0 && ci3 < 7) visibleCols2.push(ci3);
+          }
+          if (visibleCols2.length === 0) return;
+
+          var visColStart = visibleCols2[0];   // 可視先頭の列インデックス
+          var visColCount = visibleCols2.length;  // 可視セル数
+
+          var titleOverlay = document.createElement('div');
+          titleOverlay.className = 'kc-seg-title-overlay';
+
+          // 週行基準の絶対座標（セグメントと同じ座標系）
+          titleOverlay.style.position = 'absolute';
+          titleOverlay.style.left   = (visColStart / 7 * 100) + '%';
+          // 幅: 可視セル数分の 1/7 幅。末尾の BAR_X_GAP と padding を差し引く
+          titleOverlay.style.width  = 'calc(' + visColCount + ' * 100% / 7 - ' + BAR_X_GAP + 'px - 12px)';
+          titleOverlay.style.top    = (lane * (BAR_H + BAR_GAP)) + 'px';
+          titleOverlay.style.height = BAR_H + 'px';
+
+          // タイトル表示スタイル
+          titleOverlay.style.display      = 'flex';
+          titleOverlay.style.alignItems   = 'center';
+          titleOverlay.style.overflow     = 'hidden';
+          titleOverlay.style.whiteSpace   = 'nowrap';
+          titleOverlay.style.textOverflow = 'ellipsis';
+          titleOverlay.style.paddingLeft  = '6px';
+          titleOverlay.style.paddingRight = '6px';
+          titleOverlay.style.boxSizing    = 'border-box';
+          titleOverlay.style.pointerEvents = 'none';  // クリック・DnD をセグメントに透過
+
+          // 文字色はセグメントと同じロジック（bgColor から算出）
+          var perm2 = KC.LoginContext.getPermission(ev);
+          var bgColor = perm2.bgColor || ev.color || '#818cf8';
+          titleOverlay.style.color = perm2.textColor || (KC.Lanes.isLightColor(bgColor) ? '#1f2937' : '#ffffff');
+          titleOverlay.style.fontSize = 'var(--kc-font-size-base, 12px)';
+
+          // テキストノード（span ではなく div 直接）
+          titleOverlay.textContent = ev.title || '(無題)';
+
+          adEventsEl.appendChild(titleOverlay);
+        });
+      }
+
       return result;
     }
 
@@ -5813,6 +5810,17 @@
           // evMap には オリジナル ev（start/end 時刻を含む）を保存する
           if (!result._evMap[ev.id]) result._evMap[ev.id] = ev;
 
+          // title-fix: 可視先頭セグのタイトルオーバーレイ描画用にメタ情報を収集
+          if (isVisibleStart) {
+            if (!result._spanTitleMap) result._spanTitleMap = {};
+            result._spanTitleMap[ev.id] = {
+              visColStart:  ci,
+              visColCount:  visibleCols.length,
+              offsetLane:   offsetLane,
+              timeStr:      timeStr
+            };
+          }
+
           // colLaneCounts を更新（終日 + span の合計スロット数）
           result.colLaneCounts[ci] = Math.max(result.colLaneCounts[ci], offsetLane + 1);
         }
@@ -5867,6 +5875,57 @@
               });
             }
           });
+        });
+      }
+
+      // title-fix: タイトルオーバーレイを全セグメントより後の DOM 位置に追加する（日跨ぎ時間予定）
+      // アイコン+時刻はセグメント内に残し、タイトルのみオーバーレイで前面表示する。
+      // ICON_TIME_W: アイコン(9px) + gap(4px) + 時刻(~30px) + gap(4px) ≒ 50px
+      var ICON_TIME_W = 50;
+      if (adEventsEl && result._spanTitleMap && result._evMap) {
+        Object.keys(result._spanTitleMap).forEach(function (evId) {
+          var meta = result._spanTitleMap[evId];
+          var capEv = result._evMap[evId];
+          if (!meta || !capEv) return;
+
+          var titleOverlay = document.createElement('div');
+          titleOverlay.className = 'kc-seg-title-overlay kc-seg-title-overlay--span';
+
+          // 週行基準の絶対座標
+          titleOverlay.style.position  = 'absolute';
+          titleOverlay.style.left      = (meta.visColStart / 7 * 100) + '%';
+          // 幅: 可視セル数分の 1/7 幅。先頭のアイコン+時刻(ICON_TIME_W) + BAR_X_GAP + right padding を引く
+          titleOverlay.style.width     = 'calc(' + meta.visColCount + ' * 100% / 7 - ' + ICON_TIME_W + 'px - ' + BAR_X_GAP + 'px - 6px)';
+          // left も ICON_TIME_W 分右にずらす（アイコン+時刻の右から始まる）
+          // ただし left は週行基準なので visColStart/7 * 100% + (ICON_TIME_W / セル幅) の形にはできない
+          // → left=visColStart/7*100% + ピクセル分 calc() で加算
+          titleOverlay.style.left      = 'calc(' + (meta.visColStart / 7 * 100) + '% + ' + ICON_TIME_W + 'px)';
+          titleOverlay.style.top       = meta.offsetLane * (BAR_H + BAR_GAP) + 'px';
+          titleOverlay.style.height    = BAR_H + 'px';
+
+          // タイトル表示スタイル
+          titleOverlay.style.display      = 'flex';
+          titleOverlay.style.alignItems   = 'center';
+          titleOverlay.style.overflow     = 'hidden';
+          titleOverlay.style.whiteSpace   = 'nowrap';
+          titleOverlay.style.textOverflow = 'ellipsis';
+          titleOverlay.style.paddingRight = '6px';
+          titleOverlay.style.boxSizing    = 'border-box';
+          titleOverlay.style.pointerEvents = 'none';
+
+          // 文字色
+          var perm3 = KC.LoginContext.getPermission(capEv);
+          var bgColor3 = perm3.bgColor || capEv.color || null;
+          if (bgColor3) {
+            titleOverlay.style.color = perm3.textColor || (KC.Lanes.isLightColor(bgColor3) ? '#1f2937' : '#ffffff');
+          } else {
+            titleOverlay.style.color = '#1f2937';  // デフォルト: dbeafe 背景前提の濃色
+          }
+          titleOverlay.style.fontSize = 'var(--kc-font-size-base, 12px)';
+
+          titleOverlay.textContent = capEv.title || '(無題)';
+
+          adEventsEl.appendChild(titleOverlay);
         });
       }
 
