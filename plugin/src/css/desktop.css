@@ -1022,7 +1022,12 @@ body.kc-dnd-active * {
   flex: 0 0 auto;
   margin-top: 1px;
   position: relative;
-  z-index: 2;  /* .kc-month-ad-events (z-index: 1) より前面に表示 */
+  /* month-more-zindex: .kc-month-cell は position:relative/z-index:auto で stacking context を
+     作らないため、この z-index は親 .kc-month-week の stacking context 内で直接比較される。
+     .kc-month-ad-events（z-index:2, DOM順で .kc-month-cell より後）と同値の 2 だと
+     DOM順が優先されて ad-events が前面になり、+more の下半分がバーに隠れてしまう。
+     3 に上げて ad-events(2) より確実に前面化する。 */
+  z-index: 3;  /* .kc-month-ad-events (z-index: 2) より前面に表示（DOM順に依存しないよう明示的に上げる） */
   border-radius: 4px;
   /* セル空白 hover 時にセル親の背景色変化が透過しないよう通常時背景を明示する */
   background: var(--kc-bg, #fff);
