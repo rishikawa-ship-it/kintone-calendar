@@ -27,7 +27,7 @@
    * 実機でどのビルドが動いているか確認するためのスタンプ。
    * console.warn は KC_DEBUG によらず常に出力される（上記コメント参照）。
    * ==================================================================== */
-  var KC_BUILD = '2026-06-22-month-more-fit';
+  var KC_BUILD = '2026-06-22-more-popup-close';
   try { if (typeof window !== 'undefined') window.KC_BUILD = KC_BUILD; } catch (e) {}
   // eslint-disable-next-line no-console
   console.warn('[KC] build ' + KC_BUILD);
@@ -1998,6 +1998,14 @@
         console.error('[KC.Popup.openEdit] recordId が取得できていません:', recordId);
         alert('レコードIDの取得に失敗しました。コンソールを確認してください。');
         return;
+      }
+      // more-popup-close: 詳細/編集モーダルを開く前に、開いている +N more ポップオーバー
+      // （KC.MonthOverflowPopup）があれば必ず閉じる。
+      // ポップオーバー内アイテムのクリック経路は既に個別に close() を呼んでいるが、
+      // それ以外の経路（他画面からの openEdit 呼び出し等）の取りこぼしを防ぐための
+      // 共通入口ガード。close() は冪等（既に閉じていれば何もしない）なので安全。
+      if (KC.MonthOverflowPopup && typeof KC.MonthOverflowPopup.close === 'function') {
+        KC.MonthOverflowPopup.close();
       }
       // FR-4: 編集モーダルオープンを URL ハッシュに記録（pushState）
       // URL に既に同値が載っている場合はスキップ（リロード復元・popstate 進む の二重化防止）
