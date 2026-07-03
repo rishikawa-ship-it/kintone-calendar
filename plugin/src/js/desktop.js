@@ -27,7 +27,7 @@
    * 実機でどのビルドが動いているか確認するためのスタンプ。
    * console.warn は KC_DEBUG によらず常に出力される（上記コメント参照）。
    * ==================================================================== */
-  var KC_BUILD = '2026-06-22-more-popup-close';
+  var KC_BUILD = '2026-06-22-checkbox-filter-b';
   try { if (typeof window !== 'undefined') window.KC_BUILD = KC_BUILD; } catch (e) {}
   // eslint-disable-next-line no-console
   console.warn('[KC] build ' + KC_BUILD);
@@ -313,6 +313,13 @@
       // v9 以前の設定では defaultPermission が存在しないため null として初期化（ハードコードフォールバックを維持）
       KC.Config.DEFAULT_PERMISSION = config.defaultPermission || null;
 
+      // フィルタ設定 (version 11 以降) を適用 (REQ_checkbox-filter §8.2)
+      // v10 以前の設定は config.js 側のマイグレーションで filterConfig が補完されているため、
+      // ここでの追加フォールバックは基本的に発生しない想定だが、念のため空配列で防御する
+      KC.Config.FILTER_CONFIG = (config.filterConfig && Array.isArray(config.filterConfig.groups))
+        ? config.filterConfig
+        : { groups: [] };
+
       // メールアドレス初期値設定 (fieldMapping.mailLoginUserDefault が存在しない場合は false: 後方互換デフォルト)
       KC.Config.MAIL_LOGIN_USER_DEFAULT =
         (config.fieldMapping && config.fieldMapping.mailLoginUserDefault === true);
@@ -337,7 +344,8 @@
         'FIELDVALUE_RULES:', KC.Config.FIELDVALUE_RULES,
         'SEARCH_TARGETS:', KC.Config.SEARCH_TARGETS,
         'OVERLAP_MODE:', KC.Config.OVERLAP_MODE,
-        'OVERLAP_KEY_FIELD_CODE:', KC.Config.OVERLAP_KEY_FIELD_CODE);
+        'OVERLAP_KEY_FIELD_CODE:', KC.Config.OVERLAP_KEY_FIELD_CODE,
+        'FILTER_CONFIG:', KC.Config.FILTER_CONFIG);
 
       // P-7: loadEvents が毎回再構築しているフィールドリストを Config 確定後に一度だけ構築してキャッシュする。
       // OVERLAP_MODE や PERMISSION_RULES 等が確定した後でないと正確なリストが作れないためここで構築する。
@@ -430,6 +438,13 @@
   KC.Config.OVERLAP_RESOURCE_FIELD_CODE = '';
 
   /**
+   * フィルタ設定 (REQ_checkbox-filter)
+   * loadFromPluginConfig で上書きされる。初期値は空グループ = フィルタ機能なし（全件表示相当）
+   * @type {{ groups: Array }}
+   */
+  KC.Config.FILTER_CONFIG = { groups: [] };
+
+  /**
    * P-7: loadEvents が使う fields パラメータのキャッシュ。
    * loadFromPluginConfig の完了後に _buildCachedFieldList() で一度だけ構築する。
    * null の場合は loadEvents が従来通り毎回構築する（初回起動・設定変更後のフォールバック）。
@@ -456,6 +471,12 @@
     for (var fvri = 0; fvri < fvRules.length; fvri++) {
       var fvfc = fvRules[fvri].fieldCode;
       if (fvfc && fieldList.indexOf(fvfc) === -1) fieldList.push(fvfc);
+    }
+    // フィルタ設定 (fieldValue 型グループ) の対象フィールドも取得対象に含める（REQ_checkbox-filter §8.2）
+    var filterGroups = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+    for (var fgi = 0; fgi < filterGroups.length; fgi++) {
+      var fgfc = filterGroups[fgi].fieldCode;
+      if (fgfc && fieldList.indexOf(fgfc) === -1) fieldList.push(fgfc);
     }
     var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
     if (KC.Config.OVERLAP_MODE === 'fieldKey' && overlapKeyCode && fieldList.indexOf(overlapKeyCode) === -1) {
@@ -731,7 +752,7 @@
     events: [],
     editing: null,
     alldayExpanded: false,   /* レーン展開トグル状態。初期値 false（折りたたみ）*/
-    eventFilter: 'all',      /* イベントフィルタ: 'all' | 'mine' | 'others'（localStorage 永続化）*/
+    filterChecks: {},        /* チェックボックス式フィルタ状態: { [groupId]: string[] }（localStorage/URL 永続化。REQ_checkbox-filter）*/
     isAppAdmin: false,        /* アプリ管理権限の有無（_checkAppAdminPermission で更新）*/
     els: {},
 
@@ -805,6 +826,32 @@
             valueFields[fvCode] = Array.isArray(rec[fvCode].value) ? rec[fvCode].value : [];
           } else {
             valueFields[fvCode] = rec[fvCode].value || '';
+          }
+        }
+      }
+
+      // チェックボックス式フィルタ（fieldValue 型グループ）対象フィールドの値も valueFields に収集する
+      // （REQ_checkbox-filter §8.1 KC.EventFilter._matchGroupItem が参照する）
+      // USER_SELECT は権限フィールドと同様 value[].code の配列として格納し、_matchFieldValue 側で
+      // CHECK_BOX と同じ「配列内包含」判定を適用する（実装判断: 要件書 §8.1 の擬似コードは
+      // USER_SELECT を明示していないため、既存の permissionFields と同じ配列マッチ方式に統一した）
+      var filterGroupsForValues = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+      for (var fgvi = 0; fgvi < filterGroupsForValues.length; fgvi++) {
+        var fgv = filterGroupsForValues[fgvi];
+        if (fgv.type !== 'fieldValue' || !fgv.fieldCode) continue;
+        var fgvCode = fgv.fieldCode;
+        if (valueFields[fgvCode] !== undefined) continue; // FIELDVALUE_RULES 側で取得済みなら重複取得しない
+        if (fgvCode === '$status') {
+          valueFields[fgvCode] = rec['$status'] ? (rec['$status'].value || '') : '';
+        } else if (rec[fgvCode]) {
+          if (fgv.fieldType === 'CHECK_BOX') {
+            valueFields[fgvCode] = Array.isArray(rec[fgvCode].value) ? rec[fgvCode].value : [];
+          } else if (fgv.fieldType === 'USER_SELECT') {
+            valueFields[fgvCode] = Array.isArray(rec[fgvCode].value)
+              ? rec[fgvCode].value.map(function (v) { return v.code || ''; })
+              : [];
+          } else {
+            valueFields[fgvCode] = rec[fgvCode].value || '';
           }
         }
       }
@@ -6112,7 +6159,7 @@
 
       // デバッグ: イベント件数が 0 のとき、または baseCapacity が極小のときに原因調査用ログを出力
       if (filteredMonthEvents.length === 0 && (S.events || []).length > 0) {
-        console.warn('[KC.RenderMonth] placeMonthEvents: フィルタ後のイベント数が 0 です。eventFilter=' + (KC.State.eventFilter || 'all'));
+        console.warn('[KC.RenderMonth] placeMonthEvents: フィルタ後のイベント数が 0 です。filterChecks=' + JSON.stringify(KC.State.filterChecks || {}));
       }
       if (baseCapacity === 0) {
         console.warn('[KC.RenderMonth] placeMonthEvents: baseCapacity=0 (セル高不足)。chipは非表示になり +N more のみ表示されます。');
@@ -7758,29 +7805,69 @@
   }());
 
   /* ====================================================================
-   * KC.EventFilter — イベントフィルタリングユーティリティ
-   * KC.State.eventFilter の値に基づいてイベント配列を絞り込む
+   * KC.EventFilter — イベントフィルタリングユーティリティ（チェックボックス式フィルタ）
+   * KC.State.filterChecks（{ [groupId]: string[] }）に基づいてイベント配列を絞り込む
+   * グループ内 OR・グループ間 AND。グループ内が全未チェックの場合はそのグループを無視（絞り込みなし）
+   * REQ_checkbox-filter §8.1
    * ==================================================================== */
   KC.EventFilter = {
     /**
-     * KC.State.eventFilter に基づいてイベント配列を絞り込む
-     * - 'all': 全件返す
-     * - 'mine': 自分のイベントのみ（いずれかのルールにマッチ = color が null でない）
-     * - 'others': 他人のイベントのみ（いずれのルールにもマッチしない = color が null）
+     * KC.State.filterChecks に基づいてイベント配列を絞り込む
      * @param {Array} events - KcEvent 配列
      * @returns {Array} フィルタ済み配列
      */
     apply: function (events) {
-      var filter = KC.State.eventFilter || 'all';
-      if (filter === 'mine') {
-        // bgColor が null でない（いずれかのルールにマッチ）= 自分の予定として扱う（§5.9）
-        return events.filter(function (e) { return KC.LoginContext.getPermission(e).bgColor !== null; });
+      var groups = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+      if (groups.length === 0) return events; // フィルタ未設定 = 全件表示
+
+      return events.filter(function (evt) {
+        return groups.every(function (group) {
+          var checked = (KC.State.filterChecks && KC.State.filterChecks[group.id]) || [];
+          if (checked.length === 0) return true; // 全解除 = このグループでは絞り込まない（FR-4）
+
+          return checked.some(function (itemId) {
+            return KC.EventFilter._matchGroupItem(group, itemId, evt);
+          });
+        });
+      });
+    },
+
+    /**
+     * 1グループ内の1チェック項目に対するマッチ判定
+     * @param {Object} group - filterConfig.groups[] の1要素
+     * @param {string} itemId - チェック済み項目 ID
+     * @param {Object} evt - KcEvent
+     * @returns {boolean}
+     */
+    _matchGroupItem: function (group, itemId, evt) {
+      if (group.type === 'assignee') {
+        var bgColor = KC.LoginContext.getPermission(evt).bgColor;
+        if (itemId === 'mine')   return bgColor !== null;
+        if (itemId === 'others') return bgColor === null;
+        return false;
       }
-      if (filter === 'others') {
-        // bgColor が null の予定（マッチなし）を「他人扱い」として表示（§5.9）
-        return events.filter(function (e) { return KC.LoginContext.getPermission(e).bgColor === null; });
+      // fieldValue 型
+      var item = (group.items || []).filter(function (i) { return i.id === itemId; })[0];
+      if (!item) return false;
+      var fieldVal = evt.valueFields ? evt.valueFields[group.fieldCode] : undefined;
+      if (fieldVal === undefined) return false;
+      return KC.EventFilter._matchFieldValue(fieldVal, item.value, group.fieldType);
+    },
+
+    /**
+     * フィールド値マッチ判定（KC.LoginContext._matchFieldValue と同等ロジック）
+     * CHECK_BOX / USER_SELECT は配列内包含、その他（DROP_DOWN/RADIO_BUTTON/STATUS）は完全一致
+     * USER_SELECT の配列内包含判定は実装判断（要件書 §8.1 擬似コード未言及分の補完。builder 判断）
+     * @param {string|string[]} fieldValue
+     * @param {string} ruleValue
+     * @param {string} fieldType
+     * @returns {boolean}
+     */
+    _matchFieldValue: function (fieldValue, ruleValue, fieldType) {
+      if (fieldType === 'CHECK_BOX' || fieldType === 'USER_SELECT') {
+        return Array.isArray(fieldValue) && fieldValue.indexOf(ruleValue) !== -1;
       }
-      return events;  // 'all': フィルタなし
+      return fieldValue === ruleValue;
     }
   };
 
@@ -8316,7 +8403,7 @@
     },
 
     /**
-     * 検索欄 DOM を生成して headRight の先頭（FilterDropdown より左）に挿入する
+     * 検索欄 DOM を生成して headRight の先頭（CheckFilter より左）に挿入する
      * @param {HTMLElement} headRight - .kc-head-right 要素
      */
     buildDOM: function (headRight) {
@@ -8365,7 +8452,7 @@
       dropdown.setAttribute('hidden', '');
       wrap.appendChild(dropdown);
 
-      // FilterDropdown より左: headRight の先頭に挿入
+      // CheckFilter より左: headRight の先頭に挿入
       headRight.insertBefore(wrap, headRight.firstChild);
 
       // 0件メッセージ要素をカレンダーグリッド直前に追加
@@ -9069,30 +9156,28 @@
         KC.Render._refreshImmediate();
       }
 
-      // --- 2. フィルタの復元（URL 優先、なければ localStorage 既存値を維持） ---
-      var urlFilter = params.filter;
-      if (urlFilter === 'all' || urlFilter === 'mine' || urlFilter === 'others') {
-        // URL 値が有効な場合は localStorage 値より優先して上書きする（FR-2, AC-3）
-        KC.State.eventFilter = urlFilter;
-        // フィルタドロップダウンのボタン表示ラベルも更新する
-        var filterBtn = document.getElementById('kc-filter-select');
-        if (filterBtn) {
-          var filterLabel = KC.FilterDropdown._labelFor(urlFilter);
-          if (filterBtn.childNodes.length > 0) {
-            filterBtn.childNodes[0].nodeValue = filterLabel + ' ';
-          }
-        }
-        // aria-selected の更新
-        var filterMenu = document.querySelector('#kc-filter .kc-dropdown-menu');
-        if (filterMenu) {
-          Array.from(filterMenu.querySelectorAll('.kc-option')).forEach(function (li) {
-            li.setAttribute('aria-selected', String(li.dataset.value === urlFilter));
+      // --- 2. フィルタの復元（URL 優先、なければ localStorage 既存値を維持。REQ_checkbox-filter §9.2） ---
+      // グループごとの f<groupId> パラメータを走査して KC.State.filterChecks を更新する。
+      // 新パラメータが1つも存在しない場合は旧 filter= パラメータからの変換を試みる（KC.CheckFilter._migrateLegacyUrlFilter、§9.3）。
+      // restoreFromUrlParams 内部で新旧いずれの経路も処理するため、旧 filter= パラメータのみの場合も呼び出す必要がある。
+      var filterGroupsForRestore = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+      var hasFilterUrlParam = filterGroupsForRestore.some(function (g) {
+        return Object.prototype.hasOwnProperty.call(params, 'f' + g.id);
+      });
+      if (hasFilterUrlParam || params.filter) {
+        KC.CheckFilter.restoreFromUrlParams(params);
+        // チェックボックス DOM・バッジの表示を最新の filterChecks に同期する
+        filterGroupsForRestore.forEach(function (group) {
+          var checkedIds = KC.State.filterChecks[group.id] || [];
+          document.querySelectorAll('[data-group-id="' + group.id + '"][data-item-id]').forEach(function (input) {
+            input.checked = checkedIds.indexOf(input.dataset.itemId) !== -1;
           });
-        }
+        });
+        KC.CheckFilter._updateBadge();
         // URL のフィルタに合わせて renderGrid で再描画（viewChanged でないケースで差分反映）
         KC.Render.renderGrid();
       }
-      // urlFilter が無効値（不正値）の場合は既存の eventFilter（localStorage 由来）を維持（FR-12 / AC-4）
+      // 上記いずれの条件にも該当しない場合は既存の filterChecks（localStorage 由来 or defaultChecked）を維持（FR-12 / AC-4）
 
       // --- 3. 検索クエリの復元（[Low] 二重 replaceState 対策） ---
       // setQuery() を経由すると URL を再書き込みするため、ここでは直接プロパティを設定する
@@ -9155,11 +9240,14 @@
         // B-P3: インライン再実装 (_dateToParamLocal) を廃止し、同スコープの _dateToParam を使用する（DRY）
         restoredParams.date = _dateToParam(KC.State.current, KC.State.view);
 
-        // filter: 有効値が URL に存在した場合のみ書き戻す
-        var urlFilter = params.filter;
-        if (urlFilter === 'all' || urlFilter === 'mine' || urlFilter === 'others') {
-          restoredParams.filter = urlFilter;
-        }
+        // f<groupId>: 有効値（元 URL に存在した f<groupId> パラメータ）のみ書き戻す（REQ_checkbox-filter §9.2）
+        var filterGroupsForWriteback = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+        filterGroupsForWriteback.forEach(function (group) {
+          var key = 'f' + group.id;
+          if (Object.prototype.hasOwnProperty.call(params, key)) {
+            restoredParams[key] = params[key];
+          }
+        });
 
         // q: 空でない場合のみ書き戻す（searchTargets が空で復元スキップした場合も含めて書き戻す）
         // searchTargets が空の場合、フロントエンド側で q は機能しないが URL に残す（再描画後に有効になることを想定）
@@ -9295,101 +9383,276 @@
   }());
 
   /* ====================================================================
-   * KC.FilterDropdown — イベントフィルタドロップダウン
-   * ヘッダー右側に「すべて / 自分のみ / 他人のみ」を切り替える UI を提供する
+   * KC.CheckFilter — チェックボックス式フィルタパネル（REQ_checkbox-filter）
+   * ヘッダー右側にグループ分けされたチェックボックス一覧を開閉する「フィルタ」ボタンを提供する。
+   * グループ内 OR・グループ間 AND。旧 KC.FilterDropdown（単一選択: すべて/自分のみ/他人のみ）を置換する。
    * ==================================================================== */
-  KC.FilterDropdown = {
-    /** localStorage のキー */
-    STORAGE_KEY: 'kc-event-filter',
+  KC.CheckFilter = {
+    /** localStorage のキー（新形式。旧キーは 'kc-event-filter'） */
+    STORAGE_KEY: 'kc-filter-checks',
+
+    /** 旧 localStorage キー（マイグレーション元。削除はしない §9.3） */
+    LEGACY_STORAGE_KEY: 'kc-event-filter',
 
     /**
-     * localStorage からフィルタ値を読み込み KC.State.eventFilter を初期化する
-     * DOM 構築前に呼ぶこと
+     * KC.Config.FILTER_CONFIG.groups を走査し、defaultChecked な項目 ID を
+     * KC.State.filterChecks の初期値としてセットする（§8.3）。
+     * localStorage/URL 復元より前に呼ぶこと。
      */
-    loadFilter: function () {
+    _applyDefaults: function () {
+      var groups = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+      var checks = {};
+      groups.forEach(function (group) {
+        checks[group.id] = (group.items || [])
+          .filter(function (item) { return item.defaultChecked !== false; })
+          .map(function (item) { return item.id; });
+      });
+      KC.State.filterChecks = checks;
+    },
+
+    /**
+     * localStorage（新キー）からチェック状態を読み込み KC.State.filterChecks にマージする。
+     * 新キーが存在しない場合は旧キー（kc-event-filter）からの変換を試みる（§9.3 FR-8）。
+     * DOM 構築前に呼ぶこと（_applyDefaults 実行後に呼ぶ）。
+     */
+    loadChecks: function () {
+      var self = this;
+      var restoredFromNew = false;
       try {
         var saved = localStorage.getItem(this.STORAGE_KEY);
-        if (saved === 'mine' || saved === 'others' || saved === 'all') {
-          KC.State.eventFilter = saved;
+        if (saved) {
+          var parsed = JSON.parse(saved);
+          if (parsed && typeof parsed === 'object') {
+            Object.keys(parsed).forEach(function (groupId) {
+              if (Array.isArray(parsed[groupId])) {
+                KC.State.filterChecks[groupId] = parsed[groupId];
+              }
+            });
+            restoredFromNew = true;
+          }
         }
       } catch (e) {
-        // localStorage が使えない環境ではデフォルト値を維持
-        console.warn('[KC.FilterDropdown] localStorage 読み込み失敗:', e);
+        console.warn('[KC.CheckFilter] localStorage 読み込み失敗:', e);
+      }
+
+      // 新形式（localStorage）が一切存在しない場合のみ、旧形式からの変換を試みる（URL 側は _migrateLegacyUrl で処理）
+      if (!restoredFromNew) {
+        self._migrateLegacyStorage();
       }
     },
 
     /**
-     * フィルタ値を保存して再描画する
-     * @param {string} value - 'all' | 'mine' | 'others'
+     * 旧 localStorage（kc-event-filter = 'all'|'mine'|'others'）を担当グループの選択状態に変換する（§9.3）
+     * 担当（assignee）グループが存在しない場合は変換せず無視する（既定＝全表示）。
+     * 変換結果は新キーへ保存し直す。旧キーは削除しない。
      */
-    _saveAndRefresh: function (value) {
-      KC.State.eventFilter = value;
+    _migrateLegacyStorage: function () {
+      var legacyValue = null;
       try {
-        localStorage.setItem(this.STORAGE_KEY, value);
+        legacyValue = localStorage.getItem(this.LEGACY_STORAGE_KEY);
       } catch (e) {
-        console.warn('[KC.FilterDropdown] localStorage 保存失敗:', e);
+        return;
       }
-      // FR-2: フィルタ変更を URL ハッシュに同期する（replaceState）
-      if (KC.UrlState) KC.UrlState.update('filter', value);
+      if (legacyValue !== 'mine' && legacyValue !== 'others') return; // 'all' 相当は変換不要
+
+      var groups = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+      var hasAssignee = groups.some(function (g) { return g.id === 'assignee'; });
+      if (!hasAssignee) return; // 担当グループ削除済み: 変換不能、既定のまま（全表示）
+
+      KC.State.filterChecks.assignee = [legacyValue];
+      this._persist();
+    },
+
+    /**
+     * URL パラメータ（f<groupId>）を走査し filterChecks に反映する（§9.2）。
+     * 新パラメータが1つも存在しない場合のみ、旧 filter= パラメータからの変換を試みる（§9.3）。
+     * @param {Object} params - KC.UrlState.parse() の結果
+     */
+    restoreFromUrlParams: function (params) {
+      var self = this;
+      var groups = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+      var hasAnyNewParam = false;
+
+      groups.forEach(function (group) {
+        var key = 'f' + group.id;
+        if (Object.prototype.hasOwnProperty.call(params, key)) {
+          hasAnyNewParam = true;
+          var raw = params[key];
+          KC.State.filterChecks[group.id] = (raw === '' || raw === self.EMPTY_SENTINEL) ? [] : raw.split(',');
+        }
+      });
+
+      if (!hasAnyNewParam && params.filter) {
+        this._migrateLegacyUrlFilter(params.filter, groups);
+      }
+    },
+
+    /**
+     * 旧 URL パラメータ（filter=all/mine/others）を担当グループの選択状態に変換する（§9.3）
+     * @param {string} filterValue
+     * @param {Array} groups
+     */
+    _migrateLegacyUrlFilter: function (filterValue, groups) {
+      if (filterValue !== 'mine' && filterValue !== 'others') return; // 'all' は変換不要
+      var hasAssignee = groups.some(function (g) { return g.id === 'assignee'; });
+      if (!hasAssignee) return; // 変換不能: 既定のまま（全表示）
+      KC.State.filterChecks.assignee = [filterValue];
+      this._persist();
+    },
+
+    /** KC.State.filterChecks を localStorage（新キー）に保存する */
+    _persist: function () {
+      try {
+        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(KC.State.filterChecks));
+      } catch (e) {
+        console.warn('[KC.CheckFilter] localStorage 保存失敗:', e);
+      }
+    },
+
+    /**
+     * 全解除（空配列）を URL 上で表現するためのセンチネル値。
+     * KC.UrlState.serialize() は空文字値を持つキーをシリアライズ時に自動的に取り除く仕様のため、
+     * 「パラメータなし（絞り込みなし）」と「空文字（全解除）」を区別できない。
+     * そのため空配列は空文字ではなくこのセンチネル文字列で表現する（restoreFromUrlParams / popstate 側で復号）。
+     * @type {string}
+     */
+    EMPTY_SENTINEL: '__none__',
+
+    /**
+     * KC.State.filterChecks の内容を URL ハッシュへ同期する（replaceState、§9.2）。
+     * 全項目チェック済み（絞り込みなし）のグループはパラメータを省略する。
+     * 空配列（全解除）は EMPTY_SENTINEL を明示的に書き込む（空文字は serialize で消えるため使えない）。
+     */
+    _updateUrl: function () {
+      if (!KC.UrlState) return;
+      var self = this;
+      var groups = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+      KC.UrlState.batch(function (params) {
+        groups.forEach(function (group) {
+          var key = 'f' + group.id;
+          var checked = (KC.State.filterChecks && KC.State.filterChecks[group.id]) || [];
+          var allIds = (group.items || []).map(function (i) { return i.id; });
+          var isAllChecked = allIds.length > 0 && checked.length === allIds.length &&
+            allIds.every(function (id) { return checked.indexOf(id) !== -1; });
+
+          if (isAllChecked) {
+            // 絞り込みなし相当: URL を短く保つため省略する
+            delete params[key];
+          } else if (checked.length === 0) {
+            // 全解除: 省略すると「全選択」と区別できないため明示的にセンチネル値を書く
+            params[key] = self.EMPTY_SENTINEL;
+          } else {
+            params[key] = checked.join(',');
+          }
+        });
+      });
+    },
+
+    /**
+     * チェックボックスの ON/OFF をトグルし、状態保存・URL 同期・即時再描画を行う（§5.4）
+     * @param {string} groupId
+     * @param {string} itemId
+     * @param {boolean} isChecked
+     */
+    _toggleItem: function (groupId, itemId, isChecked) {
+      var current = (KC.State.filterChecks[groupId] || []).slice();
+      var idx = current.indexOf(itemId);
+      if (isChecked && idx === -1) {
+        current.push(itemId);
+      } else if (!isChecked && idx !== -1) {
+        current.splice(idx, 1);
+      }
+      KC.State.filterChecks[groupId] = current;
+
+      this._persist();
+      this._updateUrl();
       // フィルタはクライアント側処理のため API 再取得不要。renderGrid で再描画のみ実施する
       KC.Render.renderGrid();
+      this._updateBadge();
     },
 
     /**
-     * フィルタ値に対応する表示ラベルを返す
-     * @param {string} value
-     * @returns {string}
+     * 何らかの絞り込みが有効な場合、ボタンにバッジを表示する（§5.2、任意仕様）
      */
-    _labelFor: function (value) {
-      if (value === 'mine')   return '自分のみ';
-      if (value === 'others') return '他人のみ';
-      return 'すべて';
+    _updateBadge: function () {
+      var btn = document.getElementById('kc-filter-select');
+      if (!btn) return;
+      var groups = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+      var isFiltering = groups.some(function (group) {
+        var checked = (KC.State.filterChecks && KC.State.filterChecks[group.id]) || [];
+        var allIds = (group.items || []).map(function (i) { return i.id; });
+        if (checked.length === 0) return false; // 全解除 = 絞り込みなし扱い
+        return checked.length !== allIds.length;
+      });
+      btn.classList.toggle('kc-filter-active', isFiltering);
     },
 
     /**
-     * フィルタドロップダウン DOM を生成して headRight に追加する
+     * チェックボックスパネル DOM を生成して headRight に追加する
      * @param {HTMLElement} headRight - .kc-head-right 要素
      */
     buildDOM: function (headRight) {
       var self = this;
+      var groups = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+
       var wrap = document.createElement('div');
-      wrap.className = 'kc-dropdown';
+      wrap.className = 'kc-dropdown kc-filter-panel';
       wrap.id = 'kc-filter';
 
       var btn = document.createElement('button');
       btn.className = 'kc-dropdown-btn';
       btn.id = 'kc-filter-select';
-      btn.setAttribute('aria-haspopup', 'listbox');
+      btn.setAttribute('aria-haspopup', 'true');
       btn.setAttribute('aria-expanded', 'false');
-      btn.textContent = self._labelFor(KC.State.eventFilter) + ' ';
+      btn.textContent = 'フィルタ ';
       var caret = document.createElement('span');
       caret.className = 'kc-caret';
       caret.textContent = '▾'; // ▾
       btn.appendChild(caret);
 
-      var menuUl = document.createElement('ul');
-      menuUl.className = 'kc-dropdown-menu';
-      menuUl.setAttribute('role', 'listbox');
-      menuUl.setAttribute('aria-label', 'フィルタ切替');
+      var menu = document.createElement('div');
+      menu.className = 'kc-filter-panel-menu';
+      menu.setAttribute('role', 'group');
+      menu.setAttribute('aria-label', 'フィルタ');
 
-      var options = [
-        { value: 'all',    label: 'すべて' },
-        { value: 'mine',   label: '自分のみ' },
-        { value: 'others', label: '他人のみ' }
-      ];
+      groups.forEach(function (group) {
+        var groupEl = document.createElement('div');
+        groupEl.className = 'kc-filter-group';
+        groupEl.dataset.groupId = group.id;
 
-      options.forEach(function (opt) {
-        var li = document.createElement('li');
-        li.className = 'kc-option';
-        li.setAttribute('role', 'option');
-        li.dataset.value = opt.value;
-        li.setAttribute('aria-selected', String(opt.value === KC.State.eventFilter));
-        li.textContent = opt.label;
-        menuUl.appendChild(li);
+        var titleId = 'kc-filter-group-title-' + group.id;
+        var titleEl = document.createElement('div');
+        titleEl.className = 'kc-filter-group-title';
+        titleEl.id = titleId;
+        titleEl.textContent = group.label || group.id;
+        groupEl.appendChild(titleEl);
+
+        var checkedIds = (KC.State.filterChecks && KC.State.filterChecks[group.id]) || [];
+
+        (group.items || []).forEach(function (item) {
+          var label = document.createElement('label');
+          label.className = 'kc-filter-item';
+          label.setAttribute('aria-labelledby', titleId);
+
+          var input = document.createElement('input');
+          input.type = 'checkbox';
+          input.dataset.groupId = group.id;
+          input.dataset.itemId = item.id;
+          input.checked = checkedIds.indexOf(item.id) !== -1;
+          input.addEventListener('change', function () {
+            self._toggleItem(group.id, item.id, input.checked);
+          });
+
+          label.appendChild(input);
+          label.appendChild(document.createTextNode(' ' + (item.label || item.id)));
+          groupEl.appendChild(label);
+        });
+
+        menu.appendChild(groupEl);
       });
 
       wrap.appendChild(btn);
-      wrap.appendChild(menuUl);
+      wrap.appendChild(menu);
 
       // ドロップダウン開閉ロジック（KC.ViewDropdown と同パターン）
       function open() {
@@ -9405,47 +9668,29 @@
         wrap.classList.contains('open') ? close() : open();
       }
 
-      function choose(value, label) {
-        // ボタンのテキストノードを更新（caret は保持）
-        if (btn.childNodes.length > 0) {
-          btn.childNodes[0].nodeValue = label + ' ';
-        } else {
-          btn.textContent = label + ' ';
-        }
-        // aria-selected 更新
-        Array.from(menuUl.querySelectorAll('.kc-option')).forEach(function (li) {
-          li.setAttribute('aria-selected', String(li.dataset.value === value));
-        });
-        close();
-        self._saveAndRefresh(value);
-      }
-
       btn.addEventListener('click', toggle);
       btn.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' || e.key === ' ') toggle(e);
         if (e.key === 'Escape') close();
       });
 
-      Array.from(menuUl.querySelectorAll('.kc-option')).forEach(function (li) {
-        li.addEventListener('click', function () {
-          choose(li.dataset.value, li.textContent.trim());
-        });
-        li.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter' || e.key === ' ') {
-            choose(li.dataset.value, li.textContent.trim());
-          }
-        });
-      });
-
+      // チェックボックスクリック時はパネルを閉じない（§5.3。複数項目を続けて操作できるようにする）
+      // パネル外クリックで閉じる
       document.addEventListener('click', function (e) {
         if (!wrap.contains(e.target)) close();
+      });
+      // ESC キーでパネルを閉じる（§5.3）
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && wrap.classList.contains('open')) close();
       });
 
       // ビュードロップダウンの前に挿入（headRight の先頭）
       headRight.insertBefore(wrap, headRight.firstChild);
+
+      self._updateBadge();
     },
 
-    /** DOM 構築後にドロップダウンを初期化する（KC.Boot.init から呼ぶ） */
+    /** DOM 構築後にパネルを初期化する（KC.Boot.init から呼ぶ） */
     init: function () {
       var headRight = document.querySelector('.kc-head-right');
       if (!headRight) return;
@@ -9825,12 +10070,16 @@
       var root = document.getElementById('kc-root');
       if (!root) return;
 
-      // フィルタ設定を localStorage から復元（DOM 構築前に行う）
-      KC.FilterDropdown.loadFilter();
-
       // プラグイン設定を読み込み KC.Config を上書きする（detectFields より前に呼ぶ）
       // 設定なし / 必須フィールド未入力の場合はハードコード値を維持し、detectFields でフォールバック
       KC.Config.loadFromPluginConfig(viewId);
+
+      // チェックボックス式フィルタの初期化（REQ_checkbox-filter §8.3, §9.3）
+      // KC.Config.FILTER_CONFIG（loadFromPluginConfig で確定済み）を前提に、
+      // defaultChecked 初期値 → localStorage 復元（旧キーからのマイグレーション込み）の順で適用する。
+      // DOM 構築前（KC.CheckFilter.init() より前）に行うこと。
+      KC.CheckFilter._applyDefaults();
+      KC.CheckFilter.loadChecks();
 
       // SearchFilter の検索対象フィールドをプラグイン設定から初期化する（Phase 2）
       // searchTargets が空の場合は何もマッチしない動作になる（v7 以降はタイトルが初期値として設定済み）
@@ -9998,14 +10247,14 @@
       // ViewDropdown 初期化
       KC.ViewDropdown.init();
 
-      // SearchFilter 初期化（検索欄 UI を FilterDropdown の左に追加）
+      // SearchFilter 初期化（検索欄 UI を CheckFilter の左に追加）
       var sfHeadRight = document.querySelector('.kc-head-right');
       if (sfHeadRight) {
         KC.SearchFilter.buildDOM(sfHeadRight);
       }
 
-      // FilterDropdown 初期化（フィルタドロップダウン UI を .kc-head-right に追加）
-      KC.FilterDropdown.init();
+      // CheckFilter 初期化（チェックボックス式フィルタパネル UI を .kc-head-right に追加。REQ_checkbox-filter）
+      KC.CheckFilter.init();
 
       // 全画面ボタンのイベント登録
       var fullscreenBtn = document.getElementById('kc-fullscreen-btn');
@@ -10133,12 +10382,22 @@
           KC.Render._refreshImmediate();
         }
 
-        // filter の差分更新（replaceState で書き換わった場合）
-        if (params.filter && (params.filter === 'all' || params.filter === 'mine' || params.filter === 'others')) {
-          if (params.filter !== KC.State.eventFilter) {
-            KC.State.eventFilter = params.filter;
-            KC.Render.renderGrid();
-          }
+        // フィルタ（f<groupId>）の差分更新（replaceState で書き換わった場合。REQ_checkbox-filter §10.1）
+        // 旧 filter= パラメータのみの場合の変換も restoreFromUrlParams 内部で処理するため params.filter も条件に含める
+        var filterGroupsForPopstate = (KC.Config.FILTER_CONFIG && KC.Config.FILTER_CONFIG.groups) || [];
+        var hasFilterParamChange = filterGroupsForPopstate.some(function (g) {
+          return Object.prototype.hasOwnProperty.call(params, 'f' + g.id);
+        });
+        if (hasFilterParamChange || params.filter) {
+          KC.CheckFilter.restoreFromUrlParams(params);
+          filterGroupsForPopstate.forEach(function (group) {
+            var checkedIds = KC.State.filterChecks[group.id] || [];
+            document.querySelectorAll('[data-group-id="' + group.id + '"][data-item-id]').forEach(function (input) {
+              input.checked = checkedIds.indexOf(input.dataset.itemId) !== -1;
+            });
+          });
+          KC.CheckFilter._updateBadge();
+          KC.Render.renderGrid();
         }
       });
 

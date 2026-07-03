@@ -1,10 +1,10 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (v9: DnD 重複チェック モード B 追加)
+ * KC Calendar プラグイン設定画面スクリプト (v11: チェックボックス式フィルタ設定 追加)
  *
- * 保存形式 (version 9):
+ * 保存形式 (version 11):
  *   {
- *     version: 9,
+ *     version: 11,
  *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ...,
  *                     overlapMode,                  // 'none' / 'fieldKey' / 'refTable'
  *                     overlapKeyFieldCode,          // モード A
@@ -17,8 +17,12 @@
  *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, bgColor, textColor }, ... ],
  *     fieldValueRules: [ { fieldCode, fieldType, value, permission, bgColor, textColor }, ... ],
  *     searchTargets: [ { fieldCode: "memo" }, { fieldCode: "relatedMeetings" }, ... ],
+ *     filterConfig: { groups: [ { id, label, type: 'assignee'|'fieldValue', fieldCode, fieldType, items: [ { id, label, value, defaultChecked } ] } ] },
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
+ * v11 変更点 (REQ_checkbox-filter):
+ *   - filterConfig を追加（チェックボックス式フィルタパネルのグループ・チェック項目定義）
+ *   - v10→v11 マイグレーション: filterConfig 未設定時は「担当」グループ（自分/他人の2択）のみを自動生成
  * v9 変更点:
  *   - fieldMapping に overlapMode / overlapRefTable* フィールドを追加（DnD 重複チェック モード B 用）
  *   - v8→v9 マイグレーション: overlapMode を overlapKeyFieldCode から自動判定、モード B フィールドを '' で初期化
@@ -112,6 +116,12 @@
    */
   var OVERLAP_KEY_FIELD_TYPES = ['SINGLE_LINE_TEXT', 'NUMBER', 'DROP_DOWN', 'RADIO_BUTTON', 'USER_SELECT', 'LOOKUP'];
 
+  /**
+   * フィルタ設定（fieldValue 型グループ）の対象フィールドとして選択可能な型（REQ_checkbox-filter §6.3）
+   * STATUS はフォームフィールドではなくプロセス管理として別途 $status を追加する
+   */
+  var FILTER_TARGET_FIELD_TYPES = ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'STATUS', 'USER_SELECT'];
+
   /* ====================================================================
    * ユーティリティ
    * ==================================================================== */
@@ -144,11 +154,11 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 10)
-   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, views: Object }}
+   * setConfig で保存する全体設定オブジェクト (version 11)
+   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, filterConfig: Object, views: Object }}
    */
   var currentConfig = {
-    version: 10,
+    version: 11,
     fieldMapping: {},
     permissionRules: [],
     fieldValueRules: [],
@@ -158,6 +168,19 @@
       permission: 'view',
       bgColor:    '#bdbdbd',
       textColor:  '#000000'
+    },
+    filterConfig: {
+      groups: [
+        {
+          id: 'assignee',
+          label: '担当',
+          type: 'assignee',
+          items: [
+            { id: 'mine',   label: '自分の予定', defaultChecked: true },
+            { id: 'others', label: '他人の予定', defaultChecked: true }
+          ]
+        }
+      ]
     },
     views: {}
   };
@@ -253,6 +276,10 @@
   /* --- 検索対象フィールド設定 (v7 新規) --- */
   var elSearchTargetRows = document.getElementById('kc-search-target-rows');
   var elSearchTargetAdd  = document.getElementById('kc-search-target-add');
+
+  /* --- フィルタ設定 (v11 新規, REQ_checkbox-filter §6) --- */
+  var elFilterGroupRows = document.getElementById('kc-filter-group-rows');
+  var elFilterGroupAdd  = document.getElementById('kc-filter-group-add');
 
   /* --- マッピング設定内メール初期値チェックボックス --- */
   var elMailLoginUserDefault = document.getElementById('kc-mail-login-user-default');
@@ -1052,10 +1079,10 @@
     // dragend: ドラッグ終了時にクリーンアップ
     handle.addEventListener('dragend', function () {
       row.classList.remove('kc-dragging');
-      // 全行のハイライトクラスを除去
+      // 全行のハイライトクラスを除去（REQ_checkbox-filter: .kc-filter-group-row も対象に追加）
       var container = row.parentNode;
       if (container) {
-        var allRows = container.querySelectorAll('.kc-permission-row, .kc-fieldvalue-row');
+        var allRows = container.querySelectorAll('.kc-permission-row, .kc-fieldvalue-row, .kc-filter-group-row, .kc-filter-item-row');
         allRows.forEach(function (r) {
           r.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
         });
@@ -1690,6 +1717,533 @@
   }
 
   /* ====================================================================
+   * フィルタ設定 UI (REQ_checkbox-filter §6)
+   * カレンダーヘッダーのチェックボックス式フィルタパネルに表示するグループ・チェック項目を管理する。
+   * ==================================================================== */
+
+  /** グループ ID の自動採番カウンタ（半角英数字のみ許可。§15.2 リスク対策） */
+  var _filterGroupIdCounter = 1;
+
+  /**
+   * 新規フィルタグループの一意な ID を発行する（group-1, group-2, ... 形式）
+   * 既存グループと衝突しないようにカウンタを進める
+   * @returns {string}
+   */
+  function _generateFilterGroupId() {
+    var id;
+    do {
+      id = 'group-' + _filterGroupIdCounter;
+      _filterGroupIdCounter += 1;
+    } while (elFilterGroupRows && elFilterGroupRows.querySelector('[data-group-id="' + id + '"]'));
+    return id;
+  }
+
+  /**
+   * 新規フィルタ項目の一意な ID を発行する（グループ内で一意であればよい。item-1, item-2, ... 形式）
+   * @param {HTMLElement} itemsContainer - .kc-filter-item-rows 要素
+   * @returns {string}
+   */
+  function _generateFilterItemId(itemsContainer) {
+    var counter = 1;
+    var id;
+    do {
+      id = 'item-' + counter;
+      counter += 1;
+    } while (itemsContainer && itemsContainer.querySelector('[data-item-id="' + id + '"]'));
+    return id;
+  }
+
+  /**
+   * フィルタ対象フィールド選択肢を構築する（DROP_DOWN/RADIO_BUTTON/CHECK_BOX/USER_SELECT + STATUS）
+   * fieldValueFieldOptions は DROP_DOWN/RADIO_BUTTON/CHECK_BOX のみを保持するため、
+   * USER_SELECT は permissionFieldOptions から補って合成する（§6.3）。
+   * @returns {Array<{code: string, label: string, type: string}>}
+   */
+  function _getFilterTargetFieldOptions() {
+    var options = fieldValueFieldOptions.map(function (f) {
+      return { code: f.code, label: f.label, type: f.type };
+    });
+    permissionFieldOptions.forEach(function (f) {
+      options.push({ code: f.code, label: f.label, type: 'USER_SELECT' });
+    });
+    options.sort(function (a, b) {
+      if (a.label < b.label) return -1;
+      if (a.label > b.label) return 1;
+      return 0;
+    });
+    return options;
+  }
+
+  /**
+   * フィルタ対象フィールド選択ドロップダウンを生成する（§6.3 手順2、buildFieldValueFieldSelect 踏襲）
+   * @param {Object|null} group - 既存グループ { fieldCode, fieldType }
+   * @returns {HTMLSelectElement}
+   */
+  function buildFilterTargetFieldSelect(group) {
+    var fieldSel = document.createElement('select');
+    fieldSel.className = 'kc-config-select kc-filter-target-field-select';
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- フィールドを選択 --';
+    fieldSel.appendChild(emptyOpt);
+
+    _getFilterTargetFieldOptions().forEach(function (f) {
+      var opt = document.createElement('option');
+      opt.value = f.code;
+      opt.dataset.fieldtype = f.type;
+      opt.textContent = f.label + ' (' + f.code + ')';
+      fieldSel.appendChild(opt);
+    });
+
+    // プロセス管理が有効かつステータス一覧が取得できた場合のみ STATUS を追加
+    if (statusEnabled && statusOptions.length > 0) {
+      var statusOpt = document.createElement('option');
+      statusOpt.value = '$status';
+      statusOpt.dataset.fieldtype = 'STATUS';
+      statusOpt.textContent = 'ステータス (STATUS)';
+      fieldSel.appendChild(statusOpt);
+    }
+
+    if (group && group.fieldCode) {
+      fieldSel.value = group.fieldCode;
+      if (fieldSel.value !== group.fieldCode) {
+        var missingOpt = document.createElement('option');
+        missingOpt.value = group.fieldCode;
+        missingOpt.textContent = group.fieldCode + ' (フィールドが見つかりません)';
+        missingOpt.className = 'kc-option-missing';
+        fieldSel.appendChild(missingOpt);
+        fieldSel.value = group.fieldCode;
+      }
+    }
+    attachSelectEmptyClassSync(fieldSel);
+    return fieldSel;
+  }
+
+  /**
+   * フィルタグループ種別選択ドロップダウンを生成する（§6.4 buildFilterGroupTypeSelect）
+   * 'assignee' は固定グループ用のため新規追加では選択不可（既存の assignee 行のみ保持表示）
+   * @param {Object|null} group
+   * @returns {HTMLSelectElement}
+   */
+  function buildFilterGroupTypeSelect(group) {
+    var typeSel = document.createElement('select');
+    typeSel.className = 'kc-config-select kc-filter-group-type-select';
+
+    var options = [{ value: 'fieldValue', label: 'フィールド値' }];
+    if (group && group.type === 'assignee') {
+      options.unshift({ value: 'assignee', label: '担当（固定）' });
+      typeSel.disabled = true; // 既存の担当グループは種別変更不可
+    }
+
+    options.forEach(function (o) {
+      var opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      typeSel.appendChild(opt);
+    });
+
+    typeSel.value = (group && group.type) || 'fieldValue';
+    attachSelectEmptyClassSync(typeSel);
+    return typeSel;
+  }
+
+  /**
+   * 1 件のフィルタ項目（チェック項目）行を生成する（§6.4 buildFilterItemRow）
+   * fieldValue 型グループ用: 値選択（候補から） + ラベル入力 + デフォルトON + 削除
+   * @param {Object} group - 親グループ（fieldCode/fieldType 参照用）
+   * @param {Object} [item] - 既存項目 { id, label, value, defaultChecked }
+   * @param {HTMLElement} itemsContainer - 追加先コンテナ（ID 採番の重複チェック用）
+   * @returns {HTMLElement} .kc-filter-item-row 要素
+   */
+  function buildFilterItemRow(group, item, itemsContainer) {
+    var row = document.createElement('div');
+    row.className = 'kc-filter-item-row';
+    if (item && item.id) { row.dataset.itemId = item.id; }
+
+    var isAssignee = group && group.type === 'assignee';
+
+    var handleCell = document.createElement('div');
+    handleCell.className = 'kc-filter-item-cell kc-filter-item-col-handle';
+    if (!isAssignee) {
+      // 担当グループの固定 2 項目（自分/他人）は並び替え不要のためハンドルを表示しない（§6.3 手順6）
+      var itemHandle = buildDragHandle();
+      attachRowDragEvents(row, itemHandle);
+      handleCell.appendChild(itemHandle);
+    }
+
+    var valueCell = document.createElement('div');
+    valueCell.className = 'kc-filter-item-cell kc-filter-item-col-value';
+    if (isAssignee) {
+      // 担当グループは固定項目のため値表示のみ（編集不可）
+      var fixedSpan = document.createElement('span');
+      fixedSpan.className = 'kc-filter-item-fixed-value';
+      fixedSpan.textContent = item ? (item.value || item.id) : '';
+      valueCell.appendChild(fixedSpan);
+    } else {
+      var valueSpan = document.createElement('span');
+      valueSpan.className = 'kc-filter-item-fixed-value kc-filter-item-value';
+      valueSpan.textContent = item ? item.value : '';
+      valueCell.appendChild(valueSpan);
+    }
+
+    var labelCell = document.createElement('div');
+    labelCell.className = 'kc-filter-item-cell kc-filter-item-col-label';
+    var labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelInput.className = 'kc-config-input kc-filter-item-label-input';
+    labelInput.value = item ? (item.label || '') : '';
+    labelInput.disabled = !!isAssignee; // 担当グループの固定項目はラベル編集不可（自分/他人の意味を変えさせない）
+    labelCell.appendChild(labelInput);
+
+    var defaultCell = document.createElement('div');
+    defaultCell.className = 'kc-filter-item-cell kc-filter-item-col-default';
+    var defaultLabel = document.createElement('label');
+    // 原因: .kc-config-checkbox-label は margin-bottom: 12px を持つ共通クラスで、
+    // 単独チェックボックス（デフォルト権限設定エリア等）向けの余白だった。
+    // これを grid セル内にそのまま流用すると行の実効高さが余分に伸び、align-items: center と
+    // 組み合わさってチェックボックスの表示位置がセル内でずれ、次の行を追加するまで正しい位置に
+    // 見えない（＝実質的に隠れる）症状が発生していた（2026-07 実機フィードバックで発覚）。
+    // margin を持たない専用クラスに差し替えて解消する。
+    defaultLabel.className = 'kc-filter-item-default-label';
+    var defaultInput = document.createElement('input');
+    defaultInput.type = 'checkbox';
+    defaultInput.className = 'kc-filter-item-default-input';
+    defaultInput.checked = !item || item.defaultChecked !== false;
+    defaultLabel.appendChild(defaultInput);
+    defaultLabel.appendChild(document.createTextNode(' 初期ON'));
+    defaultCell.appendChild(defaultLabel);
+
+    var actionCell = document.createElement('div');
+    actionCell.className = 'kc-filter-item-cell kc-filter-item-col-action';
+    if (!isAssignee) {
+      var delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'kc-config-btn kc-config-btn-secondary kc-filter-item-del-btn';
+      delBtn.textContent = '−';
+      delBtn.addEventListener('click', function () {
+        row.parentNode && row.parentNode.removeChild(row);
+      });
+      actionCell.appendChild(delBtn);
+    }
+
+    row.appendChild(handleCell);
+    row.appendChild(valueCell);
+    row.appendChild(labelCell);
+    row.appendChild(defaultCell);
+    row.appendChild(actionCell);
+
+    if (!item || !item.id) {
+      row.dataset.itemId = _generateFilterItemId(itemsContainer);
+    }
+    // 値は dataset に保持して収集時に参照する（value セルは表示専用のため）
+    row.dataset.itemValue = item ? (item.value != null ? item.value : '') : '';
+
+    return row;
+  }
+
+  /**
+   * fieldValue 型グループの「項目を追加」候補一覧を再構築する（§6.3 手順3、rebuildValueSelect 踏襲）
+   * 既にグループに追加済みの値は候補から除外する。
+   * @param {HTMLSelectElement} candidateSel - 候補ドロップダウン
+   * @param {string} fieldCode
+   * @param {string} fieldType
+   * @param {HTMLElement} itemsContainer - 既存項目行コンテナ（追加済み値の除外判定用）
+   */
+  function _rebuildFilterCandidateSelect(candidateSel, fieldCode, fieldType, itemsContainer) {
+    while (candidateSel.options.length > 0) { candidateSel.remove(0); }
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = fieldCode ? '-- 値を選択 --' : '-- フィールドを選択してください --';
+    emptyOpt.disabled = !fieldCode;
+    candidateSel.appendChild(emptyOpt);
+
+    if (!fieldCode || fieldType === 'USER_SELECT') {
+      // USER_SELECT は選択肢の自動取得手段がないため候補なし（FR-9）
+      syncSelectEmptyClass(candidateSel);
+      return;
+    }
+
+    var existingValues = itemsContainer
+      ? Array.from(itemsContainer.querySelectorAll('.kc-filter-item-row')).map(function (r) { return r.dataset.itemValue; })
+      : [];
+
+    var opts = getFieldValueOptions(fieldCode, fieldType);
+    opts.forEach(function (v) {
+      if (existingValues.indexOf(v) !== -1) return; // 追加済みの値は候補から除外
+      var opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      candidateSel.appendChild(opt);
+    });
+    syncSelectEmptyClass(candidateSel);
+  }
+
+  /**
+   * USER_SELECT 型グループ用の手動入力フォーム（code + ラベル）を生成する（FR-9）
+   * @param {HTMLElement} itemsContainer
+   * @returns {HTMLElement}
+   */
+  function _buildUserSelectManualAddForm(itemsContainer, group) {
+    var wrap = document.createElement('div');
+    wrap.className = 'kc-filter-item-manual-add';
+
+    var codeInput = document.createElement('input');
+    codeInput.type = 'text';
+    codeInput.className = 'kc-config-input kc-filter-item-manual-code';
+    codeInput.placeholder = 'ユーザーコード';
+
+    var labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelInput.className = 'kc-config-input kc-filter-item-manual-label';
+    labelInput.placeholder = 'ラベル（任意）';
+
+    var addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'kc-config-btn kc-config-btn-secondary';
+    addBtn.textContent = '項目を追加';
+    addBtn.addEventListener('click', function () {
+      var code = codeInput.value.trim();
+      if (!code) return;
+      var label = labelInput.value.trim() || code;
+      var newItem = { id: '', label: label, value: code, defaultChecked: true };
+      itemsContainer.appendChild(buildFilterItemRow(group, newItem, itemsContainer));
+      codeInput.value = '';
+      labelInput.value = '';
+    });
+
+    wrap.appendChild(codeInput);
+    wrap.appendChild(labelInput);
+    wrap.appendChild(addBtn);
+    return wrap;
+  }
+
+  /**
+   * 1 件のフィルタグループ行を生成する（§6.4 buildFilterGroupRow、buildFieldValueRow 構造踏襲）
+   * @param {Object} [group] - 既存グループ { id, label, type, fieldCode, fieldType, items }（省略時は新規 fieldValue グループ）
+   * @returns {HTMLElement} .kc-filter-group-row 要素
+   */
+  function buildFilterGroupRow(group) {
+    var row = document.createElement('div');
+    row.className = 'kc-filter-group-row';
+    var groupId = (group && group.id) || _generateFilterGroupId();
+    row.dataset.groupId = groupId;
+    row.dataset.groupType = (group && group.type) || 'fieldValue';
+
+    var isAssignee = group && group.type === 'assignee';
+
+    var handle = buildDragHandle();
+    attachRowDragEvents(row, handle);
+
+    var headerRow = document.createElement('div');
+    headerRow.className = 'kc-filter-group-row-header';
+
+    var typeSel = buildFilterGroupTypeSelect(group);
+    var fieldSelWrap = document.createElement('div');
+    fieldSelWrap.className = 'kc-filter-group-field-wrap';
+
+    // グループ名は手動入力させず、選択した対象フィールドのフィールド名をそのまま採用する（2026-07 フィードバック）。
+    // 担当グループは固定で「担当」を表示する。表示専用のため input ではなく span。
+    // 保存値は row.dataset.groupLabel に保持し、collectFilterConfig() で参照する。
+    var labelDisplay = document.createElement('span');
+    labelDisplay.className = 'kc-filter-group-label-display';
+    labelDisplay.textContent = isAssignee ? '担当' : ((group && group.label) || '（フィールド未選択）');
+    row.dataset.groupLabel = isAssignee ? '担当' : ((group && group.label) || '');
+
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-config-btn-secondary kc-filter-group-del-btn';
+    delBtn.textContent = '削除';
+    if (isAssignee) {
+      // 担当グループは削除不可（§6.1: 廃止する既存ドロップダウン相当の機能を欠落させないため）
+      delBtn.disabled = true;
+      delBtn.title = '担当グループは削除できません';
+    } else {
+      delBtn.addEventListener('click', function () {
+        row.parentNode && row.parentNode.removeChild(row);
+      });
+    }
+
+    headerRow.appendChild(handle);
+    headerRow.appendChild(typeSel);
+    headerRow.appendChild(labelDisplay);
+    headerRow.appendChild(fieldSelWrap);
+    headerRow.appendChild(delBtn);
+
+    var itemsSection = document.createElement('div');
+    itemsSection.className = 'kc-filter-group-items-section';
+
+    var itemsContainer = document.createElement('div');
+    itemsContainer.className = 'kc-filter-item-rows';
+
+    var addControlsWrap = document.createElement('div');
+    addControlsWrap.className = 'kc-filter-item-add-controls';
+
+    if (isAssignee) {
+      // 担当グループ: 固定 2 項目（mine/others）をそのまま表示（編集不可、削除不可）
+      var fixedItems = (group && group.items) || [
+        { id: 'mine',   label: '自分の予定', value: 'mine',   defaultChecked: true },
+        { id: 'others', label: '他人の予定', value: 'others', defaultChecked: true }
+      ];
+      fixedItems.forEach(function (item) {
+        itemsContainer.appendChild(buildFilterItemRow(group, item, itemsContainer));
+      });
+    } else {
+      // fieldValue 型: 対象フィールド選択 + 既存項目 + 候補追加 UI
+      var fieldSel = buildFilterTargetFieldSelect(group);
+      fieldSelWrap.appendChild(fieldSel);
+
+      // グループ名 = 選択フィールドのフィールド名（"(code)" 部分を除いたラベル）を自動採用する（2026-07 フィードバック）
+      function _syncGroupLabelFromField() {
+        var selOpt = fieldSel.options[fieldSel.selectedIndex];
+        var fieldLabel = (selOpt && selOpt.value) ? selOpt.textContent.replace(/\s*\([^)]*\)\s*$/, '') : '';
+        labelDisplay.textContent = fieldLabel || '（フィールド未選択）';
+        row.dataset.groupLabel = fieldLabel;
+      }
+      _syncGroupLabelFromField();
+
+      var candidateWrap = document.createElement('div');
+      candidateWrap.className = 'kc-filter-candidate-wrap';
+      var candidateSel = document.createElement('select');
+      candidateSel.className = 'kc-config-select kc-filter-candidate-select';
+      var candidateAddBtn = document.createElement('button');
+      candidateAddBtn.type = 'button';
+      candidateAddBtn.className = 'kc-config-btn kc-config-btn-secondary';
+      candidateAddBtn.textContent = '項目を追加';
+      candidateAddBtn.addEventListener('click', function () {
+        var selOpt = fieldSel.options[fieldSel.selectedIndex];
+        var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
+        var value = candidateSel.value;
+        if (!value) return;
+        var newItem = { id: '', label: value, value: value, defaultChecked: true };
+        itemsContainer.appendChild(buildFilterItemRow(group, newItem, itemsContainer));
+        _rebuildFilterCandidateSelect(candidateSel, fieldSel.value, fieldType, itemsContainer);
+      });
+      candidateWrap.appendChild(candidateSel);
+      candidateWrap.appendChild(candidateAddBtn);
+
+      var manualAddForm = _buildUserSelectManualAddForm(itemsContainer, group);
+
+      function _syncAddControlsForFieldType() {
+        var selOpt = fieldSel.options[fieldSel.selectedIndex];
+        var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
+        addControlsWrap.innerHTML = '';
+        if (fieldType === 'USER_SELECT') {
+          addControlsWrap.appendChild(manualAddForm);
+        } else {
+          addControlsWrap.appendChild(candidateWrap);
+          _rebuildFilterCandidateSelect(candidateSel, fieldSel.value, fieldType, itemsContainer);
+        }
+      }
+
+      // 既存項目を反映
+      (group && group.items || []).forEach(function (item) {
+        itemsContainer.appendChild(buildFilterItemRow(group, item, itemsContainer));
+      });
+
+      fieldSel.addEventListener('change', function () {
+        // フィールド変更時は既存項目をクリアする（対象フィールドが変わるため値の意味が失われる）
+        itemsContainer.innerHTML = '';
+        _syncAddControlsForFieldType();
+        _syncGroupLabelFromField();
+      });
+
+      _syncAddControlsForFieldType();
+    }
+
+    itemsSection.appendChild(itemsContainer);
+    itemsSection.appendChild(addControlsWrap);
+
+    row.appendChild(headerRow);
+    row.appendChild(itemsSection);
+
+    return row;
+  }
+
+  /**
+   * フィルタグループ設定行を DOM から収集して filterConfig を返す（§6.4 collectFilterConfig）
+   * @returns {{ groups: Array }}
+   */
+  function collectFilterConfig() {
+    if (!elFilterGroupRows) return { groups: [] };
+    var groupRows = elFilterGroupRows.querySelectorAll('.kc-filter-group-row');
+    var groups = [];
+    groupRows.forEach(function (row) {
+      var groupId = row.dataset.groupId;
+      var groupType = row.dataset.groupType;
+      // グループ名は選択フィールドのフィールド名を自動採用する（手動入力は廃止。2026-07 フィードバック）
+      // row.dataset.groupLabel は _syncGroupLabelFromField() / assignee 固定値で最新化されている
+      var label = row.dataset.groupLabel || groupId;
+
+      var itemRows = row.querySelectorAll('.kc-filter-item-row');
+      var items = Array.from(itemRows).map(function (itemRow) {
+        var itemLabelInput = itemRow.querySelector('.kc-filter-item-label-input');
+        var itemDefaultInput = itemRow.querySelector('.kc-filter-item-default-input');
+        var itemValue = itemRow.dataset.itemValue;
+        return {
+          id: itemRow.dataset.itemId,
+          label: (itemLabelInput && itemLabelInput.value.trim()) || itemValue || itemRow.dataset.itemId,
+          value: groupType === 'assignee' ? undefined : itemValue,
+          defaultChecked: itemDefaultInput ? itemDefaultInput.checked : true
+        };
+      }).filter(function (item) { return item.id; });
+
+      if (groupType === 'assignee') {
+        groups.push({ id: groupId, label: label, type: 'assignee', items: items });
+        return;
+      }
+
+      var fieldSel = row.querySelector('.kc-filter-target-field-select');
+      var fieldCode = fieldSel ? fieldSel.value : '';
+      if (!fieldCode) return; // フィールド未選択のグループは保存しない
+      var selOpt = fieldSel.options[fieldSel.selectedIndex];
+      var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
+      if (fieldCode === '$status') { fieldType = 'STATUS'; }
+      if (items.length === 0) return; // 項目未設定のグループは保存しない
+
+      groups.push({
+        id: groupId,
+        label: label,
+        type: 'fieldValue',
+        fieldCode: fieldCode,
+        fieldType: fieldType,
+        items: items
+      });
+    });
+    return { groups: groups };
+  }
+
+  /**
+   * 保存済み filterConfig をフォームに反映する（§6.4 applyFilterConfig）
+   * groups が空、または担当グループが存在しない場合は担当グループを補って表示する
+   * （v11 マイグレーション後は必ず担当グループが存在する想定だが、念のため防御する）
+   * @param {Object} filterConfig - { groups: Array }
+   */
+  function applyFilterConfig(filterConfig) {
+    if (!elFilterGroupRows) return;
+    elFilterGroupRows.innerHTML = '';
+
+    var groups = (filterConfig && Array.isArray(filterConfig.groups)) ? filterConfig.groups.slice() : [];
+    var hasAssignee = groups.some(function (g) { return g.type === 'assignee'; });
+    if (!hasAssignee) {
+      groups.unshift({
+        id: 'assignee',
+        label: '担当',
+        type: 'assignee',
+        items: [
+          { id: 'mine',   label: '自分の予定', defaultChecked: true },
+          { id: 'others', label: '他人の予定', defaultChecked: true }
+        ]
+      });
+    }
+
+    groups.forEach(function (group) {
+      elFilterGroupRows.appendChild(buildFilterGroupRow(group));
+    });
+  }
+
+  /* ====================================================================
    * 検索対象フィールド設定 UI（REQ_search-bar v3 §5.7）
    * ==================================================================== */
 
@@ -2167,7 +2721,7 @@
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
       currentConfig = {
-        version: 10,
+        version: 11,
         fieldMapping: {},
         permissionRules: [],
         fieldValueRules: [],
@@ -2178,6 +2732,7 @@
           bgColor:    '#bdbdbd',
           textColor:  '#000000'
         },
+        filterConfig: _buildDefaultFilterConfig(),
         views: {}
       };
       return;
@@ -2252,6 +2807,16 @@
       parsed.version = 10;
     }
 
+    // version 10 → 11 マイグレーション（filterConfig 新設。REQ_checkbox-filter §6.5, §7.3）
+    // filterConfig が存在しない旧設定は「担当グループ（自分/他人の2択）のみ」を自動生成する。
+    if (Number(parsed.version) < 11) {
+      console.log('[KC Config] version 10 → 11 へマイグレーション実行');
+      if (!parsed.filterConfig || !Array.isArray(parsed.filterConfig.groups)) {
+        parsed.filterConfig = _buildDefaultFilterConfig();
+      }
+      parsed.version = 11;
+    }
+
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
@@ -2266,7 +2831,7 @@
     }
 
     currentConfig = {
-      version:           10,
+      version:           11,
       fieldMapping:      fm,
       permissionRules:   rules,
       fieldValueRules:   Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
@@ -2277,9 +2842,32 @@
         bgColor:    '#bdbdbd',
         textColor:  '#000000'
       },
+      filterConfig:      (parsed.filterConfig && Array.isArray(parsed.filterConfig.groups))
+        ? parsed.filterConfig
+        : _buildDefaultFilterConfig(),
       views:             parsed.views || {}
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
+  }
+
+  /**
+   * 「担当」グループ（自分/他人の2択）のみを持つ既定の filterConfig を生成する（§6.5, §7.3, §8.1）
+   * @returns {{ groups: Array }}
+   */
+  function _buildDefaultFilterConfig() {
+    return {
+      groups: [
+        {
+          id: 'assignee',
+          label: '担当',
+          type: 'assignee',
+          items: [
+            { id: 'mine',   label: '自分の予定', defaultChecked: true },
+            { id: 'others', label: '他人の予定', defaultChecked: true }
+          ]
+        }
+      ]
+    };
   }
 
   /* ====================================================================
@@ -2786,6 +3374,9 @@
     // 検索対象フィールド設定を収集して currentConfig.searchTargets を更新
     currentConfig.searchTargets = collectSearchTargets();
 
+    // フィルタ設定を収集して currentConfig.filterConfig を更新（REQ_checkbox-filter §6.4, §7）
+    currentConfig.filterConfig = collectFilterConfig();
+
     // 現在の編集中ビューの個別設定を保存 (新規作成時は後で ID 確定後に保存)
     if (currentViewId) {
       currentConfig.views[currentViewId] = collectViewConfig();
@@ -2895,9 +3486,9 @@
         mailLoginUserDefault: mailLoginUserDefault
       });
 
-      // 最終的な保存オブジェクト (version 10 形式: permissionRules + fieldValueRules + searchTargets + defaultPermission + overlapMode/refTable を含む)
+      // 最終的な保存オブジェクト (version 11 形式: permissionRules + fieldValueRules + searchTargets + defaultPermission + overlapMode/refTable + filterConfig を含む)
       var finalConfig = {
-        version: 10,
+        version: 11,
         fieldMapping:       updatedFieldMapping,
         permissionRules:    currentConfig.permissionRules    || [],
         fieldValueRules:    currentConfig.fieldValueRules    || [],
@@ -2905,6 +3496,7 @@
         defaultPermission:  currentConfig.defaultPermission  || {
           enabled: false, permission: 'view', bgColor: '#bdbdbd', textColor: '#000000'
         },
+        filterConfig:       currentConfig.filterConfig || _buildDefaultFilterConfig(),
         views:              mergedViews
       };
 
@@ -3082,6 +3674,10 @@
     // loadFields + loadStatuses 完了後に呼ぶこと
     applyFieldValueRules(currentConfig.fieldValueRules || []);
 
+    // 3.605. フィルタ設定 (filterConfig) をフォームに反映（REQ_checkbox-filter §6.4）
+    // loadFields + loadStatuses 完了後に呼ぶこと（_getFilterTargetFieldOptions/statusOptions が確定している必要があるため）
+    applyFilterConfig(currentConfig.filterConfig || _buildDefaultFilterConfig());
+
     // 3.61. デフォルト権限設定エリアにカラーピッカーウィジェットを挿入 (REQ_default-permission)
     // applyDefaultPermission より先に挿入しておく必要がある
     var elDefaultBgCell   = document.querySelector('#kc-default-permission-fields .kc-default-permission-col-bgcolor');
@@ -3206,6 +3802,15 @@
       elSearchTargetAdd.addEventListener('click', function () {
         if (elSearchTargetRows) {
           elSearchTargetRows.appendChild(buildSearchTargetRow());
+        }
+      });
+    }
+
+    // フィルタ設定 − グループ追加ボタン（REQ_checkbox-filter §6.1。新規グループは常に fieldValue 型）
+    if (elFilterGroupAdd) {
+      elFilterGroupAdd.addEventListener('click', function () {
+        if (elFilterGroupRows) {
+          elFilterGroupRows.appendChild(buildFilterGroupRow(null));
         }
       });
     }

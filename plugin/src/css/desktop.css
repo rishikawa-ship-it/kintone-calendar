@@ -229,6 +229,54 @@
 .kc-option:hover  { background: #e9ecef; }
 .kc-option:focus  { outline: 2px solid #9ab; }
 
+/* ==========================================================================
+ * 4.1 チェックボックス式フィルタパネル（REQ_checkbox-filter）
+ * .kc-dropdown / .kc-dropdown-btn は上記 4. の共通スタイルを流用する。
+ * ========================================================================== */
+.kc-filter-panel-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 220px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: #f5f6f7;
+  border: 1px solid #d6dadd;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  padding: 10px;
+  display: none;
+  z-index: 100;
+}
+.kc-filter-panel.open .kc-filter-panel-menu { display: block; }
+
+.kc-filter-group { margin-bottom: 12px; }
+.kc-filter-group:last-child { margin-bottom: 0; }
+.kc-filter-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 6px;
+  padding: 0 4px;
+}
+.kc-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: var(--kc-font-size-ui);
+  cursor: pointer;
+}
+.kc-filter-item:hover { background: #e9ecef; }
+
+/* 何らかの絞り込みが有効な場合のバッジ表示（§5.2、任意仕様） */
+.kc-filter-active {
+  border-color: #1976d2;
+  color: #1976d2;
+  font-weight: 600;
+}
+
 /* 旧 select 互換 */
 .kc-view {
   border: 1px solid #c1c5ca;

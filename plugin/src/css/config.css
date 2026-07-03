@@ -1307,19 +1307,25 @@ body {
 
 /* ドラッグ中の行: 半透明化 */
 .kc-permission-row.kc-dragging,
-.kc-fieldvalue-row.kc-dragging {
+.kc-fieldvalue-row.kc-dragging,
+.kc-filter-group-row.kc-dragging,
+.kc-filter-item-row.kc-dragging {
   opacity: 0.4;
 }
 
 /* ドロップ位置の挿入線: 上 */
 .kc-permission-row.kc-drag-over-top,
-.kc-fieldvalue-row.kc-drag-over-top {
+.kc-fieldvalue-row.kc-drag-over-top,
+.kc-filter-group-row.kc-drag-over-top,
+.kc-filter-item-row.kc-drag-over-top {
   border-top: 2px solid #0078d4;
 }
 
 /* ドロップ位置の挿入線: 下 */
 .kc-permission-row.kc-drag-over-bottom,
-.kc-fieldvalue-row.kc-drag-over-bottom {
+.kc-fieldvalue-row.kc-drag-over-bottom,
+.kc-filter-group-row.kc-drag-over-bottom,
+.kc-filter-item-row.kc-drag-over-bottom {
   border-bottom: 2px solid #0078d4;
 }
 
@@ -1393,4 +1399,163 @@ body {
 
 .kc-default-perm-select {
   width: 100%;
+}
+
+/* ====================================================================
+ * フィルタ設定 UI (REQ_checkbox-filter §6)
+ * ==================================================================== */
+
+.kc-filter-config-section {
+  margin-top: 16px;
+  padding: 14px 16px 16px;
+  border-top: 1px solid #d0d5df;
+  background: #f9f9fb;
+  border-radius: 0 0 6px 6px;
+}
+
+.kc-filter-group-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+/* 1 グループ全体（ヘッダー行 + 項目セクション） */
+.kc-filter-group-row {
+  border: 1px solid #d8dce4;
+  border-radius: 6px;
+  background: #fff;
+  overflow: visible;
+  transition: background 0.1s;
+}
+
+.kc-filter-group-row-header {
+  display: grid;
+  grid-template-columns: 24px 140px 1fr 1fr 70px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  background: #e8ecf1;
+  border-bottom: 1px solid #d0d5df;
+  border-radius: 6px 6px 0 0;
+}
+
+.kc-filter-group-field-wrap {
+  min-width: 0;
+}
+.kc-filter-group-field-wrap select {
+  width: 100%;
+}
+
+/* グループ名は選択フィールドのフィールド名を自動表示する（手動入力欄は廃止。2026-07 フィードバック） */
+.kc-filter-group-label-display {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.kc-filter-group-items-section {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kc-filter-item-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 1 チェック項目行（ハンドル / 値表示 / ラベル入力 / 初期ON / 削除） */
+/* 初期ON・削除列は minmax() で最小幅を保証し、値/ラベル列の内容量に押し潰されないようにする
+   （2026-07 実機フィードバック: 初期ONトグルが最終行で見切れる不具合の再発防止） */
+.kc-filter-item-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) minmax(0, 1fr) minmax(80px, 90px) minmax(36px, 40px);
+  gap: 8px;
+  align-items: center;
+  padding: 4px 4px;
+  border-bottom: 1px solid #f0f1f4;
+}
+.kc-filter-item-row:last-child:not(.kc-drag-over-bottom) {
+  border-bottom: none;
+}
+
+.kc-filter-item-col-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kc-filter-item-cell {
+  min-width: 0;
+}
+
+.kc-filter-item-fixed-value {
+  font-size: 13px;
+  color: #333;
+  word-break: break-all;
+}
+
+.kc-filter-item-label-input {
+  width: 100%;
+}
+
+.kc-filter-item-col-default {
+  font-size: 12px;
+}
+
+/* 「初期ON」トグルのラベル。.kc-config-checkbox-label（margin-bottom: 12px を持つ単独表示用の
+   共通クラス）を grid セル内にそのまま流用すると行の実効高さがずれてチェックボックスの表示位置が
+   崩れる（新規行追加時に表示されない・1行遅れて正しく見える不具合の原因）ため、margin なしの
+   専用クラスとして分離する。 */
+.kc-filter-item-default-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.kc-filter-item-default-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.kc-filter-item-col-action {
+  text-align: center;
+}
+
+/* 項目追加コントロール（候補選択 or USER_SELECT 手動入力） */
+.kc-filter-item-add-controls {
+  margin-top: 4px;
+}
+
+.kc-filter-candidate-wrap,
+.kc-filter-item-manual-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.kc-filter-candidate-select {
+  min-width: 200px;
+}
+
+.kc-filter-item-manual-code,
+.kc-filter-item-manual-label {
+  min-width: 160px;
+}
+
+.kc-filter-group-add-row {
+  margin-top: 4px;
 }

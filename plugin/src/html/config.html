@@ -433,6 +433,29 @@
               </div>
             </div>
 
+            <!-- ====================================================
+              フィルタ設定 (REQ_checkbox-filter §6)
+              カレンダーヘッダーのチェックボックス式フィルタパネルに表示するグループ・チェック項目を設定する
+            ==================================================== -->
+            <div class="kc-filter-config-section" id="kc-filter-config-section">
+              <h3 class="kc-config-subsection-title">フィルタ設定</h3>
+              <p class="kc-config-hint">
+                カレンダーのフィルタボタンに表示するグループと選択肢を設定します。
+                グループ内の項目は OR、グループ間は AND で絞り込まれます。
+                グループ内の項目を全て未チェックにすると、そのグループでは絞り込みません。
+                「担当」グループは既定で常設され削除できません。
+              </p>
+
+              <div id="kc-filter-group-rows" class="kc-filter-group-rows">
+                <!-- フィルタグループ行を JavaScript で動的追加 -->
+              </div>
+
+              <div class="kc-filter-group-add-row">
+                <button type="button" id="kc-filter-group-add" class="kc-config-btn kc-config-btn-secondary">
+                  + グループを追加
+                </button>
+              </div>
+            </div>
 
           </div>
         </section>
