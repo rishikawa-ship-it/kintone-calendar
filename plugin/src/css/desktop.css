@@ -152,6 +152,19 @@
   border-color: #9aa0a6;
 }
 
+/* 全表示トグルボタン（REQ_show-all-toggle）: ON 状態は .kc-filter-active と統一感のある配色にする */
+.kc-show-all-btn[aria-pressed="true"],
+.kc-show-all-btn.kc-show-all-active {
+  border-color: #1976d2;
+  color: #1976d2;
+  font-weight: 600;
+  background: #e8f0fe;
+}
+.kc-show-all-btn[aria-pressed="true"]:hover,
+.kc-show-all-btn.kc-show-all-active:hover {
+  background: #d9e8fd;
+}
+
 .kc-today { font-weight: 600; }
 
 /* 円形ナビボタン */
@@ -1113,6 +1126,39 @@ body.kc-dnd-active * {
 /* grid-template-rows は JS のインラインスタイルで repeat(N,...) が設定済みのため CSS での指定は不要 */
 .kc-root.kc-expanded .kc-month-grid {
   height: calc(100vh - var(--kc-fullscreen-header-h, 0px));
+}
+
+/* ==========================================================================
+ * 15b. 全表示モード（REQ_show-all-toggle）
+ * KC.State.showAll が true のとき .kc-root に .kc-show-all クラスが付与される。
+ * OFF（既定）時はこのブロック自体が一切適用されないため、通常モードの見た目・DOM構造は
+ * 本改修の前後で完全に同一（NFR-1）。
+ *
+ * 行高固定（15章）を迂回し、週行（.kc-month-week）がコンテンツ量に応じて可変高になる。
+ * grid-template-rows のインライン上書き（minmax(min-content,auto)）は
+ * renderMonthGrid() 側で分岐する（JS 側の詳細度がインラインスタイルに勝つため）。
+ * ========================================================================== */
+.kc-show-all .kc-month-grid {
+  /* 6行固定の下限（calc(6 * --kc-month-cell-min-h)）を外す。
+     renderMonthGrid() が gridEl.style.minHeight = '' を設定するため、こちらは保険。 */
+  min-height: 0;
+}
+.kc-show-all .kc-month-week {
+  /* 行自体の auto-minimum を許可し、コンテンツ高に応じて伸びるようにする */
+  min-height: auto;
+}
+.kc-show-all .kc-month-cell {
+  /* 週行高（100%）への追従をやめ、コンテンツ分だけ伸びる。
+     予定が少ない日でも --kc-month-cell-min-h は維持する。 */
+  height: auto;
+  min-height: var(--kc-month-cell-min-h, 90px);
+  overflow: visible;
+}
+/* カレンダー本体（.kc-month-root）をスクロール領域にする。
+   .kc-root 自体（height: calc(100vh - 230px)）はスクロールさせず、ヘッダーは画面上部に固定のまま。 */
+.kc-show-all .kc-month-root {
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* ==========================================================================

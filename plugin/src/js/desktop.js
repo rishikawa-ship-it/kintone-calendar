@@ -27,7 +27,7 @@
    * 実機でどのビルドが動いているか確認するためのスタンプ。
    * console.warn は KC_DEBUG によらず常に出力される（上記コメント参照）。
    * ==================================================================== */
-  var KC_BUILD = '2026-06-22-checkbox-filter-b';
+  var KC_BUILD = '2026-06-22-show-all';
   try { if (typeof window !== 'undefined') window.KC_BUILD = KC_BUILD; } catch (e) {}
   // eslint-disable-next-line no-console
   console.warn('[KC] build ' + KC_BUILD);
@@ -752,6 +752,7 @@
     events: [],
     editing: null,
     alldayExpanded: false,   /* レーン展開トグル状態。初期値 false（折りたたみ）*/
+    showAll: false,           /* 全表示トグル状態。ON時は+more/moreトグルを出さず全予定を描画する（REQ_show-all-toggle）*/
     filterChecks: {},        /* チェックボックス式フィルタ状態: { [groupId]: string[] }（localStorage/URL 永続化。REQ_checkbox-filter）*/
     isAppAdmin: false,        /* アプリ管理権限の有無（_checkAppAdminPermission で更新）*/
     els: {},
@@ -4354,11 +4355,24 @@
       // 展開時に隠れるイベント数（トグルラベル "+N" 用）
       var hiddenCount = weekEvents.filter(function (ev) { return ev.lane >= 3; }).length;
 
-      // トグル UI を更新（maxLane < 3 のときは非表示）
-      if (toggleEl) KC.RenderShared.updateAlldayToggle(toggleEl, maxLane, S.alldayExpanded, hiddenCount);
+      // REQ_show-all-toggle §6.1: 全表示 ON のときは S.alldayExpanded を書き換えず、
+      // 描画時にのみ「展開しているものとして」扱う（effectiveExpanded）。
+      // OFF に戻したときユーザーが手動操作していた折りたたみ状態がそのまま復元されるようにするため。
+      var effectiveExpanded = KC.State.showAll ? true : S.alldayExpanded;
+
+      // トグル UI を更新（maxLane < 3 のときは非表示）。全表示 ON 中はトグル自体を非表示にする。
+      if (toggleEl) {
+        if (KC.State.showAll) {
+          toggleEl.style.display = 'none';
+        } else {
+          KC.RenderShared.updateAlldayToggle(toggleEl, maxLane, S.alldayExpanded, hiddenCount);
+        }
+      }
 
       // トグルクリックハンドラ（毎回新規バインド: renderAlldayRow で再生成されるため）
-      if (toggleEl && maxLane >= 3) {
+      // 全表示 ON 中はトグル DOM 自体が非表示のため onclick 配線しても実害はないが、
+      // 意図を明確にするため OFF 時のみ配線する。
+      if (toggleEl && maxLane >= 3 && !KC.State.showAll) {
         toggleEl.onclick = function () {
           S.alldayExpanded = !S.alldayExpanded;
           KC.Render.renderGrid();
@@ -4381,7 +4395,7 @@
         var BAR_BTM  = 4;    /* 下部パディング */
         var TOGGLE_H = 24;   /* --kc-allday-toggle-h */
 
-        var displayLanes = S.alldayExpanded ? (maxLane + 1) : collapsedLaneCount;
+        var displayLanes = effectiveExpanded ? (maxLane + 1) : collapsedLaneCount;
         // 終日イベントが 0 件でも最低 1 レーン分の高さを確保
         if (displayLanes < 1) displayLanes = 1;
 
@@ -4394,7 +4408,7 @@
 
         // .kc-ad-events の overflow を展開/折りたたみで切り替える
         if (eventsLayer) {
-          eventsLayer.style.overflow = S.alldayExpanded ? 'visible' : 'hidden';
+          eventsLayer.style.overflow = effectiveExpanded ? 'visible' : 'hidden';
         }
       }
 
@@ -4870,10 +4884,19 @@
       // CSS の repeat(6,...) を週数に合わせてインラインスタイルで上書きする。
       // 通常モード・全画面モード（.kc-expanded）ともにインラインスタイルが CSS を上書きするため
       // grid-template-rows を一括設定する。
-      var rowsDef = 'repeat(' + weekCount + ', minmax(0, 1fr))';
+      //
+      // REQ_show-all-toggle §5.1: 全表示 ON 時は各行をコンテンツ高に応じて可変にするため
+      // minmax(0, 1fr)（均等固定高）ではなく minmax(min-content, auto)（内容分だけ伸びる）を使う。
+      // OFF 時（既定）は従来どおり repeat(N, minmax(0, 1fr)) のまま（現状維持・回帰なし）。
+      var rowsDef = KC.State.showAll
+        ? 'repeat(' + weekCount + ', minmax(min-content, auto))'
+        : 'repeat(' + weekCount + ', minmax(0, 1fr))';
       gridEl.style.gridTemplateRows = rowsDef;
-      // min-height も週数に追従させて各セルが 90px を下回らないよう保証する
-      gridEl.style.minHeight = 'calc(' + weekCount + ' * var(--kc-month-cell-min-h, 90px))';
+      // min-height も週数に追従させて各セルが 90px を下回らないよう保証する。
+      // 全表示 ON 時は「6行固定の下限」を外し、コンテンツ量なりの高さにする（空文字でインライン指定を解除）。
+      gridEl.style.minHeight = KC.State.showAll
+        ? ''
+        : 'calc(' + weekCount + ' * var(--kc-month-cell-min-h, 90px))';
     }
 
     /**
@@ -6150,7 +6173,14 @@
       // セル実高から物理収容スロット数を動的計算（画面サイズ・全画面モードに追従）
       // baseCapacity = moreH を差し引かない純粋な物理収容スロット数。
       // overflow 有無はセルごとに判定し、overflow 時のみ more 用 1 スロットを確保する。
-      var baseCapacity = _calcMaxItems();
+      //
+      // REQ_show-all-toggle §5.4: 全表示 ON 時は baseCapacity を Infinity とみなすことで、
+      // 以下の既存あふれ判定ロジックを一切変更せずに自然にバイパスする（hiddenCount が常に 0 になる）。
+      //   - effectiveCapByCol の total > baseCapacity 判定が常に false
+      //   - placeMonthAlldayEvents / placeMonthTimedSpanEvents の lane >= cellCap 判定が常に false
+      //   - placeMonthTimedEvents の remaining が常に十分大きい
+      //   - applyOverflow は hiddenCount === 0 のとき何もしないため +N more が自動的に出なくなる
+      var baseCapacity = KC.State.showAll ? Infinity : _calcMaxItems();
 
       var range = monthRange(S.current);
 
@@ -6308,6 +6338,37 @@
             applyOverflow(cellEl, hiddenCount, hiddenAllday.concat(hiddenSpan).concat(hiddenTimed));
           }
         });
+
+        // REQ_show-all-toggle §5.2: 全表示 ON 時、.kc-month-ad-events は position:absolute のまま
+        // 高さ未指定（top のみ個別指定）なので、セルが可変高になっても週行がそのバー分だけ
+        // 高さを確保できるとは限らない。週内で最も多くレーンを使った列のレーン数から
+        // 必要高を算出して min-height に設定する（レイヤ構造・z-index は変更しない）。
+        if (KC.State.showAll) {
+          var adEventsEl = weekEl.querySelector('.kc-month-ad-events');
+          if (adEventsEl) {
+            var maxLaneCountInWeek = 0;
+            for (var laneColIdx = 0; laneColIdx < 7; laneColIdx++) {
+              var laneCount = Math.max(
+                alldayResult.colLaneCounts[laneColIdx] || 0,
+                spanResult.colLaneCounts[laneColIdx] || 0
+              );
+              if (laneCount > maxLaneCountInWeek) maxLaneCountInWeek = laneCount;
+            }
+            // BAR_H/BAR_GAP は本関数スコープ上部の定数（desktop.js:4992-4993 相当）と同値。
+            // usedSlots 本のバーが占有する高さ = usedSlots*BAR_H + (usedSlots-1)*BAR_GAP
+            // （seg-layer の spacer 算出式 §5.3 と同一式）。
+            var adEventsH = maxLaneCountInWeek > 0
+              ? (maxLaneCountInWeek * BAR_H + (maxLaneCountInWeek - 1) * BAR_GAP)
+              : 0;
+            adEventsEl.style.minHeight = adEventsH + 'px';
+          }
+        } else {
+          // 全表示 OFF 時は前回 ON 時の残留インラインスタイルをクリアする（AC-13: 完全復帰）
+          var adEventsElOff = weekEl.querySelector('.kc-month-ad-events');
+          if (adEventsElOff && adEventsElOff.style.minHeight) {
+            adEventsElOff.style.minHeight = '';
+          }
+        }
       });
     }
 
@@ -6554,9 +6615,18 @@
       var collapsedLaneCount = KC.RenderShared.calcCollapsedLanes(maxLane);
       var hiddenCount = dayEvents.filter(function (ev) { return ev.lane >= 3; }).length;
 
-      if (toggleEl) KC.RenderShared.updateAlldayToggle(toggleEl, maxLane, S.alldayExpanded, hiddenCount);
+      // REQ_show-all-toggle §6.1: 週ビューと同一パターン（effectiveExpanded を算出値として扱う）
+      var effectiveExpanded = KC.State.showAll ? true : S.alldayExpanded;
 
-      if (toggleEl && maxLane >= 3) {
+      if (toggleEl) {
+        if (KC.State.showAll) {
+          toggleEl.style.display = 'none';
+        } else {
+          KC.RenderShared.updateAlldayToggle(toggleEl, maxLane, S.alldayExpanded, hiddenCount);
+        }
+      }
+
+      if (toggleEl && maxLane >= 3 && !KC.State.showAll) {
         toggleEl.onclick = function () {
           S.alldayExpanded = !S.alldayExpanded;
           KC.Render.renderGrid();
@@ -6576,7 +6646,7 @@
         var BAR_BTM  = 4;
         var TOGGLE_H = 24;
 
-        var displayLanes = S.alldayExpanded ? (maxLane + 1) : collapsedLaneCount;
+        var displayLanes = effectiveExpanded ? (maxLane + 1) : collapsedLaneCount;
         if (displayLanes < 1) displayLanes = 1;
 
         var totalH = BAR_TOP + (BAR_H + BAR_GAP) * displayLanes - BAR_GAP + BAR_BTM + TOGGLE_H;
@@ -6586,7 +6656,7 @@
         if (gutter) gutter.style.height = totalH + 'px';
 
         if (eventsLayer) {
-          eventsLayer.style.overflow = S.alldayExpanded ? 'visible' : 'hidden';
+          eventsLayer.style.overflow = effectiveExpanded ? 'visible' : 'hidden';
         }
       }
 
@@ -9179,6 +9249,21 @@
       }
       // 上記いずれの条件にも該当しない場合は既存の filterChecks（localStorage 由来 or defaultChecked）を維持（FR-12 / AC-4）
 
+      // --- 2b. 全表示トグルの復元（URL 優先、なければ localStorage 既存値を維持。REQ_show-all-toggle §7.3） ---
+      // KC.ShowAllToggle.loadState()（init 冒頭で localStorage から復元済み）に対し、
+      // URL に showall パラメータが存在する場合はそちらを優先して上書きする。
+      var urlShowAll = params.showall;
+      if (urlShowAll !== undefined && urlShowAll !== null) {
+        KC.State.showAll = (urlShowAll === '1');
+      }
+      // ボタン外観・.kc-root クラスを最新の KC.State.showAll に同期する（DOM は CheckFilter.init 後に構築済み）
+      KC.ShowAllToggle._applyState();
+      // 初期値（localStorage 由来。既定 false）から変化していれば、view/date/filter の変更有無に関わらず
+      // 再描画する（クライアント側処理のみのため API 再取得は発生しない。FR-10）。
+      if (KC.State.showAll) {
+        KC.Render.renderGrid();
+      }
+
       // --- 3. 検索クエリの復元（[Low] 二重 replaceState 対策） ---
       // setQuery() を経由すると URL を再書き込みするため、ここでは直接プロパティを設定する
       var urlQ = params.q;
@@ -9259,6 +9344,12 @@
         // fs: '0' の場合のみ書き戻す（デフォルト=全画面=なしが仕様のため '0' 以外は書かない）
         if (params.fs === '0') {
           restoredParams.fs = '0';
+        }
+
+        // showall: 現在の KC.State.showAll（URL/localStorage 復元済み）を基準に書き戻す。
+        // ON のときのみ書き込み、OFF（デフォルト）はパラメータ省略（REQ_show-all-toggle §7.1）。
+        if (KC.State.showAll) {
+          restoredParams.showall = '1';
         }
 
         // scroll: 有効値が URL に存在した場合のみ書き戻す
@@ -9699,6 +9790,115 @@
   };
 
   /* ====================================================================
+   * KC.ShowAllToggle — 全表示トグルボタン（REQ_show-all-toggle）
+   *
+   * +more/more トグルで切り詰める通常モードと共存する別モード。
+   * ON にすると月・週・日すべてのビューで隠れている予定を全件描画する。
+   * KC.State.showAll（boolean）を単一の状態源とし、URL（#kc:showall=1）と
+   * localStorage（kc-show-all）の両方に永続化する（KC.CheckFilter のパターンを踏襲）。
+   * ==================================================================== */
+  KC.ShowAllToggle = {
+    /** localStorage のキー */
+    STORAGE_KEY: 'kc-show-all',
+
+    /** localStorage から復元する（URL 復元より前に呼ぶ。KC.UrlState.restore が優先して上書きする）*/
+    loadState: function () {
+      try {
+        KC.State.showAll = (localStorage.getItem(this.STORAGE_KEY) === '1');
+      } catch (e) {
+        KC.State.showAll = false;
+      }
+    },
+
+    /** KC.State.showAll を localStorage に保存する（ON のときのみキーを持たせ、OFF ではキー自体を削除する）*/
+    _persist: function () {
+      try {
+        if (KC.State.showAll) {
+          localStorage.setItem(this.STORAGE_KEY, '1');
+        } else {
+          localStorage.removeItem(this.STORAGE_KEY);
+        }
+      } catch (e) {
+        console.warn('[KC.ShowAllToggle] localStorage 保存失敗:', e);
+      }
+    },
+
+    /** URL ハッシュへ showall パラメータを同期する（replaceState。ON のみ書き込み、OFF は除去）*/
+    _updateUrl: function () {
+      if (!KC.UrlState) return;
+      if (KC.State.showAll) {
+        KC.UrlState.update('showall', '1');
+      } else {
+        KC.UrlState.remove('showall');
+      }
+    },
+
+    /**
+     * KC.State.showAll の値をボタン外観・.kc-root クラスへ反映する
+     * （URL/localStorage からの復元時、およびクリックトグル時の両方から呼ばれる）
+     */
+    _applyState: function () {
+      var btn = document.getElementById('kc-show-all-btn');
+      if (btn) {
+        btn.setAttribute('aria-pressed', KC.State.showAll ? 'true' : 'false');
+        btn.classList.toggle('kc-show-all-active', !!KC.State.showAll);
+      }
+      var root = document.getElementById('kc-root');
+      if (root) {
+        root.classList.toggle('kc-show-all', !!KC.State.showAll);
+      }
+    },
+
+    /** ボタンクリック時のトグル処理: 状態反転 → 永続化 → 再描画（API 再取得なし、FR-10） */
+    _toggle: function () {
+      KC.State.showAll = !KC.State.showAll;
+      this._persist();
+      this._updateUrl();
+      this._applyState();
+      KC.Render.renderGrid();
+    },
+
+    /**
+     * ボタン DOM を生成して headRight に追加する
+     * @param {HTMLElement} headRight - .kc-head-right 要素
+     * @param {HTMLElement} [beforeEl] - この要素の直前に挿入する（省略時は先頭に挿入）
+     */
+    buildDOM: function (headRight, beforeEl) {
+      var self = this;
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'kc-btn kc-show-all-btn';
+      btn.id = 'kc-show-all-btn';
+      btn.setAttribute('aria-pressed', KC.State.showAll ? 'true' : 'false');
+      btn.textContent = '全表示';
+      if (KC.State.showAll) btn.classList.add('kc-show-all-active');
+
+      btn.addEventListener('click', function () {
+        self._toggle();
+      });
+
+      if (beforeEl && beforeEl.parentNode === headRight) {
+        headRight.insertBefore(btn, beforeEl);
+      } else {
+        headRight.insertBefore(btn, headRight.firstChild);
+      }
+    },
+
+    /**
+     * DOM 構築後に呼ぶ（KC.Boot.init から KC.CheckFilter.init() の直後に呼ぶこと）。
+     * #kc-filter（KC.CheckFilter のルート要素）の直前にボタンを挿入する。
+     */
+    init: function () {
+      var headRight = document.querySelector('.kc-head-right');
+      if (!headRight) return;
+      var kcFilterEl = document.getElementById('kc-filter');
+      this.buildDOM(headRight, kcFilterEl);
+      // 起動時点の KC.State.showAll（localStorage 由来。URL 復元は KC.UrlState.restore が後で上書きする）を反映
+      this._applyState();
+    }
+  };
+
+  /* ====================================================================
    * KC.ViewDropdown — ビュー切り替え
    * ==================================================================== */
   KC.ViewDropdown = {
@@ -10081,6 +10281,10 @@
       KC.CheckFilter._applyDefaults();
       KC.CheckFilter.loadChecks();
 
+      // 全表示トグルの初期化（REQ_show-all-toggle）: localStorage から復元する。
+      // URL（#kc:showall）優先の最終確定は KC.UrlState.restore() 側で行う（CheckFilter と同一パターン）。
+      KC.ShowAllToggle.loadState();
+
       // SearchFilter の検索対象フィールドをプラグイン設定から初期化する（Phase 2）
       // searchTargets が空の場合は何もマッチしない動作になる（v7 以降はタイトルが初期値として設定済み）
       KC.SearchFilter._searchTargets = KC.Config.SEARCH_TARGETS || [];
@@ -10256,6 +10460,10 @@
       // CheckFilter 初期化（チェックボックス式フィルタパネル UI を .kc-head-right に追加。REQ_checkbox-filter）
       KC.CheckFilter.init();
 
+      // 全表示トグル初期化（REQ_show-all-toggle）: #kc-filter（CheckFilter ルート要素）の直前に挿入する。
+      // #kc-filter は CheckFilter.init() 実行後でなければ DOM に存在しないため、この順序で呼ぶ必要がある。
+      KC.ShowAllToggle.init();
+
       // 全画面ボタンのイベント登録
       var fullscreenBtn = document.getElementById('kc-fullscreen-btn');
       var exitFullscreenBtn = document.getElementById('kc-exit-fullscreen-btn');
@@ -10397,6 +10605,15 @@
             });
           });
           KC.CheckFilter._updateBadge();
+          KC.Render.renderGrid();
+        }
+
+        // 全表示トグル（showall）の差分更新（replaceState で書き換わった場合。REQ_show-all-toggle §7.4 Q-4）
+        var newShowAll = (params.showall === '1');
+        if (newShowAll !== KC.State.showAll) {
+          KC.State.showAll = newShowAll;
+          KC.ShowAllToggle._persist();
+          KC.ShowAllToggle._applyState();
           KC.Render.renderGrid();
         }
       });
