@@ -1,10 +1,10 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (v11: チェックボックス式フィルタ設定 追加)
+ * KC Calendar プラグイン設定画面スクリプト (v12: モードB filterCond 連動 追加)
  *
- * 保存形式 (version 11):
+ * 保存形式 (version 12):
  *   {
- *     version: 11,
+ *     version: 12,
  *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ...,
  *                     overlapMode,                  // 'none' / 'fieldKey' / 'refTable'
  *                     overlapKeyFieldCode,          // モード A
@@ -13,6 +13,7 @@
  *                     overlapRefTableJoinFieldCode,       // モード B: 予約側紐付けフィールド (condition.field, 自動取得)
  *                     overlapRefTableRelatedJoinFieldCode,// モード B: 関連先側紐付けフィールド (condition.relatedField, 自動取得)
  *                     overlapRefTableRelatedAppId,        // モード B: 関連先アプリ ID（自動取得）
+ *                     overlapRefTableFilterCond,          // モード B: REFERENCE_TABLE の filterCond（自動取得、既定 ''）
  *                     overlapResourceFieldCode },         // モード B: 関連先のリソース識別フィールド
  *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, bgColor, textColor }, ... ],
  *     fieldValueRules: [ { fieldCode, fieldType, value, permission, bgColor, textColor }, ... ],
@@ -20,6 +21,10 @@
  *     filterConfig: { groups: [ { id, label, type: 'assignee'|'fieldValue', fieldCode, fieldType, items: [ { id, label, value, defaultChecked } ] } ] },
  *     views: { "<viewId>": { calendarTitle, defaultView } }
  *   }
+ * v12 変更点 (REQ_overlap-modeB-filtercond):
+ *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
+ *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
+ *   - 削除済等、filterCond に合致しない関連先レコードが交差判定に混入して誤ブロックする不具合を修正
  * v11 変更点 (REQ_checkbox-filter):
  *   - filterConfig を追加（チェックボックス式フィルタパネルのグループ・チェック項目定義）
  *   - v10→v11 マイグレーション: filterConfig 未設定時は「担当」グループ（自分/他人の2択）のみを自動生成
@@ -154,11 +159,11 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 11)
+   * setConfig で保存する全体設定オブジェクト (version 12)
    * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, filterConfig: Object, views: Object }}
    */
   var currentConfig = {
-    version: 11,
+    version: 12,
     fieldMapping: {},
     permissionRules: [],
     fieldValueRules: [],
@@ -264,6 +269,7 @@
   var _overlapRefJoinFieldCode        = '';  // 予約アプリ側 (condition.field)
   var _overlapRefRelatedJoinFieldCode = '';  // 関連先アプリ側 (condition.relatedField)
   var _overlapRefRelatedAppId         = '';
+  var _overlapRefFilterCond           = '';  // 関連先アプリ側の絞り込み条件 (referenceTable.filterCond, v12)
 
   /* --- 権限ユーザー設定 (v6 リネーム: 旧「編集権限設定」) --- */
   var elPermissionRows = document.getElementById('kc-permission-rows');
@@ -575,6 +581,19 @@
     var overlapRefTableFieldCode = elOverlapRefTableField ? elOverlapRefTableField.value : '';
     var overlapResourceFieldCode = elOverlapResourceField ? elOverlapResourceField.value : '';
 
+    // filterCond（v12）は選択中オプションの dataset から保存時に直接読む。
+    // selectValue() は change を発火しないため、_overlapRefFilterCond（change ハンドラでのみ更新）
+    // だけに頼ると「設定を開いて保存」しただけでは filterCond が空のまま保存されてしまう。
+    // loadFields が全 REFERENCE_TABLE オプションに opt.dataset.filterCond を付与済みなので、
+    // 選択中オプションから直接読むことで再選択なしでも最新値を確実に取得する。
+    var overlapRefTableFilterCond = _overlapRefFilterCond;
+    if (elOverlapRefTableField && elOverlapRefTableField.selectedIndex >= 0) {
+      var _selRefTableOpt = elOverlapRefTableField.options[elOverlapRefTableField.selectedIndex];
+      if (_selRefTableOpt && _selRefTableOpt.dataset.filterCond !== undefined) {
+        overlapRefTableFilterCond = _selRefTableOpt.dataset.filterCond || '';
+      }
+    }
+
     return {
       fieldTitle:                   elFieldTitle.value,
       fieldStart:                   elFieldStart.value,
@@ -592,6 +611,7 @@
       overlapRefTableJoinFieldCode:        _overlapRefJoinFieldCode,
       overlapRefTableRelatedJoinFieldCode: _overlapRefRelatedJoinFieldCode,
       overlapRefTableRelatedAppId:         _overlapRefRelatedAppId,
+      overlapRefTableFilterCond:           overlapRefTableFilterCond,
       overlapResourceFieldCode:            overlapResourceFieldCode
     };
   }
@@ -2402,6 +2422,7 @@
     _overlapRefJoinFieldCode        = fieldMapping.overlapRefTableJoinFieldCode        || '';
     _overlapRefRelatedJoinFieldCode = fieldMapping.overlapRefTableRelatedJoinFieldCode || '';
     _overlapRefRelatedAppId         = fieldMapping.overlapRefTableRelatedAppId         || '';
+    _overlapRefFilterCond           = fieldMapping.overlapRefTableFilterCond           || '';
     if (elOverlapRefTableField) {
       selectValue(elOverlapRefTableField, fieldMapping.overlapRefTableFieldCode || '');
       syncSelectEmptyClass(elOverlapRefTableField);
@@ -2721,7 +2742,7 @@
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
       currentConfig = {
-        version: 11,
+        version: 12,
         fieldMapping: {},
         permissionRules: [],
         fieldValueRules: [],
@@ -2817,6 +2838,18 @@
       parsed.version = 11;
     }
 
+    // version 11 → 12 マイグレーション（overlapRefTableFilterCond 追加。REQ_overlap-modeB-filtercond）
+    // モード B のステップ3クエリに関連先アプリの filterCond を AND 連結するための設定値。
+    // 未定義時は空文字で補完する（空文字 = 絞り込みなし、現行動作維持）。
+    if (Number(parsed.version) < 12) {
+      console.log('[KC Config] version 11 → 12 へマイグレーション実行');
+      if (!parsed.fieldMapping) { parsed.fieldMapping = {}; }
+      if (parsed.fieldMapping.overlapRefTableFilterCond === undefined || parsed.fieldMapping.overlapRefTableFilterCond === null) {
+        parsed.fieldMapping.overlapRefTableFilterCond = '';
+      }
+      parsed.version = 12;
+    }
+
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
@@ -2831,7 +2864,7 @@
     }
 
     currentConfig = {
-      version:           11,
+      version:           12,
       fieldMapping:      fm,
       permissionRules:   rules,
       fieldValueRules:   Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
@@ -2999,6 +3032,8 @@
             opt.dataset.joinFieldCode        = refTable.condition.field        || '';
             opt.dataset.relatedJoinFieldCode = refTable.condition.relatedField || '';
           }
+          // 関連先アプリ側の絞り込み条件（Step3 クエリへ AND 連結、v12）
+          opt.dataset.filterCond = (refTable && refTable.filterCond) || '';
           elOverlapRefTableField.appendChild(opt);
         });
         syncSelectEmptyClass(elOverlapRefTableField);
@@ -3486,9 +3521,9 @@
         mailLoginUserDefault: mailLoginUserDefault
       });
 
-      // 最終的な保存オブジェクト (version 11 形式: permissionRules + fieldValueRules + searchTargets + defaultPermission + overlapMode/refTable + filterConfig を含む)
+      // 最終的な保存オブジェクト (version 12 形式: permissionRules + fieldValueRules + searchTargets + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig を含む)
       var finalConfig = {
-        version: 11,
+        version: 12,
         fieldMapping:       updatedFieldMapping,
         permissionRules:    currentConfig.permissionRules    || [],
         fieldValueRules:    currentConfig.fieldValueRules    || [],
@@ -3836,6 +3871,7 @@
           _overlapRefJoinFieldCode        = '';
           _overlapRefRelatedJoinFieldCode = '';
           _overlapRefRelatedAppId         = '';
+          _overlapRefFilterCond           = '';
           if (elOverlapResourceField) {
             while (elOverlapResourceField.options.length > 0) { elOverlapResourceField.remove(0); }
             var emptyOpt = document.createElement('option');
@@ -3851,6 +3887,7 @@
         var joinCode        = selOpt.dataset.joinFieldCode        || '';  // 予約側 (condition.field)
         var relatedJoinCode = selOpt.dataset.relatedJoinFieldCode || '';  // 関連先側 (condition.relatedField)
         var relatedAppId    = selOpt.dataset.relatedAppId         || '';
+        var filterCond      = selOpt.dataset.filterCond           || '';  // 関連先アプリ側の絞り込み条件 (v12)
 
         if (!relatedAppId || !joinCode || !relatedJoinCode) {
           // data 属性が不足する場合は API で取得する（フォールバック）
@@ -3867,9 +3904,11 @@
                 joinCode        = refTable.condition.field        || '';
                 relatedJoinCode = refTable.condition.relatedField || '';
               }
+              filterCond = (refTable && refTable.filterCond) || '';
               _overlapRefJoinFieldCode        = joinCode;
               _overlapRefRelatedJoinFieldCode = relatedJoinCode;
               _overlapRefRelatedAppId         = relatedAppId;
+              _overlapRefFilterCond           = filterCond;
               _populateOverlapResourceField(relatedAppId, '');
             })
             .catch(function (err) {
@@ -3881,6 +3920,7 @@
         _overlapRefJoinFieldCode        = joinCode;
         _overlapRefRelatedJoinFieldCode = relatedJoinCode;
         _overlapRefRelatedAppId         = relatedAppId;
+        _overlapRefFilterCond           = filterCond;
         _populateOverlapResourceField(relatedAppId, '');
       });
     }

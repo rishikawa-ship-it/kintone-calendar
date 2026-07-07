@@ -337,6 +337,7 @@
       KC.Config.OVERLAP_REF_TABLE_JOIN_FIELD         = fm9.overlapRefTableJoinFieldCode       || '';
       KC.Config.OVERLAP_REF_TABLE_RELATED_JOIN_FIELD = fm9.overlapRefTableRelatedJoinFieldCode || '';
       KC.Config.OVERLAP_REF_TABLE_RELATED_APP        = fm9.overlapRefTableRelatedAppId         || '';
+      KC.Config.OVERLAP_REF_TABLE_FILTER_COND        = fm9.overlapRefTableFilterCond           || '';
       KC.Config.OVERLAP_RESOURCE_FIELD_CODE          = fm9.overlapResourceFieldCode            || '';
 
       _log('[KC.Config] loadFromPluginConfig 完了。FIELD:', KC.Config.FIELD,
@@ -431,6 +432,13 @@
    * @type {string}
    */
   KC.Config.OVERLAP_REF_TABLE_RELATED_APP = '';
+  /**
+   * モード B: 関連先アプリ側の絞り込み条件（REFERENCE_TABLE の referenceTable.filterCond）
+   * loadFromPluginConfig で上書きされる。空文字 = 絞り込みなし（後方互換デフォルト・現行動作維持）
+   * checkOverlapQueryModeB のステップ3クエリに AND 連結される。
+   * @type {string}
+   */
+  KC.Config.OVERLAP_REF_TABLE_FILTER_COND = '';
   /**
    * モード B: 関連先アプリ側のリソース識別フィールドコード
    * @type {string}
@@ -1230,6 +1238,8 @@
       var relatedJoinField = KC.Config.OVERLAP_REF_TABLE_RELATED_JOIN_FIELD;
       var relatedAppId     = KC.Config.OVERLAP_REF_TABLE_RELATED_APP;
       var resourceField    = KC.Config.OVERLAP_RESOURCE_FIELD_CODE;
+      // 関連先アプリ側の絞り込み条件（REFERENCE_TABLE の filterCond）。空文字 = 絞り込みなし（必須パラメータではない）
+      var refFilterCond    = KC.Config.OVERLAP_REF_TABLE_FILTER_COND;
 
       // 設定不備は安全側（ブロック）にフォールバックする
       if (!joinField || !relatedJoinField || !relatedAppId || !resourceField) {
@@ -1305,6 +1315,11 @@
         .join(',');
       // Step3 クエリは関連先アプリ側フィールド（relatedJoinField）を使う
       var step3Query = '(' + relatedJoinField + ' in (' + inList + '))';
+      // REQ_overlap-modeB-filtercond: 関連先アプリの filterCond を AND 連結し、
+      // 削除済等の絞り込み対象外レコードが交差判定に混入する誤ブロックを防ぐ（filterCond が空の場合は連結しない＝現行動作維持）
+      if (refFilterCond) {
+        step3Query += ' and (' + refFilterCond + ')';
+      }
 
       var step3Resp;
       var isPermissionError = false;
