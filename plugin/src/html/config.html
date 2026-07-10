@@ -28,10 +28,10 @@
       <form id="kc-config-form" novalidate>
 
         <!-- ====================================================
-          セクション 1: 共通設定 (フィールドマッピング)
+          セクション 1: 基本設定 (フィールドマッピング)
         ==================================================== -->
         <section class="kc-config-section">
-          <h2 class="kc-config-section-title">共通設定 (フィールドマッピング)</h2>
+          <h2 class="kc-config-section-title">基本設定（フィールドマッピング）</h2>
           <p class="kc-config-section-desc">
             アプリ全体で共通のフィールド設定です。すべてのカレンダービューに適用されます。
           </p>
@@ -137,9 +137,184 @@
             <p class="kc-config-hint">MULTI_LINE_TEXT 型のフィールドが表示されます。</p>
           </div>
 
-          <!-- ---- 重複チェック設定 (REQ_dnd-overlap-block v5) ---- -->
-          <h3 class="kc-config-subsection-title">重複チェック設定</h3>
-          <p class="kc-config-hint">
+        </section>
+
+        <!-- ====================================================
+          セクション 2: 表示・絞り込み
+          (検索対象フィールド設定 REQ_search-bar v3 + フィルタ設定 REQ_checkbox-filter §6)
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">表示・絞り込み</h2>
+          <p class="kc-config-section-desc">
+            カレンダーの検索バー・フィルタパネルに表示する項目を設定します。
+            このセクションはすべて任意設定です。
+          </p>
+
+          <h3 class="kc-config-subsection-title">検索対象フィールド設定</h3>
+
+          <div class="kc-search-target-section">
+
+            <div class="kc-search-target-table">
+              <div class="kc-search-target-header">
+                <div class="kc-search-target-header-col kc-search-target-col-field">フィールド</div>
+                <div class="kc-search-target-header-col kc-search-target-col-action"></div>
+              </div>
+              <div id="kc-search-target-rows" class="kc-search-target-rows">
+                <!-- 検索対象フィールド行を JavaScript で動的追加 -->
+              </div>
+            </div>
+
+            <div class="kc-search-target-add-row">
+              <button type="button" id="kc-search-target-add" class="kc-config-btn kc-config-btn-secondary">
+                + 行を追加
+              </button>
+            </div>
+          </div>
+
+          <!-- ====================================================
+            フィルタ設定 (REQ_checkbox-filter §6)
+            カレンダーヘッダーのチェックボックス式フィルタパネルに表示するグループ・チェック項目を設定する
+          ==================================================== -->
+          <div class="kc-filter-config-section" id="kc-filter-config-section">
+            <h3 class="kc-config-subsection-title">フィルタ設定</h3>
+            <p class="kc-config-hint">
+              カレンダーのフィルタボタンに表示するグループと選択肢を設定します。
+              グループ内の項目は OR、グループ間は AND で絞り込まれます。
+              グループ内の項目を全て未チェックにすると、そのグループでは絞り込みません。
+              「担当」グループは既定で常設され削除できません。
+            </p>
+
+            <div id="kc-filter-group-rows" class="kc-filter-group-rows">
+              <!-- フィルタグループ行を JavaScript で動的追加 -->
+            </div>
+
+            <div class="kc-filter-group-add-row">
+              <button type="button" id="kc-filter-group-add" class="kc-config-btn kc-config-btn-secondary">
+                + グループを追加
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================================================
+          セクション 3: 権限・色分け
+          (権限フィールド設定 / 権限ユーザー設定 / デフォルト権限設定 の3カード並列)
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">権限・色分け</h2>
+          <p class="kc-config-section-desc">
+            予定の表示色と編集権限を、フィールド値・担当ユーザーの条件で制御します。
+            上から順に評価され、最初に一致した条件が優先されます（全項目任意。0件の場合は従来動作を維持します）。
+          </p>
+
+          <!-- ====================================================
+            権限フィールド設定 (REQ_edit-permission-extension v6 §4.3)
+            フィールド値・ステータスベースの権限判定（ユーザー権限より優先）
+          ==================================================== -->
+          <div class="kc-fieldvalue-section">
+            <h3 class="kc-config-subsection-title">権限フィールド設定（優先度: 高）</h3>
+            <p class="kc-hint">フィールド値やステータスで権限を制御します（ユーザー権限より優先）。上の行ほど優先されます。</p>
+
+            <div class="kc-fieldvalue-table">
+              <div class="kc-fieldvalue-header">
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-handle"></div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-field">フィールド</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-value">値</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-perm">権限</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-bgcolor">背景</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-textcolor">文字</div>
+                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-action"></div>
+              </div>
+              <div id="kc-fieldvalue-rows" class="kc-fieldvalue-rows">
+                <!-- 権限フィールド設定行を JavaScript で動的追加 -->
+              </div>
+            </div>
+
+            <div class="kc-fieldvalue-add-row">
+              <button type="button" id="kc-fieldvalue-add" class="kc-config-btn kc-config-btn-secondary">
+                + 行を追加
+              </button>
+            </div>
+          </div>
+
+          <!-- ====================================================
+            権限ユーザー設定 (REQ_edit-permission-extension v6 §4.2)
+            ※ v5 まで「編集権限設定」だったセクションを v6 でリネーム
+          ==================================================== -->
+          <div class="kc-permission-section">
+            <h3 class="kc-config-subsection-title">権限ユーザー設定（優先度: 中）</h3>
+            <p class="kc-config-section-desc">
+              予定の表示色と編集権限を管理するユーザーをフィールド単位で設定します。
+              0 件の場合は全員が編集可能です（既存挙動との後方互換）。
+              上の行ほど色の優先順位が高くなります。権限は複数マッチ時に最高権限が適用されます。
+            </p>
+
+            <div class="kc-permission-table">
+              <div class="kc-permission-header">
+                <div class="kc-permission-header-col kc-permission-col-handle"></div>
+                <div class="kc-permission-header-col kc-permission-col-field">フィールド</div>
+                <div class="kc-permission-header-col kc-permission-col-perm">権限</div>
+                <div class="kc-permission-header-col kc-permission-col-bgcolor">背景</div>
+                <div class="kc-permission-header-col kc-permission-col-textcolor">文字</div>
+                <div class="kc-permission-header-col kc-permission-col-action"></div>
+              </div>
+              <div id="kc-permission-rows" class="kc-permission-rows">
+                <!-- 権限エントリ行を JavaScript で動的追加 -->
+              </div>
+            </div>
+
+            <div class="kc-permission-add-row">
+              <button type="button" id="kc-permission-add" class="kc-config-btn kc-config-btn-secondary">
+                + 行を追加
+              </button>
+            </div>
+          </div>
+
+          <!-- ====================================================
+            デフォルト権限設定 (REQ_default-permission)
+            権限フィールド設定・権限ユーザー設定の両方に一致しない場合の横断フォールバック。
+            旧来は権限ユーザー設定カードの内部ネストだったが、案A再編により独立カード化。
+          ==================================================== -->
+          <div class="kc-default-permission-section" id="kc-default-permission-section">
+            <h3 class="kc-config-subsection-title kc-default-permission-title">
+              デフォルト権限設定（両方の設定に一致しない場合）
+            </h3>
+            <p class="kc-config-hint">
+              「権限フィールド設定」「権限ユーザー設定」のどちらにも一致しないレコードに適用される、共通のフォールバック設定です。
+              チェックを外すと、従来の動作（設定あり非マッチ時は閲覧のみ／設定なし時は全員編集可）を維持します。
+            </p>
+            <label class="kc-config-checkbox-label">
+              <input type="checkbox" id="kc-default-permission-enabled" name="defaultPermissionEnabled" />
+              デフォルト設定を使用する
+            </label>
+            <div class="kc-default-permission-fields" id="kc-default-permission-fields">
+              <div class="kc-default-permission-row">
+                <div class="kc-default-permission-cell kc-default-permission-col-perm">
+                  <label class="kc-config-label" for="kc-default-permission-perm">権限</label>
+                  <select id="kc-default-permission-perm" class="kc-config-select kc-default-perm-select">
+                    <option value="edit">編集者</option>
+                    <option value="view" selected>閲覧者</option>
+                  </select>
+                </div>
+                <div class="kc-default-permission-cell kc-default-permission-col-bgcolor">
+                  <label class="kc-config-label">背景色</label>
+                  <!-- buildDefaultPermissionColorWidgets() で JS から挿入 -->
+                </div>
+                <div class="kc-default-permission-cell kc-default-permission-col-textcolor">
+                  <label class="kc-config-label">文字色</label>
+                  <!-- buildDefaultPermissionColorWidgets() で JS から挿入 -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================================================
+          セクション 4: 重複チェック設定 (REQ_dnd-overlap-block v5)
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">重複チェック設定</h2>
+          <p class="kc-config-section-desc">
             DnD（移動・リサイズ）確定時に、他レコードと期間が重複する場合に保存をブロックします。
           </p>
 
@@ -210,41 +385,15 @@
         </section>
 
         <!-- ====================================================
-          セクション 1.5: 検索対象フィールド設定 (REQ_search-bar v3)
-        ==================================================== -->
-        <section class="kc-config-section">
-          <h2 class="kc-config-section-title">検索対象フィールド設定</h2>
-          <p class="kc-config-section-desc">
-            検索バーで検索したいフィールドを指定します。
-          </p>
-
-          <div class="kc-search-target-section">
-
-            <div class="kc-search-target-table">
-              <div class="kc-search-target-header">
-                <div class="kc-search-target-header-col kc-search-target-col-field">フィールド</div>
-                <div class="kc-search-target-header-col kc-search-target-col-action"></div>
-              </div>
-              <div id="kc-search-target-rows" class="kc-search-target-rows">
-                <!-- 検索対象フィールド行を JavaScript で動的追加 -->
-              </div>
-            </div>
-
-            <div class="kc-search-target-add-row">
-              <button type="button" id="kc-search-target-add" class="kc-config-btn kc-config-btn-secondary">
-                + 行を追加
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <!-- ====================================================
-          セクション 2: ビュー個別設定 (統合版: Phase 7 + Phase 9)
+          セクション 5: ビュー個別設定
+          (カレンダータイトル・初期ビューのみに純化。権限/フィルタ系は
+           アプリ全体設定のためセクション2/3へ移動済み)
         ==================================================== -->
         <section class="kc-config-section" id="kc-per-view-section">
           <h2 class="kc-config-section-title">ビュー個別設定</h2>
           <p class="kc-config-section-desc">
-            カレンダービューの作成・更新と、ビューごとの表示設定を行います。
+            カレンダービューの作成・更新と、ビューごとの表示名・初期表示を設定します。
+            この設定はビューを切り替えるたびに個別に保存されます。
           </p>
 
           <!-- サブセクション①: 制御 (対象ビューの選択) -->
@@ -276,7 +425,7 @@
 
           <!-- サブセクション②: 編集 (選択中ビューの設定) -->
           <div class="kc-view-edit-panel">
-            <h3 class="kc-config-subsection-title">選択中ビューの設定</h3>
+            <h3 class="kc-config-subsection-title">選択中ビューの設定（カレンダータイトル・初期ビュー）</h3>
 
             <!-- ビュー個別設定フォーム -->
             <div id="kc-per-view-fields" class="kc-per-view-fields">
@@ -335,128 +484,6 @@
                 </div>
               </div>
             </div>
-
-            <!-- ====================================================
-              権限フィールド設定 (REQ_edit-permission-extension v6 §4.3)
-              フィールド値・ステータスベースの権限判定（ユーザー権限より優先）
-            ==================================================== -->
-            <div class="kc-fieldvalue-section">
-              <h3 class="kc-config-subsection-title">権限フィールド設定</h3>
-              <p class="kc-hint">フィールド値やステータスで権限を制御します（ユーザー権限より優先）。上の行ほど優先されます。</p>
-
-              <div class="kc-fieldvalue-table">
-                <div class="kc-fieldvalue-header">
-                  <div class="kc-fieldvalue-header-col kc-fieldvalue-col-handle"></div>
-                  <div class="kc-fieldvalue-header-col kc-fieldvalue-col-field">フィールド</div>
-                  <div class="kc-fieldvalue-header-col kc-fieldvalue-col-value">値</div>
-                  <div class="kc-fieldvalue-header-col kc-fieldvalue-col-perm">権限</div>
-                  <div class="kc-fieldvalue-header-col kc-fieldvalue-col-bgcolor">背景</div>
-                  <div class="kc-fieldvalue-header-col kc-fieldvalue-col-textcolor">文字</div>
-                  <div class="kc-fieldvalue-header-col kc-fieldvalue-col-action"></div>
-                </div>
-                <div id="kc-fieldvalue-rows" class="kc-fieldvalue-rows">
-                  <!-- 権限フィールド設定行を JavaScript で動的追加 -->
-                </div>
-              </div>
-
-              <div class="kc-fieldvalue-add-row">
-                <button type="button" id="kc-fieldvalue-add" class="kc-config-btn kc-config-btn-secondary">
-                  + 行を追加
-                </button>
-              </div>
-            </div>
-
-            <!-- ====================================================
-              権限ユーザー設定 (REQ_edit-permission-extension v6 §4.2)
-              ※ v5 まで「編集権限設定」だったセクションを v6 でリネーム
-            ==================================================== -->
-            <div class="kc-permission-section">
-              <h3 class="kc-config-subsection-title">権限ユーザー設定</h3>
-              <p class="kc-config-section-desc">
-                予定の表示色と編集権限を管理するユーザーをフィールド単位で設定します。
-                0 件の場合は全員が編集可能です（既存挙動との後方互換）。
-                上の行ほど色の優先順位が高くなります。権限は複数マッチ時に最高権限が適用されます。
-              </p>
-
-              <div class="kc-permission-table">
-                <div class="kc-permission-header">
-                  <div class="kc-permission-header-col kc-permission-col-handle"></div>
-                  <div class="kc-permission-header-col kc-permission-col-field">フィールド</div>
-                  <div class="kc-permission-header-col kc-permission-col-perm">権限</div>
-                  <div class="kc-permission-header-col kc-permission-col-bgcolor">背景</div>
-                  <div class="kc-permission-header-col kc-permission-col-textcolor">文字</div>
-                  <div class="kc-permission-header-col kc-permission-col-action"></div>
-                </div>
-                <div id="kc-permission-rows" class="kc-permission-rows">
-                  <!-- 権限エントリ行を JavaScript で動的追加 -->
-                </div>
-              </div>
-
-              <div class="kc-permission-add-row">
-                <button type="button" id="kc-permission-add" class="kc-config-btn kc-config-btn-secondary">
-                  + 行を追加
-                </button>
-              </div>
-
-              <!-- デフォルト権限設定 (REQ_default-permission) -->
-              <div class="kc-default-permission-section" id="kc-default-permission-section">
-                <h4 class="kc-config-subsection-title kc-default-permission-title">
-                  デフォルト設定（上のいずれの条件にも一致しない場合）
-                </h4>
-                <p class="kc-config-hint">
-                  権限フィールド設定・権限ユーザー設定のどの行にも一致しないレコードに適用します。
-                  チェックを外すと従来の動作（設定あり非マッチ: 閲覧のみ、設定なし: 全員編集可）を維持します。
-                </p>
-                <label class="kc-config-checkbox-label">
-                  <input type="checkbox" id="kc-default-permission-enabled" name="defaultPermissionEnabled" />
-                  デフォルト設定を使用する
-                </label>
-                <div class="kc-default-permission-fields" id="kc-default-permission-fields">
-                  <div class="kc-default-permission-row">
-                    <div class="kc-default-permission-cell kc-default-permission-col-perm">
-                      <label class="kc-config-label" for="kc-default-permission-perm">権限</label>
-                      <select id="kc-default-permission-perm" class="kc-config-select kc-default-perm-select">
-                        <option value="edit">編集者</option>
-                        <option value="view" selected>閲覧者</option>
-                      </select>
-                    </div>
-                    <div class="kc-default-permission-cell kc-default-permission-col-bgcolor">
-                      <label class="kc-config-label">背景色</label>
-                      <!-- buildDefaultPermissionColorWidgets() で JS から挿入 -->
-                    </div>
-                    <div class="kc-default-permission-cell kc-default-permission-col-textcolor">
-                      <label class="kc-config-label">文字色</label>
-                      <!-- buildDefaultPermissionColorWidgets() で JS から挿入 -->
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- ====================================================
-              フィルタ設定 (REQ_checkbox-filter §6)
-              カレンダーヘッダーのチェックボックス式フィルタパネルに表示するグループ・チェック項目を設定する
-            ==================================================== -->
-            <div class="kc-filter-config-section" id="kc-filter-config-section">
-              <h3 class="kc-config-subsection-title">フィルタ設定</h3>
-              <p class="kc-config-hint">
-                カレンダーのフィルタボタンに表示するグループと選択肢を設定します。
-                グループ内の項目は OR、グループ間は AND で絞り込まれます。
-                グループ内の項目を全て未チェックにすると、そのグループでは絞り込みません。
-                「担当」グループは既定で常設され削除できません。
-              </p>
-
-              <div id="kc-filter-group-rows" class="kc-filter-group-rows">
-                <!-- フィルタグループ行を JavaScript で動的追加 -->
-              </div>
-
-              <div class="kc-filter-group-add-row">
-                <button type="button" id="kc-filter-group-add" class="kc-config-btn kc-config-btn-secondary">
-                  + グループを追加
-                </button>
-              </div>
-            </div>
-
           </div>
         </section>
 

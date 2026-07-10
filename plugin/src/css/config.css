@@ -1331,14 +1331,21 @@ body {
 
 /* ====================================================================
  * デフォルト権限設定エリア (REQ_default-permission)
+ * 案A再編 (REQ_config-reorg) により権限ユーザー設定カードの外に出し、
+ * 権限フィールド設定・権限ユーザー設定と並列の独立カードとして表示する。
  * ==================================================================== */
 
 .kc-default-permission-section {
-  margin-top: 16px;
+  margin-top: 0;
+  margin-bottom: 18px;
   padding: 14px 16px 16px;
-  border-top: 1px solid #d0d5df;
-  background: #f9f9fb;
-  border-radius: 0 0 6px 6px;
+  border: 1px solid #e0e0e0;
+  background: #f5f7fa;
+  border-radius: 6px;
+}
+
+.kc-default-permission-section:last-child {
+  margin-bottom: 0;
 }
 
 .kc-default-permission-title {
@@ -1403,14 +1410,20 @@ body {
 
 /* ====================================================================
  * フィルタ設定 UI (REQ_checkbox-filter §6)
+ * 案A再編 (REQ_config-reorg) により「表示・絞り込み」セクション内で
+ * 検索対象フィールド設定と並ぶ独立カードとして表示する。
  * ==================================================================== */
 
 .kc-filter-config-section {
   margin-top: 16px;
   padding: 14px 16px 16px;
-  border-top: 1px solid #d0d5df;
-  background: #f9f9fb;
-  border-radius: 0 0 6px 6px;
+  border: 1px solid #e0e0e0;
+  background: #f5f7fa;
+  border-radius: 6px;
+}
+
+.kc-filter-config-section .kc-config-subsection-title {
+  margin-top: 0;
 }
 
 .kc-filter-group-rows {
