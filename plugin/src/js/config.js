@@ -1,10 +1,10 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (v12: モードB filterCond 連動 追加)
+ * KC Calendar プラグイン設定画面スクリプト (v13: ワークフロー（別アプリ連携アクション）追加)
  *
- * 保存形式 (version 12):
+ * 保存形式 (version 13):
  *   {
- *     version: 12,
+ *     version: 13,
  *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ...,
  *                     overlapMode,                  // 'none' / 'fieldKey' / 'refTable'
  *                     overlapKeyFieldCode,          // モード A
@@ -19,8 +19,17 @@
  *     fieldValueRules: [ { fieldCode, fieldType, value, permission, bgColor, textColor }, ... ],
  *     searchTargets: [ { fieldCode: "memo" }, { fieldCode: "relatedMeetings" }, ... ],
  *     filterConfig: { groups: [ { id, label, type: 'assignee'|'fieldValue', fieldCode, fieldType, items: [ { id, label, value, defaultChecked } ] } ] },
- *     views: { "<viewId>": { calendarTitle, defaultView } }
+ *     views: { "<viewId>": { calendarTitle, defaultView } },
+ *     workflows: [ { id, name, enabled, trigger: { type }, conditions: [...], actions: [...] }, ... ]
+ *       trigger.type: 'recordCreate' | 'recordUpdate' | 'recordDelete'（§8 改訂1: 操作別トリガー。
+ *       経路（カレンダー DnD/モーダル or kintone 標準画面）は区別しない）
  *   }
+ * v13 変更点 (REQ_workflow-actions):
+ *   - workflows 配列を追加（レコードの作成/更新/削除（物理削除）を起点に
+ *     別アプリへレコードを追加/更新するワークフロー定義）
+ *   - v12→v13 マイグレーション: workflows が未定義または配列でない場合は [] で補完
+ *   - §8 改訂1（2026-07-15）: トリガーを経路別（旧enum）から操作別（recordCreate/recordUpdate/
+ *     recordDelete）に再編。version 13 は未リリースのためマイグレーション不要
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -127,6 +136,42 @@
    */
   var FILTER_TARGET_FIELD_TYPES = ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'STATUS', 'USER_SELECT'];
 
+  /**
+   * ワークフロー設定（REQ_workflow-actions）関連のフィールド型フィルタ
+   */
+  /** 発火条件の対象フィールドとして選択可能な型（U-2 確定: 選択肢型 + 文字列・数値の完全一致） */
+  var WORKFLOW_CONDITION_FIELD_TYPES = ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'SINGLE_LINE_TEXT', 'NUMBER'];
+  /** 選択肢型（値の選択 UI に select を使う型。STATUS は $status として別途追加） */
+  var WORKFLOW_CHOICE_TYPES = ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'STATUS'];
+  /** 自アプリ側フィールド選択（発火条件/マッピング元/キー）で除外する型（値を単純に読み取れない型） */
+  var WORKFLOW_EXCLUDED_SOURCE_TYPES = ['SUBTABLE', 'GROUP', 'REFERENCE_TABLE'];
+  /** 対象アプリ側フィールド選択（マッピング先/キー）で除外する型（システム項目・書込不可・複合型） */
+  var WORKFLOW_EXCLUDED_TARGET_TYPES = [
+    'SUBTABLE', 'GROUP', 'REFERENCE_TABLE', 'CATEGORY', 'STATUS', 'STATUS_ASSIGNEE',
+    'RECORD_NUMBER', 'CREATOR', 'MODIFIER', 'CREATED_TIME', 'UPDATED_TIME'
+  ];
+  /**
+   * CHECK_BOX ソースからのマッピング先として許可する対象フィールド型（管理者判断で確定・修正3）。
+   * 値変換ロジック（[{code}] 形式化等）は実装しないため、同型（CHECK_BOX）のみを許可し、
+   * USER_SELECT/ORGANIZATION_SELECT/GROUP_SELECT/MULTI_SELECT を含むそれ以外はすべて
+   * 保存時バリデーションでブロックする（実行時 100% API エラーになるため）。
+   */
+  var WORKFLOW_MULTI_VALUE_TARGET_TYPES = ['CHECK_BOX'];
+  /** 配列値（複数値）を保持するフィールド型。キー一致フィールドの候補から除外する用途（修正2）。 */
+  var WORKFLOW_ARRAY_VALUE_TYPES = ['CHECK_BOX', 'MULTI_SELECT', 'USER_SELECT', 'ORGANIZATION_SELECT', 'GROUP_SELECT'];
+  /** ワークフローのトリガー種別ラベル（§8.1 改訂1: 操作別トリガーに再編） */
+  var WORKFLOW_TRIGGER_LABELS = {
+    recordCreate: 'レコード作成時',
+    recordUpdate: 'レコード更新時',
+    recordDelete: 'レコード削除時（物理削除）'
+  };
+  /** ワークフローの動作モードラベル（§3.4.2） */
+  var WORKFLOW_MODE_LABELS = {
+    createOnly: '新規作成のみ',
+    updateOnly: '更新のみ（ヒットしなければ何もしない）',
+    upsert:     'upsert（あれば更新・なければ新規作成）'
+  };
+
   /* ====================================================================
    * ユーティリティ
    * ==================================================================== */
@@ -159,11 +204,11 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 12)
-   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, filterConfig: Object, views: Object }}
+   * setConfig で保存する全体設定オブジェクト (version 13)
+   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, filterConfig: Object, views: Object, workflows: Array }}
    */
   var currentConfig = {
-    version: 12,
+    version: 13,
     fieldMapping: {},
     permissionRules: [],
     fieldValueRules: [],
@@ -187,7 +232,8 @@
         }
       ]
     },
-    views: {}
+    views: {},
+    workflows: []
   };
 
   /**
@@ -209,6 +255,15 @@
    * @type {Array<{code: string, label: string, type: string}>}
    */
   var searchTargetFieldOptions = [];
+
+  /**
+   * ワークフロー設定 UI（発火条件・マッピング元・キー）で使用する自アプリの全フィールド一覧
+   * （REQ_workflow-actions §3.4.3・§2.5）。loadFields 後に設定される（$status はプロセス管理
+   * 有効時のみ init() 内で loadStatuses 完了後に追加）。SUBTABLE/GROUP/REFERENCE_TABLE は
+   * 単純な値として読み取れないため除外する（WORKFLOW_EXCLUDED_SOURCE_TYPES）。
+   * @type {Array<{code: string, label: string, type: string}>}
+   */
+  var ownAppFieldOptions = [];
 
   /**
    * 権限フィールド設定で使用するプロセス管理ステータス一覧
@@ -306,6 +361,24 @@
   var elCopyOpenModal = document.getElementById('kc-copy-open-modal');
   /* モーダル内のコピー元 select (実際にユーザーが操作するもの) */
   var elCopySourceModal = document.getElementById('kc-copy-source-modal');
+
+  /* --- セクション 6: ワークフロー (REQ_workflow-actions §3.10) --- */
+  var elWorkflowRows = document.getElementById('kc-workflow-rows');
+  var elWorkflowAdd  = document.getElementById('kc-workflow-add');
+
+  /* --- ワークフロー編集モーダル --- */
+  var elWorkflowModal       = document.getElementById('kc-workflow-modal');
+  var elWorkflowModalClose  = document.getElementById('kc-workflow-modal-close');
+  var elWorkflowModalCancel = document.getElementById('kc-workflow-modal-cancel');
+  var elWorkflowModalApply  = document.getElementById('kc-workflow-modal-apply');
+  var elWfModalError    = document.getElementById('kc-workflow-modal-error');
+  var elWfName          = document.getElementById('kc-wf-name');
+  var elWfEnabled       = document.getElementById('kc-wf-enabled');
+  var elWfTrigger       = document.getElementById('kc-wf-trigger');
+  var elWfConditionRows = document.getElementById('kc-wf-condition-rows');
+  var elWfConditionAdd  = document.getElementById('kc-wf-condition-add');
+  var elWfActionRows    = document.getElementById('kc-wf-action-rows');
+  var elWfActionAdd     = document.getElementById('kc-wf-action-add');
 
   /* --- 操作ボタン (上下 2 セット分を NodeList で取得) --- */
   var elSubmits = document.querySelectorAll('.kc-config-submit');
@@ -1102,7 +1175,10 @@
       // 全行のハイライトクラスを除去（REQ_checkbox-filter: .kc-filter-group-row も対象に追加）
       var container = row.parentNode;
       if (container) {
-        var allRows = container.querySelectorAll('.kc-permission-row, .kc-fieldvalue-row, .kc-filter-group-row, .kc-filter-item-row');
+        var allRows = container.querySelectorAll(
+          '.kc-permission-row, .kc-fieldvalue-row, .kc-filter-group-row, .kc-filter-item-row, ' +
+          '.kc-workflow-row, .kc-workflow-action-block'
+        );
         allRows.forEach(function (r) {
           r.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
         });
@@ -1638,6 +1714,991 @@
       });
     });
     return result;
+  }
+
+  /* ====================================================================
+   * ワークフロー設定 UI (REQ_workflow-actions §3.10)
+   *
+   * 2 階層構成:
+   *   第1階層: セクション6のワークフロー一覧（行リスト、DnD 並び替え可）
+   *   第2階層: ワークフロー編集モーダル（トリガー・発火条件・アクションのステップ列挙）
+   *
+   * 「適用」でメモリ上の currentConfig.workflows を更新し、画面下部の「保存」で setConfig する
+   * （既存の権限ルール等と同じ「メモリ上に蓄積 → 保存ボタンで確定」フローを踏襲。§3.10）。
+   * ==================================================================== */
+
+  /** 編集中のワークフロー下書き（モーダル表示中のみ非 null）。適用時に currentConfig.workflows へ反映する */
+  var workflowDraft = null;
+
+  /**
+   * ワークフロー ID を生成する（タイムスタンプ + 乱数でユニーク性を担保）
+   * @returns {string}
+   */
+  function generateWorkflowId() {
+    return 'wf_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+  }
+
+  /**
+   * アクション ID を生成する
+   * @returns {string}
+   */
+  function generateWorkflowActionId() {
+    return 'act_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+  }
+
+  /**
+   * 自アプリの全フィールド選択ドロップダウンを生成する（発火条件・マッピング元・キー共通）
+   * @param {string} selectedCode - 既存選択値
+   * @param {string} extraClass - 追加 CSS クラス
+   * @param {boolean} [excludeArrayTypes] - true の場合、配列型フィールド（修正2・キー項目選択用）を除外する
+   * @returns {HTMLSelectElement}
+   */
+  function buildOwnFieldSelect(selectedCode, extraClass, excludeArrayTypes) {
+    var sel = document.createElement('select');
+    sel.className = 'kc-config-select ' + extraClass;
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- フィールドを選択 --';
+    sel.appendChild(emptyOpt);
+
+    ownAppFieldOptions.forEach(function (f) {
+      if (excludeArrayTypes && WORKFLOW_ARRAY_VALUE_TYPES.indexOf(f.type) !== -1) return;
+      var opt = document.createElement('option');
+      opt.value = f.code;
+      opt.dataset.fieldtype = f.type;
+      opt.textContent = f.label + ' (' + f.code + ')';
+      sel.appendChild(opt);
+    });
+
+    if (selectedCode) {
+      sel.value = selectedCode;
+      if (sel.value !== selectedCode) {
+        var missingOpt = document.createElement('option');
+        missingOpt.value = selectedCode;
+        missingOpt.textContent = selectedCode + ' (フィールドが見つかりません)';
+        missingOpt.className = 'kc-option-missing';
+        sel.appendChild(missingOpt);
+        sel.value = selectedCode;
+      }
+    }
+    attachSelectEmptyClassSync(sel);
+    return sel;
+  }
+
+  /**
+   * 対象アプリのフィールド選択ドロップダウンの中身を再構築する（フィールド取得後・行追加時に使用）
+   * @param {HTMLSelectElement} selectEl
+   * @param {Array<{code, label, type}>} targetFields - 対象アプリのフィールド一覧（未取得なら空配列）
+   * @param {string} [keepValue] - 保持したい選択値
+   * @param {boolean} [excludeArrayTypes] - true の場合、配列型フィールド（修正2・キー項目選択用）を除外する
+   */
+  function populateTargetFieldSelect(selectEl, targetFields, keepValue, excludeArrayTypes) {
+    while (selectEl.options.length > 0) { selectEl.remove(0); }
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = (targetFields && targetFields.length > 0)
+      ? '-- フィールドを選択 --'
+      : '-- まず「フィールド取得」を実行してください --';
+    selectEl.appendChild(emptyOpt);
+
+    (targetFields || []).forEach(function (f) {
+      if (excludeArrayTypes && WORKFLOW_ARRAY_VALUE_TYPES.indexOf(f.type) !== -1) return;
+      var opt = document.createElement('option');
+      opt.value = f.code;
+      opt.dataset.fieldtype = f.type;
+      opt.textContent = f.label + ' (' + f.code + ')';
+      selectEl.appendChild(opt);
+    });
+
+    if (keepValue) {
+      selectEl.value = keepValue;
+      if (selectEl.value !== keepValue) {
+        var missingOpt = document.createElement('option');
+        missingOpt.value = keepValue;
+        missingOpt.textContent = keepValue + ' (未取得または見つかりません)';
+        missingOpt.className = 'kc-option-missing';
+        selectEl.appendChild(missingOpt);
+        selectEl.value = keepValue;
+      }
+    }
+    syncSelectEmptyClass(selectEl);
+  }
+
+  /**
+   * kintone フィールド定義（properties）から、ワークフローの対象アプリ側フィールド候補を抽出する
+   * （WORKFLOW_EXCLUDED_TARGET_TYPES を除外）
+   * @param {Object} props - /k/v1/app/form/fields.json の properties
+   * @returns {Array<{code, label, type}>}
+   */
+  function buildTargetFieldOptionsFromProps(props) {
+    var result = [];
+    Object.keys(props).forEach(function (code) {
+      var field = props[code];
+      if (WORKFLOW_EXCLUDED_TARGET_TYPES.indexOf(field.type) !== -1) return;
+      result.push({ code: code, label: field.label || code, type: field.type });
+    });
+    result.sort(function (a, b) {
+      if (a.label < b.label) return -1;
+      if (a.label > b.label) return 1;
+      return 0;
+    });
+    return result;
+  }
+
+  /**
+   * 発火条件の対象フィールド一覧を返す（U-2 確定: 選択肢型 + 文字列・数値の完全一致）
+   * @returns {Array<{code, label, type}>}
+   */
+  function getWorkflowConditionFieldOptions() {
+    return ownAppFieldOptions.filter(function (f) {
+      return WORKFLOW_CONDITION_FIELD_TYPES.indexOf(f.type) !== -1;
+    });
+  }
+
+  /**
+   * 発火条件 1 行のフィールド選択ドロップダウンを生成する
+   * @param {Object|null} cond - { fieldCode, fieldType, value }
+   * @returns {HTMLSelectElement}
+   */
+  function buildWorkflowConditionFieldSelect(cond) {
+    var fieldSel = document.createElement('select');
+    fieldSel.className = 'kc-config-select kc-wf-cond-field-select';
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- フィールドを選択 --';
+    fieldSel.appendChild(emptyOpt);
+
+    getWorkflowConditionFieldOptions().forEach(function (f) {
+      var opt = document.createElement('option');
+      opt.value = f.code;
+      opt.dataset.fieldtype = f.type;
+      opt.textContent = f.label + ' (' + f.code + ')';
+      fieldSel.appendChild(opt);
+    });
+
+    // プロセス管理が有効な場合のみ STATUS を追加（buildFieldValueFieldSelect と同パターン）
+    if (statusEnabled && statusOptions.length > 0) {
+      var statusOpt = document.createElement('option');
+      statusOpt.value = '$status';
+      statusOpt.dataset.fieldtype = 'STATUS';
+      statusOpt.textContent = 'ステータス (STATUS)';
+      fieldSel.appendChild(statusOpt);
+    }
+
+    if (cond && cond.fieldCode) {
+      fieldSel.value = cond.fieldCode;
+      if (fieldSel.value !== cond.fieldCode) {
+        var missingOpt = document.createElement('option');
+        missingOpt.value = cond.fieldCode;
+        missingOpt.textContent = cond.fieldCode + ' (フィールドが見つかりません)';
+        missingOpt.className = 'kc-option-missing';
+        fieldSel.appendChild(missingOpt);
+        fieldSel.value = cond.fieldCode;
+      }
+    }
+    attachSelectEmptyClassSync(fieldSel);
+    return fieldSel;
+  }
+
+  /**
+   * 発火条件 1 行の値入力コントロールを生成する。
+   * 選択肢型（DROP_DOWN/RADIO_BUTTON/CHECK_BOX/STATUS）は値選択ドロップダウン（rebuildValueSelect 流用）、
+   * 文字列・数値型は自由入力の text input に切り替える（U-2 確定）。
+   * @param {Object|null} cond
+   * @param {HTMLSelectElement} fieldSel - 連動するフィールド選択ドロップダウン
+   * @returns {HTMLElement} ラッパー要素
+   */
+  function buildWorkflowConditionValueControl(cond, fieldSel) {
+    var wrapper = document.createElement('span');
+    wrapper.className = 'kc-wf-cond-value-wrapper';
+
+    function render(fieldCode, fieldType, initialValue) {
+      wrapper.innerHTML = '';
+      if (WORKFLOW_CHOICE_TYPES.indexOf(fieldType) !== -1) {
+        var sel = document.createElement('select');
+        sel.className = 'kc-config-select kc-wf-cond-value-select';
+        rebuildValueSelect(sel, fieldCode, fieldType, initialValue || '');
+        wrapper.appendChild(sel);
+      } else {
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'kc-config-input kc-wf-cond-value-input';
+        input.placeholder = fieldCode ? '一致させる値を入力' : 'まずフィールドを選択してください';
+        input.disabled = !fieldCode;
+        input.value = initialValue || '';
+        wrapper.appendChild(input);
+      }
+    }
+
+    var initCode = cond ? cond.fieldCode : '';
+    var initType = cond ? (cond.fieldType || '') : '';
+    var initVal  = cond ? cond.value : '';
+    render(initCode, initType, initVal);
+
+    fieldSel.addEventListener('change', function () {
+      var opt = fieldSel.options[fieldSel.selectedIndex];
+      var newType = opt ? (opt.dataset.fieldtype || '') : '';
+      render(fieldSel.value, newType, '');
+    });
+
+    return wrapper;
+  }
+
+  /**
+   * 発火条件 1 行を生成する
+   * @param {Object|null} cond
+   * @returns {HTMLElement} .kc-wf-condition-row 要素
+   */
+  function buildWorkflowConditionRow(cond) {
+    var row = document.createElement('div');
+    row.className = 'kc-wf-condition-row';
+
+    var fieldSel = buildWorkflowConditionFieldSelect(cond);
+    var valueWrap = buildWorkflowConditionValueControl(cond, fieldSel);
+
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn';
+    delBtn.textContent = '−';
+    delBtn.addEventListener('click', function () {
+      row.parentNode && row.parentNode.removeChild(row);
+    });
+
+    row.appendChild(fieldSel);
+    row.appendChild(valueWrap);
+    row.appendChild(delBtn);
+    return row;
+  }
+
+  /**
+   * モーダル内の発火条件行を DOM から収集する。
+   * フィールド未選択・値未入力の行はスキップする。
+   * @returns {Array<{fieldCode, fieldType, value}>}
+   */
+  function collectWorkflowConditions() {
+    if (!elWfConditionRows) return [];
+    var rows = elWfConditionRows.querySelectorAll('.kc-wf-condition-row');
+    var result = [];
+    rows.forEach(function (row) {
+      var fieldSel = row.querySelector('.kc-wf-cond-field-select');
+      if (!fieldSel || !fieldSel.value) return;
+      var selOpt = fieldSel.options[fieldSel.selectedIndex];
+      var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
+      if (fieldSel.value === '$status') { fieldType = 'STATUS'; }
+
+      var valueSel = row.querySelector('.kc-wf-cond-value-select');
+      var valueInput = row.querySelector('.kc-wf-cond-value-input');
+      var value = valueSel ? valueSel.value : (valueInput ? valueInput.value.trim() : '');
+      if (!value) return;
+
+      result.push({ fieldCode: fieldSel.value, fieldType: fieldType, value: value });
+    });
+    return result;
+  }
+
+  /**
+   * アクションブロック内のフィールドマッピング UI（マッピング追加ボタン・キー対象セレクト・
+   * 既存マッピング行の対象セレクト）の有効/無効を一括切り替える（§3.4.1: 取得失敗時は無効化）
+   * @param {HTMLElement} block - .kc-workflow-action-block 要素
+   * @param {boolean} enabled
+   */
+  function setWorkflowMappingUiEnabled(block, enabled) {
+    if (block._mappingAddBtn) { block._mappingAddBtn.disabled = !enabled; }
+    var keyTargetSel = block.querySelector('.kc-workflow-action-keytarget');
+    if (keyTargetSel) { keyTargetSel.disabled = !enabled; }
+    var targetSelsInRows = block.querySelectorAll('.kc-workflow-mapping-target-select');
+    targetSelsInRows.forEach(function (s) { s.disabled = !enabled; });
+  }
+
+  /**
+   * フィールド取得完了後、アクションブロック内の対象アプリフィールド選択肢
+   * （キー対象・マッピング行の対象）をすべて再構築する。
+   * @param {HTMLElement} block
+   */
+  function refreshActionTargetFieldSelects(block) {
+    var targetFields = block._targetFields || [];
+    var keyTargetSel = block.querySelector('.kc-workflow-action-keytarget');
+    if (keyTargetSel) {
+      // 修正2(a): キー項目は配列型フィールドを候補から除外する
+      populateTargetFieldSelect(keyTargetSel, targetFields, keyTargetSel.value, true);
+    }
+    var rows = block._mappingRowsEl ? block._mappingRowsEl.querySelectorAll('.kc-workflow-mapping-row') : [];
+    rows.forEach(function (row) {
+      var sel = row.querySelector('.kc-workflow-mapping-target-select');
+      if (sel) { populateTargetFieldSelect(sel, targetFields, sel.value); }
+    });
+  }
+
+  /**
+   * 対象アプリのフィールド一覧を取得する（§3.4.1）。
+   * 成功時は block._targetFields に格納し、マッピング UI を有効化する。
+   * 失敗時（アプリが存在しない・権限がない等）はエラー表示しマッピング UI を無効化する。
+   * @param {HTMLElement} block - .kc-workflow-action-block 要素
+   * @param {string} appId - 対象アプリ ID
+   * @returns {Promise<void>}
+   */
+  function fetchTargetAppFields(block, appId) {
+    var statusEl = block.querySelector('.kc-workflow-fetch-status');
+    if (!appId) {
+      if (statusEl) { statusEl.textContent = ''; }
+      block._targetFields = [];
+      setWorkflowMappingUiEnabled(block, false);
+      refreshActionTargetFieldSelects(block);
+      return Promise.resolve();
+    }
+    if (statusEl) {
+      statusEl.textContent = '取得中...';
+      statusEl.className = 'kc-workflow-fetch-status';
+    }
+    return kintone.api(kintone.api.url('/k/v1/app/form/fields', true), 'GET', { app: appId })
+      .then(function (resp) {
+        block._targetFields = buildTargetFieldOptionsFromProps(resp.properties);
+        if (statusEl) {
+          statusEl.textContent = 'フィールド取得済み（' + block._targetFields.length + '件）';
+          statusEl.className = 'kc-workflow-fetch-status kc-workflow-fetch-status--ok';
+        }
+        setWorkflowMappingUiEnabled(block, true);
+        refreshActionTargetFieldSelects(block);
+      })
+      .catch(function (err) {
+        console.error('[KC Config] ワークフロー: 対象アプリのフィールド取得に失敗:', err);
+        block._targetFields = [];
+        if (statusEl) {
+          statusEl.textContent = 'フィールド取得に失敗しました（アプリID・権限を確認してください）';
+          statusEl.className = 'kc-workflow-fetch-status kc-workflow-fetch-status--error';
+        }
+        setWorkflowMappingUiEnabled(block, false);
+        refreshActionTargetFieldSelects(block);
+      });
+  }
+
+  /**
+   * フィールドマッピング 1 行を生成する。
+   * @param {Object|null} mapping - { targetFieldCode, targetFieldType, sourceType, fixedValue,
+   *                                  sourceFieldCode, sourceFieldType, userValueMode }
+   * @param {HTMLElement} block - 所属するアクションブロック（対象フィールド一覧の参照元）
+   * @returns {HTMLElement} .kc-workflow-mapping-row 要素
+   */
+  function buildWorkflowMappingRow(mapping, block) {
+    var row = document.createElement('div');
+    row.className = 'kc-workflow-mapping-row';
+
+    var targetSel = document.createElement('select');
+    targetSel.className = 'kc-config-select kc-workflow-target-field-select kc-workflow-mapping-target-select';
+    targetSel.disabled = !(block._targetFields && block._targetFields.length > 0);
+    populateTargetFieldSelect(targetSel, block._targetFields || [], mapping ? mapping.targetFieldCode : '');
+
+    var sourceTypeSel = document.createElement('select');
+    sourceTypeSel.className = 'kc-config-select kc-workflow-mapping-sourcetype';
+    [
+      { value: 'field', label: '自アプリのフィールド値' },
+      { value: 'fixed', label: '固定値' }
+    ].forEach(function (o) {
+      var opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      sourceTypeSel.appendChild(opt);
+    });
+
+    // 未知の sourceType（将来拡張分。例: 'userInput'）は現行 UI 上「自アプリのフィールド値」として
+    // 表示し直す（スキップ + console.warn。要件書「将来拡張を見据えた構造要件」）
+    var initialSourceType = mapping ? mapping.sourceType : 'field';
+    if (initialSourceType !== 'field' && initialSourceType !== 'fixed') {
+      console.warn('[KC Config] 未知の sourceType を検出、UI 上は "field" として表示します:', initialSourceType);
+      initialSourceType = 'field';
+    }
+    sourceTypeSel.value = initialSourceType;
+
+    var valueWrap = document.createElement('span');
+    valueWrap.className = 'kc-workflow-mapping-value-wrapper';
+
+    function renderValueControl(sourceType) {
+      valueWrap.innerHTML = '';
+      if (sourceType === 'fixed') {
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'kc-config-input kc-workflow-mapping-fixed-value';
+        input.placeholder = '固定値を入力';
+        input.value = (mapping && mapping.sourceType === 'fixed' && mapping.fixedValue !== undefined)
+          ? mapping.fixedValue : '';
+        valueWrap.appendChild(input);
+      } else {
+        var sel = buildOwnFieldSelect(
+          (mapping && mapping.sourceType === 'field') ? mapping.sourceFieldCode : '',
+          'kc-workflow-mapping-source-select'
+        );
+        valueWrap.appendChild(sel);
+
+        // USER_SELECT ソースの場合のみ「コード/名前」選択を表示する（§3.4.3 U-4 確定・既定コード）
+        var userModeSel = document.createElement('select');
+        userModeSel.className = 'kc-config-select kc-workflow-mapping-usermode';
+        userModeSel.style.display = 'none';
+        [
+          { value: 'code', label: 'コードを渡す' },
+          { value: 'name', label: '名前を渡す' }
+        ].forEach(function (o) {
+          var opt = document.createElement('option');
+          opt.value = o.value;
+          opt.textContent = o.label;
+          userModeSel.appendChild(opt);
+        });
+        userModeSel.value = (mapping && mapping.userValueMode === 'name') ? 'name' : 'code';
+        valueWrap.appendChild(userModeSel);
+
+        var syncUserModeVisibility = function () {
+          var opt = sel.options[sel.selectedIndex];
+          var t = opt ? (opt.dataset.fieldtype || '') : '';
+          userModeSel.style.display = (t === 'USER_SELECT') ? '' : 'none';
+        };
+        sel.addEventListener('change', syncUserModeVisibility);
+        syncUserModeVisibility();
+      }
+    }
+    renderValueControl(sourceTypeSel.value);
+    sourceTypeSel.addEventListener('change', function () { renderValueControl(sourceTypeSel.value); });
+
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn';
+    delBtn.textContent = '−';
+    delBtn.addEventListener('click', function () {
+      row.parentNode && row.parentNode.removeChild(row);
+    });
+
+    row.appendChild(targetSel);
+    row.appendChild(sourceTypeSel);
+    row.appendChild(valueWrap);
+    row.appendChild(delBtn);
+    return row;
+  }
+
+  /**
+   * アクションブロックの「動作モード」に応じてキー一致設定エリアの表示/非表示を切り替える
+   * （新規作成のみ = 非表示、更新のみ/upsert = 表示。§3.4.2）
+   * @param {HTMLElement} block
+   */
+  function syncWorkflowActionKeyAreaVisibility(block) {
+    var modeSel = block.querySelector('.kc-workflow-action-mode');
+    var keyArea = block.querySelector('.kc-workflow-keyarea');
+    if (!modeSel || !keyArea) return;
+    var visible = modeSel.value !== 'createOnly';
+    keyArea.style.display = visible ? '' : 'none';
+    var hint = block.querySelector('.kc-workflow-keyarea-hint');
+    if (hint) { hint.style.display = visible ? '' : 'none'; }
+  }
+
+  /**
+   * アクション 1 件分の編集ブロックを生成する（§3.10 第2階層）
+   * @param {Object|null} action - 既存アクション定義（省略時は空のアクション）
+   * @returns {HTMLElement} .kc-workflow-action-block 要素
+   */
+  function buildWorkflowActionBlock(action) {
+    var block = document.createElement('div');
+    block.className = 'kc-workflow-action-block';
+    block._targetFields = [];
+    block._actionId = (action && action.id) ? action.id : generateWorkflowActionId();
+
+    var handle = buildDragHandle();
+    attachRowDragEvents(block, handle);
+
+    var header = document.createElement('div');
+    header.className = 'kc-workflow-action-header';
+    header.appendChild(handle);
+    var title = document.createElement('span');
+    title.className = 'kc-workflow-action-title';
+    title.textContent = 'アクション';
+    header.appendChild(title);
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn kc-workflow-action-del-btn';
+    delBtn.textContent = '−';
+    delBtn.addEventListener('click', function () {
+      block.parentNode && block.parentNode.removeChild(block);
+    });
+    header.appendChild(delBtn);
+    block.appendChild(header);
+
+    var body = document.createElement('div');
+    body.className = 'kc-workflow-action-body';
+
+    // 対象アプリ ID + フィールド取得ボタン（§3.4.1）
+    var appGroup = document.createElement('div');
+    appGroup.className = 'kc-config-field-group';
+    var appLabel = document.createElement('label');
+    appLabel.className = 'kc-config-label';
+    appLabel.textContent = '対象アプリID';
+    var appRow = document.createElement('div');
+    appRow.className = 'kc-workflow-appid-row';
+    var appInput = document.createElement('input');
+    appInput.type = 'text';
+    appInput.className = 'kc-config-input kc-workflow-action-appid';
+    appInput.placeholder = '例: 42';
+    appInput.value = (action && action.targetAppId) ? action.targetAppId : '';
+    var fetchBtn = document.createElement('button');
+    fetchBtn.type = 'button';
+    fetchBtn.className = 'kc-config-btn kc-config-btn-secondary kc-workflow-fetch-btn';
+    fetchBtn.textContent = 'フィールド取得';
+    fetchBtn.addEventListener('click', function () {
+      fetchTargetAppFields(block, appInput.value.trim());
+    });
+    var fetchStatus = document.createElement('span');
+    fetchStatus.className = 'kc-workflow-fetch-status';
+    appRow.appendChild(appInput);
+    appRow.appendChild(fetchBtn);
+    appRow.appendChild(fetchStatus);
+    appGroup.appendChild(appLabel);
+    appGroup.appendChild(appRow);
+    body.appendChild(appGroup);
+
+    // 動作モード（§3.4.2）
+    var modeGroup = document.createElement('div');
+    modeGroup.className = 'kc-config-field-group';
+    var modeLabel = document.createElement('label');
+    modeLabel.className = 'kc-config-label';
+    modeLabel.textContent = '動作モード';
+    var modeSel = document.createElement('select');
+    modeSel.className = 'kc-config-select kc-workflow-action-mode';
+    ['createOnly', 'updateOnly', 'upsert'].forEach(function (m) {
+      var opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = WORKFLOW_MODE_LABELS[m];
+      modeSel.appendChild(opt);
+    });
+    modeSel.value = (action && action.mode) ? action.mode : 'upsert';
+    modeGroup.appendChild(modeLabel);
+    modeGroup.appendChild(modeSel);
+    body.appendChild(modeGroup);
+
+    // キー一致設定（更新のみ・upsert 時に必須。§3.4.2, §3.4.4）
+    var keyArea = document.createElement('div');
+    keyArea.className = 'kc-workflow-keyarea';
+
+    var keySourceWrap = document.createElement('div');
+    keySourceWrap.className = 'kc-workflow-keyarea-col';
+    var keySourceLabel = document.createElement('label');
+    keySourceLabel.className = 'kc-config-label';
+    keySourceLabel.textContent = '自アプリのキー項目';
+    var keySourceSel = buildOwnFieldSelect(
+      action && action.matchKey ? action.matchKey.sourceFieldCode : '',
+      'kc-workflow-action-keysource',
+      true // 修正2(a): キー項目は配列型フィールドを候補から除外する
+    );
+    keySourceWrap.appendChild(keySourceLabel);
+    keySourceWrap.appendChild(keySourceSel);
+
+    var keyArrow = document.createElement('span');
+    keyArrow.className = 'kc-workflow-keyarea-arrow';
+    keyArrow.textContent = '=';
+
+    var keyTargetWrap = document.createElement('div');
+    keyTargetWrap.className = 'kc-workflow-keyarea-col';
+    var keyTargetLabel = document.createElement('label');
+    keyTargetLabel.className = 'kc-config-label';
+    keyTargetLabel.textContent = '対象アプリのキー項目';
+    var keyTargetSel = document.createElement('select');
+    keyTargetSel.className = 'kc-config-select kc-workflow-target-field-select kc-workflow-action-keytarget';
+    keyTargetSel.disabled = true;
+    populateTargetFieldSelect(
+      keyTargetSel, [], action && action.matchKey ? action.matchKey.targetFieldCode : '',
+      true // 修正2(a): キー項目は配列型フィールドを候補から除外する
+    );
+    keyTargetWrap.appendChild(keyTargetLabel);
+    keyTargetWrap.appendChild(keyTargetSel);
+
+    keyArea.appendChild(keySourceWrap);
+    keyArea.appendChild(keyArrow);
+    keyArea.appendChild(keyTargetWrap);
+    body.appendChild(keyArea);
+
+    var keyHint = document.createElement('p');
+    keyHint.className = 'kc-config-hint kc-workflow-keyarea-hint';
+    keyHint.textContent = 'キーが一致するレコードが対象アプリ側に複数件見つかった場合は、更新をブロックしエラー通知します。';
+    body.appendChild(keyHint);
+
+    modeSel.addEventListener('change', function () { syncWorkflowActionKeyAreaVisibility(block); });
+
+    // フィールドマッピング（§3.4.3）
+    var mappingTitle = document.createElement('label');
+    mappingTitle.className = 'kc-config-label';
+    mappingTitle.textContent = 'フィールドマッピング（対象アプリのフィールド ← 自アプリの値）';
+    body.appendChild(mappingTitle);
+
+    var mappingRows = document.createElement('div');
+    mappingRows.className = 'kc-workflow-mapping-rows';
+    block._mappingRowsEl = mappingRows;
+    body.appendChild(mappingRows);
+
+    var mappingAddBtn = document.createElement('button');
+    mappingAddBtn.type = 'button';
+    mappingAddBtn.className = 'kc-config-btn kc-config-btn-secondary kc-workflow-mapping-add-btn';
+    mappingAddBtn.textContent = '+ マッピング行を追加';
+    mappingAddBtn.disabled = true;
+    mappingAddBtn.addEventListener('click', function () {
+      mappingRows.appendChild(buildWorkflowMappingRow(null, block));
+    });
+    block._mappingAddBtn = mappingAddBtn;
+    body.appendChild(mappingAddBtn);
+
+    (action && Array.isArray(action.fieldMappings) ? action.fieldMappings : []).forEach(function (m) {
+      mappingRows.appendChild(buildWorkflowMappingRow(m, block));
+    });
+
+    // 失敗時の継続/中断（既定継続。U-5 確定）
+    var contLabel = document.createElement('label');
+    contLabel.className = 'kc-config-checkbox-label kc-workflow-continue-row';
+    var contCheckbox = document.createElement('input');
+    contCheckbox.type = 'checkbox';
+    contCheckbox.className = 'kc-workflow-action-abort';
+    contCheckbox.checked = !!(action && action.continueOnError === false);
+    contLabel.appendChild(contCheckbox);
+    contLabel.appendChild(document.createTextNode('このアクションが失敗した場合、後続のアクションを中断する'));
+    body.appendChild(contLabel);
+
+    block.appendChild(body);
+
+    // 既存アクション編集時: 対象アプリIDが設定済みなら自動的にフィールドを再取得する
+    // （マッピング/キーの選択済み値を正しく表示するため）
+    if (action && action.targetAppId) {
+      fetchTargetAppFields(block, action.targetAppId);
+    }
+    syncWorkflowActionKeyAreaVisibility(block);
+
+    return block;
+  }
+
+  /**
+   * モーダル内のアクションブロックを DOM から収集する。
+   * 対象アプリID が未入力のブロックは保存しない（AC-11 の「1件以上」判定は呼び出し元で行う）。
+   * @returns {Array<Object>} アクション定義配列
+   */
+  function collectWorkflowActions() {
+    if (!elWfActionRows) return [];
+    var blocks = elWfActionRows.querySelectorAll('.kc-workflow-action-block');
+    var result = [];
+    blocks.forEach(function (block) {
+      var appInput = block.querySelector('.kc-workflow-action-appid');
+      var targetAppId = appInput ? appInput.value.trim() : '';
+      if (!targetAppId) return;
+
+      var modeSel = block.querySelector('.kc-workflow-action-mode');
+      var mode = modeSel ? modeSel.value : 'upsert';
+
+      var matchKey = null;
+      if (mode !== 'createOnly') {
+        var keySourceSel = block.querySelector('.kc-workflow-action-keysource');
+        var keyTargetSel = block.querySelector('.kc-workflow-action-keytarget');
+        var sourceFieldCode = keySourceSel ? keySourceSel.value : '';
+        var targetFieldCode = keyTargetSel ? keyTargetSel.value : '';
+        if (sourceFieldCode && targetFieldCode) {
+          matchKey = { sourceFieldCode: sourceFieldCode, targetFieldCode: targetFieldCode };
+        }
+      }
+
+      var fieldMappings = [];
+      var mappingRowEls = block.querySelectorAll('.kc-workflow-mapping-row');
+      mappingRowEls.forEach(function (row) {
+        var targetSel = row.querySelector('.kc-workflow-mapping-target-select');
+        var sourceTypeSel = row.querySelector('.kc-workflow-mapping-sourcetype');
+        if (!targetSel || !targetSel.value || !sourceTypeSel) return;
+        var targetOpt = targetSel.options[targetSel.selectedIndex];
+        var targetFieldType = targetOpt ? (targetOpt.dataset.fieldtype || '') : '';
+        var sourceType = sourceTypeSel.value;
+
+        if (sourceType === 'fixed') {
+          var fixedInput = row.querySelector('.kc-workflow-mapping-fixed-value');
+          fieldMappings.push({
+            targetFieldCode: targetSel.value,
+            targetFieldType: targetFieldType,
+            sourceType: 'fixed',
+            fixedValue: fixedInput ? fixedInput.value : ''
+          });
+        } else if (sourceType === 'field') {
+          var sourceSel = row.querySelector('.kc-workflow-mapping-source-select');
+          if (!sourceSel || !sourceSel.value) return;
+          var sourceOpt = sourceSel.options[sourceSel.selectedIndex];
+          var sourceFieldType = sourceOpt ? (sourceOpt.dataset.fieldtype || '') : '';
+          var userModeSel = row.querySelector('.kc-workflow-mapping-usermode');
+          var mappingEntry = {
+            targetFieldCode: targetSel.value,
+            targetFieldType: targetFieldType,
+            sourceType: 'field',
+            sourceFieldCode: sourceSel.value,
+            sourceFieldType: sourceFieldType
+          };
+          if (sourceFieldType === 'USER_SELECT' && userModeSel) {
+            mappingEntry.userValueMode = userModeSel.value;
+          }
+          fieldMappings.push(mappingEntry);
+        } else {
+          // 将来拡張の sourceType（例: 'userInput'）は現行 UI では未対応のため保存しない
+          console.warn('[KC Config] 未対応の sourceType のためマッピング行をスキップ:', sourceType);
+        }
+      });
+
+      var abortCheckbox = block.querySelector('.kc-workflow-action-abort');
+      var continueOnError = !(abortCheckbox && abortCheckbox.checked);
+
+      result.push({
+        id: block._actionId,
+        targetAppId: targetAppId,
+        mode: mode,
+        matchKey: matchKey,
+        onMultipleMatch: 'blockError', // §3.4.4 固定値（将来拡張の余地を見て設定値として保持）
+        fieldMappings: fieldMappings,
+        continueOnError: continueOnError
+      });
+    });
+    return result;
+  }
+
+  /**
+   * アクション配列に対する保存時バリデーションを行う（AC-9・§3.4.2）
+   * - 更新のみ/upsert モードでキー一致設定が未設定の場合はエラー
+   * - CHECK_BOX ソースを CHECK_BOX（同型）以外へマッピングする場合はエラー（修正3・管理者確定）
+   *   値変換ロジックを実装しないため、USER_SELECT/ORGANIZATION_SELECT/GROUP_SELECT/MULTI_SELECT を
+   *   含め、CHECK_BOX 以外の組み合わせはすべて「対応していない組み合わせ」としてブロックする。
+   * @param {Array<Object>} actions
+   * @returns {string|null} エラーメッセージ（問題なければ null）
+   */
+  function validateWorkflowActions(actions) {
+    for (var i = 0; i < actions.length; i++) {
+      var action = actions[i];
+      if (action.mode !== 'createOnly' && !action.matchKey) {
+        return 'アクション' + (i + 1) + ': 「更新のみ」または「upsert」モードではキー一致設定が必須です。';
+      }
+      var mappings = action.fieldMappings || [];
+      for (var j = 0; j < mappings.length; j++) {
+        var m = mappings[j];
+        if (m.sourceType === 'field' && m.sourceFieldType === 'CHECK_BOX' &&
+            WORKFLOW_MULTI_VALUE_TARGET_TYPES.indexOf(m.targetFieldType) === -1) {
+          return 'アクション' + (i + 1) + ': CHECK_BOX（複数選択）フィールドは対応していない組み合わせです。' +
+            'マッピング先には CHECK_BOX（同型）のみ指定できます。';
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 全ワークフローに対して validateWorkflowActions を実行する（saveConfig からの最終防御）
+   * @param {Array<Object>} workflows
+   * @returns {string|null}
+   */
+  function validateAllWorkflowsMappings(workflows) {
+    for (var i = 0; i < workflows.length; i++) {
+      var err = validateWorkflowActions(workflows[i].actions || []);
+      if (err) { return 'ワークフロー「' + (workflows[i].name || '(無題)') + '」: ' + err; }
+    }
+    return null;
+  }
+
+  /**
+   * ESC キーでワークフロー編集モーダルを閉じるハンドラ
+   */
+  function handleWorkflowModalEscKey(e) {
+    if (e.key === 'Escape') { closeWorkflowModal(); }
+  }
+
+  /**
+   * ワークフロー編集モーダルを開く。
+   * @param {Object|null} existingWf - 編集対象の既存ワークフロー（省略時は新規作成）
+   */
+  function openWorkflowModal(existingWf) {
+    if (!elWorkflowModal) return;
+    workflowDraft = existingWf
+      ? JSON.parse(JSON.stringify(existingWf))
+      : { id: generateWorkflowId(), name: '', enabled: true, trigger: { type: 'recordCreate' }, conditions: [], actions: [] };
+
+    if (elWfModalError) { elWfModalError.textContent = ''; }
+    if (elWfName) { elWfName.value = workflowDraft.name || ''; }
+    if (elWfEnabled) { elWfEnabled.checked = workflowDraft.enabled !== false; }
+    if (elWfTrigger) { elWfTrigger.value = (workflowDraft.trigger && workflowDraft.trigger.type) || 'recordCreate'; }
+
+    if (elWfConditionRows) {
+      elWfConditionRows.innerHTML = '';
+      (workflowDraft.conditions || []).forEach(function (cond) {
+        elWfConditionRows.appendChild(buildWorkflowConditionRow(cond));
+      });
+    }
+    if (elWfActionRows) {
+      elWfActionRows.innerHTML = '';
+      (workflowDraft.actions || []).forEach(function (action) {
+        elWfActionRows.appendChild(buildWorkflowActionBlock(action));
+      });
+    }
+
+    elWorkflowModal.removeAttribute('hidden');
+    document.removeEventListener('keydown', handleWorkflowModalEscKey);
+    document.addEventListener('keydown', handleWorkflowModalEscKey);
+    if (elWfName) { elWfName.focus(); }
+  }
+
+  /**
+   * ワークフロー編集モーダルを閉じる（下書きは破棄する。適用は handleWorkflowModalApply が担う）
+   */
+  function closeWorkflowModal() {
+    if (!elWorkflowModal) return;
+    elWorkflowModal.setAttribute('hidden', '');
+    document.removeEventListener('keydown', handleWorkflowModalEscKey);
+    workflowDraft = null;
+    if (elWorkflowAdd) { elWorkflowAdd.focus(); }
+  }
+
+  /**
+   * ワークフロー編集モーダルの「適用」ボタンハンドラ。
+   * バリデーション成功時のみ currentConfig.workflows に反映しモーダルを閉じる（AC-11）。
+   */
+  function handleWorkflowModalApply() {
+    if (!workflowDraft) return;
+
+    var name = elWfName ? elWfName.value.trim() : '';
+    if (!name) {
+      if (elWfModalError) { elWfModalError.textContent = 'ワークフロー名を入力してください。'; }
+      return;
+    }
+
+    var actions = collectWorkflowActions();
+    if (actions.length === 0) {
+      if (elWfModalError) { elWfModalError.textContent = 'アクションを1件以上設定してください。'; }
+      return;
+    }
+
+    var validationError = validateWorkflowActions(actions);
+    if (validationError) {
+      if (elWfModalError) { elWfModalError.textContent = validationError; }
+      return;
+    }
+
+    var wf = {
+      id: workflowDraft.id,
+      name: name,
+      enabled: elWfEnabled ? elWfEnabled.checked : true,
+      trigger: { type: elWfTrigger ? elWfTrigger.value : 'recordCreate' },
+      conditions: collectWorkflowConditions(),
+      actions: actions
+    };
+
+    // モーダルを開いた後に一覧側で DnD 並び替え/有効トグル変更が行われている可能性があるため、
+    // 配列を書き換える前に必ず現在の DOM 状態を currentConfig.workflows に同期する
+    // （renderWorkflowList() が古い配列順で再構築し、並び替え結果を失うことを防ぐ）
+    currentConfig.workflows = collectWorkflows();
+    var existingIndex = currentConfig.workflows.findIndex(function (w) { return w.id === wf.id; });
+    if (existingIndex !== -1) {
+      currentConfig.workflows[existingIndex] = wf;
+    } else {
+      currentConfig.workflows.push(wf);
+    }
+
+    closeWorkflowModal();
+    renderWorkflowList();
+  }
+
+  /**
+   * ワークフロー一覧 1 行を生成する（第1階層）
+   * @param {Object} wf - ワークフロー定義
+   * @returns {HTMLElement} .kc-workflow-row 要素
+   */
+  function buildWorkflowListRow(wf) {
+    var row = document.createElement('div');
+    row.className = 'kc-workflow-row';
+    row.dataset.workflowId = wf.id;
+
+    var handle = buildDragHandle();
+    attachRowDragEvents(row, handle);
+
+    var cellHandle = document.createElement('div');
+    cellHandle.className = 'kc-workflow-cell kc-workflow-col-handle';
+    cellHandle.appendChild(handle);
+
+    var cellName = document.createElement('div');
+    cellName.className = 'kc-workflow-cell kc-workflow-col-name';
+    cellName.textContent = wf.name || '(無題)';
+
+    var cellTrigger = document.createElement('div');
+    cellTrigger.className = 'kc-workflow-cell kc-workflow-col-trigger';
+    var badge = document.createElement('span');
+    badge.className = 'kc-workflow-trigger-badge';
+    badge.textContent = WORKFLOW_TRIGGER_LABELS[wf.trigger && wf.trigger.type] || (wf.trigger && wf.trigger.type) || '';
+    cellTrigger.appendChild(badge);
+
+    var cellEnabled = document.createElement('div');
+    cellEnabled.className = 'kc-workflow-cell kc-workflow-col-enabled';
+    var enabledLabel = document.createElement('label');
+    enabledLabel.className = 'kc-config-checkbox-label kc-workflow-enabled-label';
+    var enabledCheckbox = document.createElement('input');
+    enabledCheckbox.type = 'checkbox';
+    enabledCheckbox.className = 'kc-workflow-enabled-toggle';
+    enabledCheckbox.checked = wf.enabled !== false;
+    enabledLabel.appendChild(enabledCheckbox);
+    cellEnabled.appendChild(enabledLabel);
+
+    var cellActions = document.createElement('div');
+    cellActions.className = 'kc-workflow-cell kc-workflow-col-actions';
+    cellActions.textContent = String((wf.actions || []).length);
+
+    var cellOp = document.createElement('div');
+    cellOp.className = 'kc-workflow-cell kc-workflow-col-op';
+    var editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'kc-config-btn kc-config-btn-secondary kc-workflow-edit-btn';
+    editBtn.textContent = '編集';
+    editBtn.addEventListener('click', function () { openWorkflowModal(wf); });
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn kc-workflow-list-del-btn';
+    delBtn.textContent = '−';
+    delBtn.addEventListener('click', function () {
+      if (!window.confirm('ワークフロー「' + (wf.name || '(無題)') + '」を削除しますか？')) return;
+      // 削除前に DnD 並び替え/有効トグルの現在の DOM 状態を配列へ同期してから対象を除外する
+      currentConfig.workflows = collectWorkflows().filter(function (w) { return w.id !== wf.id; });
+      renderWorkflowList();
+    });
+    cellOp.appendChild(editBtn);
+    cellOp.appendChild(delBtn);
+
+    row.appendChild(cellHandle);
+    row.appendChild(cellName);
+    row.appendChild(cellTrigger);
+    row.appendChild(cellEnabled);
+    row.appendChild(cellActions);
+    row.appendChild(cellOp);
+
+    return row;
+  }
+
+  /**
+   * currentConfig.workflows の内容でワークフロー一覧 DOM を再構築する
+   */
+  function renderWorkflowList() {
+    if (!elWorkflowRows) return;
+    elWorkflowRows.innerHTML = '';
+    (currentConfig.workflows || []).forEach(function (wf) {
+      elWorkflowRows.appendChild(buildWorkflowListRow(wf));
+    });
+  }
+
+  /**
+   * ワークフロー一覧 DOM から最終的な workflows 配列を収集する。
+   * DOM 上の並び順（DnD 並び替え後）に従って currentConfig.workflows を再構成し、
+   * 有効/無効トグルの現在値も反映する（保存時に呼び出す。§3.10）。
+   * @returns {Array<Object>}
+   */
+  function collectWorkflows() {
+    if (!elWorkflowRows) return currentConfig.workflows || [];
+    var rows = elWorkflowRows.querySelectorAll('.kc-workflow-row');
+    var ordered = [];
+    rows.forEach(function (row) {
+      var id = row.dataset.workflowId;
+      var wf = (currentConfig.workflows || []).filter(function (w) { return w.id === id; })[0];
+      if (!wf) return;
+      var toggle = row.querySelector('.kc-workflow-enabled-toggle');
+      if (toggle) { wf.enabled = toggle.checked; }
+      ordered.push(wf);
+    });
+    return ordered;
   }
 
   /* ====================================================================
@@ -2742,7 +3803,7 @@
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
       currentConfig = {
-        version: 12,
+        version: 13,
         fieldMapping: {},
         permissionRules: [],
         fieldValueRules: [],
@@ -2754,7 +3815,8 @@
           textColor:  '#000000'
         },
         filterConfig: _buildDefaultFilterConfig(),
-        views: {}
+        views: {},
+        workflows: []
       };
       return;
     }
@@ -2850,6 +3912,16 @@
       parsed.version = 12;
     }
 
+    // version 12 → 13 マイグレーション（workflows 追加。REQ_workflow-actions §3.9）
+    // 未定義または配列でない場合は [] で補完する（searchTargets/filterConfig 追加時と同じパターン）
+    if (Number(parsed.version) < 13) {
+      console.log('[KC Config] version 12 → 13 へマイグレーション実行');
+      if (!Array.isArray(parsed.workflows)) {
+        parsed.workflows = [];
+      }
+      parsed.version = 13;
+    }
+
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
@@ -2864,7 +3936,7 @@
     }
 
     currentConfig = {
-      version:           12,
+      version:           13,
       fieldMapping:      fm,
       permissionRules:   rules,
       fieldValueRules:   Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
@@ -2878,7 +3950,8 @@
       filterConfig:      (parsed.filterConfig && Array.isArray(parsed.filterConfig.groups))
         ? parsed.filterConfig
         : _buildDefaultFilterConfig(),
-      views:             parsed.views || {}
+      views:             parsed.views || {},
+      workflows:         Array.isArray(parsed.workflows) ? parsed.workflows : []
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
   }
@@ -2980,6 +4053,20 @@
         });
       });
       searchTargetFieldOptions.sort(function (a, b) {
+        if (a.label < b.label) return -1;
+        if (a.label > b.label) return 1;
+        return 0;
+      });
+
+      // ワークフロー設定 UI 用: 自アプリの全フィールド一覧を収集する（REQ_workflow-actions §3.4.3）
+      // SUBTABLE/GROUP/REFERENCE_TABLE は単純な値として扱えないため除外する
+      ownAppFieldOptions = [];
+      Object.keys(props).forEach(function (code) {
+        var field = props[code];
+        if (WORKFLOW_EXCLUDED_SOURCE_TYPES.indexOf(field.type) !== -1) return;
+        ownAppFieldOptions.push({ code: code, label: field.label || code, type: field.type });
+      });
+      ownAppFieldOptions.sort(function (a, b) {
         if (a.label < b.label) return -1;
         if (a.label > b.label) return 1;
         return 0;
@@ -3412,6 +4499,9 @@
     // フィルタ設定を収集して currentConfig.filterConfig を更新（REQ_checkbox-filter §6.4, §7）
     currentConfig.filterConfig = collectFilterConfig();
 
+    // ワークフロー設定を収集して currentConfig.workflows を更新（REQ_workflow-actions §3.10）
+    currentConfig.workflows = collectWorkflows();
+
     // 現在の編集中ビューの個別設定を保存 (新規作成時は後で ID 確定後に保存)
     if (currentViewId) {
       currentConfig.views[currentViewId] = collectViewConfig();
@@ -3433,6 +4523,13 @@
     var validation = validateConfig(currentConfig.fieldMapping, viewCfg);
     if (!validation.valid) {
       showError(validation.errors.join('\n'));
+      return false;
+    }
+
+    // ワークフロー設定のバリデーション（AC-9: CHECK_BOX→単一値マッピング等をブロック）
+    var workflowError = validateAllWorkflowsMappings(currentConfig.workflows || []);
+    if (workflowError) {
+      showError(workflowError);
       return false;
     }
 
@@ -3521,9 +4618,10 @@
         mailLoginUserDefault: mailLoginUserDefault
       });
 
-      // 最終的な保存オブジェクト (version 12 形式: permissionRules + fieldValueRules + searchTargets + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig を含む)
+      // 最終的な保存オブジェクト (version 13 形式: permissionRules + fieldValueRules + searchTargets
+      // + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig + workflows を含む)
       var finalConfig = {
-        version: 12,
+        version: 13,
         fieldMapping:       updatedFieldMapping,
         permissionRules:    currentConfig.permissionRules    || [],
         fieldValueRules:    currentConfig.fieldValueRules    || [],
@@ -3532,7 +4630,8 @@
           enabled: false, permission: 'view', bgColor: '#bdbdbd', textColor: '#000000'
         },
         filterConfig:       currentConfig.filterConfig || _buildDefaultFilterConfig(),
-        views:              mergedViews
+        views:              mergedViews,
+        workflows:          currentConfig.workflows || []
       };
 
       // kintone の required_params チェックは setConfig 第1引数の最上位キーと照合する仕様。
@@ -3698,6 +4797,17 @@
     // 2.5. プロセス管理ステータスを取得する（権限フィールド設定の STATUS 選択肢に使用）
     await loadStatuses();
 
+    // 2.6. プロセス管理が有効な場合、ワークフロー設定 UI 用の自アプリフィールド一覧に
+    // $status（ステータス）を追加する（loadFields 完了時点では statusEnabled が未確定のためここで行う）
+    if (statusEnabled && ownAppFieldOptions.filter(function (f) { return f.code === '$status'; }).length === 0) {
+      ownAppFieldOptions.push({ code: '$status', label: 'ステータス', type: 'STATUS' });
+      ownAppFieldOptions.sort(function (a, b) {
+        if (a.label < b.label) return -1;
+        if (a.label > b.label) return 1;
+        return 0;
+      });
+    }
+
     // 3. 共通設定 (fieldMapping) をフォームに反映
     applyFieldMapping(currentConfig.fieldMapping);
 
@@ -3749,6 +4859,10 @@
       currentConfig.searchTargets = searchTargetsForApply.slice();
     }
     applySearchTargets(searchTargetsForApply);
+
+    // 3.66. ワークフロー設定 (workflows) を一覧に反映（REQ_workflow-actions §3.10）
+    // loadFields + loadStatuses 完了後に呼ぶこと（ownAppFieldOptions が確定している必要があるため）
+    renderWorkflowList();
 
     // 3.7. メールアドレス初期値チェックボックスを設定値から反映し disabled 状態を更新する
     if (elMailLoginUserDefault) {
@@ -3847,6 +4961,39 @@
         if (elFilterGroupRows) {
           elFilterGroupRows.appendChild(buildFilterGroupRow(null));
         }
+      });
+    }
+
+    // ワークフロー設定 − 一覧「+ ワークフローを追加」ボタン（REQ_workflow-actions §3.10）
+    if (elWorkflowAdd) {
+      elWorkflowAdd.addEventListener('click', function () { openWorkflowModal(null); });
+    }
+    // ワークフロー編集モーダル − 閉じる / キャンセル / 背景クリック
+    if (elWorkflowModalClose) {
+      elWorkflowModalClose.addEventListener('click', closeWorkflowModal);
+    }
+    if (elWorkflowModalCancel) {
+      elWorkflowModalCancel.addEventListener('click', closeWorkflowModal);
+    }
+    if (elWorkflowModal) {
+      elWorkflowModal.addEventListener('click', function (e) {
+        if (e.target === elWorkflowModal) { closeWorkflowModal(); }
+      });
+    }
+    // ワークフロー編集モーダル − 適用ボタン
+    if (elWorkflowModalApply) {
+      elWorkflowModalApply.addEventListener('click', handleWorkflowModalApply);
+    }
+    // ワークフロー編集モーダル − 発火条件「+ 条件を追加」ボタン
+    if (elWfConditionAdd) {
+      elWfConditionAdd.addEventListener('click', function () {
+        if (elWfConditionRows) { elWfConditionRows.appendChild(buildWorkflowConditionRow(null)); }
+      });
+    }
+    // ワークフロー編集モーダル − アクション「+ アクションを追加」ボタン
+    if (elWfActionAdd) {
+      elWfActionAdd.addEventListener('click', function () {
+        if (elWfActionRows) { elWfActionRows.appendChild(buildWorkflowActionBlock(null)); }
       });
     }
 

@@ -1572,3 +1572,308 @@ body {
 .kc-filter-group-add-row {
   margin-top: 4px;
 }
+
+/* ====================================================================
+ * ワークフロー設定 UI (REQ_workflow-actions §3.10)
+ * 第1階層: 一覧テーブル（.kc-workflow-*） / 第2階層: 編集モーダル（.kc-wf-*）
+ * ==================================================================== */
+
+/* --- 第1階層: ワークフロー一覧テーブル --- */
+
+.kc-workflow-table {
+  border: 1px solid #d8dce4;
+  border-radius: 4px;
+  overflow: visible;
+  margin-bottom: 10px;
+}
+
+.kc-workflow-header {
+  display: grid;
+  grid-template-columns: 24px 2fr 1.4fr 60px 90px 120px;
+  gap: 8px;
+  align-items: center;
+  background: #e8ecf1;
+  border-bottom: 1px solid #d0d5df;
+  padding: 6px 8px;
+}
+
+.kc-workflow-header-col {
+  font-size: 12px;
+  font-weight: bold;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kc-workflow-rows {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+.kc-workflow-row {
+  display: grid;
+  grid-template-columns: 24px 2fr 1.4fr 60px 90px 120px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eaecf0;
+  transition: background 0.1s;
+}
+
+.kc-workflow-row:last-child:not(.kc-drag-over-bottom) {
+  border-bottom: none;
+}
+
+.kc-workflow-row:hover {
+  background: #f0f4f8;
+}
+
+.kc-workflow-cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kc-workflow-col-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kc-workflow-col-name {
+  font-size: 13px;
+  color: #333;
+}
+
+.kc-workflow-trigger-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #e3f0fd;
+  color: #1976d2;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.kc-workflow-col-enabled,
+.kc-workflow-col-actions {
+  text-align: center;
+}
+
+.kc-workflow-enabled-label {
+  margin: 0;
+  justify-content: center;
+}
+
+.kc-workflow-col-op {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.kc-workflow-edit-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.kc-workflow-add-row {
+  margin-top: 0;
+}
+
+/* --- 第2階層: ワークフロー編集モーダル --- */
+
+/* 通常の .kc-modal-content（480px 固定）より情報量が多いため横幅・高さを拡張する（U-7） */
+.kc-modal-content--wide {
+  width: 800px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+}
+
+.kc-modal-content--wide .kc-modal-header,
+.kc-modal-content--wide .kc-modal-footer {
+  flex-shrink: 0;
+}
+
+/* 本文エリアをスクロール可能にする（U-7: モーダル自体の高さは画面に収め、中身だけスクロール） */
+.kc-modal-body--scroll {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.kc-workflow-modal-error {
+  color: #d93025;
+  min-height: 1.2em;
+}
+
+.kc-workflow-modal-subtitle {
+  margin: 18px 0 8px;
+  font-size: 13px;
+  font-weight: bold;
+  color: #444;
+  border-top: 1px solid #e0e0e0;
+  padding-top: 14px;
+}
+
+/* 発火条件 1 行（フィールド選択 / 値 / 削除） */
+.kc-wf-condition-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.kc-wf-condition-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1.2fr 40px;
+  gap: 8px;
+  align-items: center;
+}
+
+.kc-wf-cond-value-wrapper select,
+.kc-wf-cond-value-wrapper input {
+  width: 100%;
+}
+
+/* アクションブロック（対象アプリ・動作モード・キー・マッピング・失敗時継続を内包するカード） */
+.kc-wf-action-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.kc-workflow-action-block {
+  border: 1px solid #d8dce4;
+  border-radius: 6px;
+  background: #f8f9fb;
+  overflow: visible;
+}
+
+.kc-workflow-action-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #e8ecf1;
+  border-bottom: 1px solid #d0d5df;
+  border-radius: 6px 6px 0 0;
+}
+
+.kc-workflow-action-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: bold;
+  color: #444;
+}
+
+.kc-workflow-action-body {
+  padding: 12px 14px 14px;
+}
+
+.kc-workflow-appid-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.kc-workflow-appid-row .kc-workflow-action-appid {
+  width: 120px;
+  flex-shrink: 0;
+}
+
+.kc-workflow-fetch-status {
+  font-size: 12px;
+  color: #777;
+}
+
+.kc-workflow-fetch-status--ok {
+  color: #1e7e34;
+}
+
+.kc-workflow-fetch-status--error {
+  color: #d93025;
+}
+
+/* キー一致設定エリア（自アプリキー = 対象アプリキー） */
+.kc-workflow-keyarea {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.kc-workflow-keyarea-col {
+  flex: 1;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kc-workflow-keyarea-arrow {
+  padding-bottom: 8px;
+  font-size: 14px;
+  color: #777;
+}
+
+/* フィールドマッピング行（対象フィールド / ソース種別 / 値 / 削除） */
+.kc-workflow-mapping-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.kc-workflow-mapping-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1.4fr 40px;
+  gap: 8px;
+  align-items: center;
+}
+
+.kc-workflow-mapping-value-wrapper {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.kc-workflow-mapping-value-wrapper select,
+.kc-workflow-mapping-value-wrapper input {
+  width: 100%;
+}
+
+.kc-workflow-mapping-add-btn {
+  margin-bottom: 12px;
+}
+
+.kc-workflow-continue-row {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+@media (max-width: 600px) {
+  .kc-modal-content--wide {
+    width: 100%;
+  }
+
+  .kc-workflow-header,
+  .kc-workflow-row {
+    grid-template-columns: 20px 1.6fr 1fr 44px 60px 90px;
+    font-size: 12px;
+  }
+
+  .kc-wf-condition-row,
+  .kc-workflow-mapping-row {
+    grid-template-columns: 1fr;
+  }
+}

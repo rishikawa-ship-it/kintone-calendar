@@ -320,6 +320,10 @@
         ? config.filterConfig
         : { groups: [] };
 
+      // ワークフロー設定 (version 13 以降) を適用 (REQ_workflow-actions §3.9)
+      // v12 以前の設定では workflows が存在しないため空配列で初期化する
+      KC.Config.WORKFLOWS = Array.isArray(config.workflows) ? config.workflows : [];
+
       // メールアドレス初期値設定 (fieldMapping.mailLoginUserDefault が存在しない場合は false: 後方互換デフォルト)
       KC.Config.MAIL_LOGIN_USER_DEFAULT =
         (config.fieldMapping && config.fieldMapping.mailLoginUserDefault === true);
@@ -451,6 +455,13 @@
    * @type {{ groups: Array }}
    */
   KC.Config.FILTER_CONFIG = { groups: [] };
+
+  /**
+   * ワークフロー定義配列 (REQ_workflow-actions §3.9, config version 13)
+   * loadFromPluginConfig で上書きされる。初期値は空配列 = ワークフロー機能なし
+   * @type {Array<{id, name, enabled, trigger, conditions, actions}>}
+   */
+  KC.Config.WORKFLOWS = [];
 
   /**
    * P-7: loadEvents が使う fields パラメータのキャッシュ。
@@ -1492,6 +1503,15 @@
      */
     _savePending: false,
     /**
+     * REQ_workflow-actions §8.3: 現在開いているモーダルが「新規作成」か「編集」かを示す。
+     * 'create' | 'edit' | null（未オープン）。
+     * openCreate() で 'create'、openEdit() で 'edit' をセットする（_show() 呼び出し前）。
+     * 保存成功検知（load ハンドラ／ポーリングの2箇所）でこの値を参照し、
+     * recordCreate / recordUpdate のどちらのワークフロートリガーを発火するか判定する。
+     * _close() で null に戻し、次回モーダルへ状態が残らないようにする。
+     */
+    _mode: null,
+    /**
      * 保存ボタン検知用 MutationObserver（動的生成対応。null = 未使用 or 停止済み）。
      * _close() 時に disconnect() してリークを防ぐ。
      */
@@ -1789,6 +1809,10 @@
       iframe.className = 'kc-modal-iframe';
       iframe.title = 'レコード詳細';
       iframe.style.visibility = 'hidden';
+      // REQ_workflow-actions §3.1・§3.5・§8.1: この iframe が「カレンダーのモーダル」であることを示す
+      // マーカー。iframe 内で実行される desktop.js の app.record.*.submit.success ハンドラが
+      // recordCreate/recordUpdate トリガーの二重発火防止判定に使用する（window.frameElement.dataset.kcModal）。
+      iframe.dataset.kcModal = '1';
 
       // --- frame busting 対策: sandbox 属性 ---
       // allow-top-navigation を除外することで、iframe 内から window.top.location を変更する
@@ -1849,6 +1873,16 @@
             }
             if (KC.Render && typeof KC.Render._refreshImmediate === 'function') {
               KC.Render._refreshImmediate();
+            }
+            // REQ_workflow-actions §3.1(b)・§3.6 NFR-2・§8.1: recordCreate/recordUpdate トリガーを
+            // 非同期・fire-and-forget で起動する（await しない。モーダルクローズ・再描画をブロックしない）。
+            // KC.Popup._mode（openCreate/openEdit でセット）で新規作成/編集を判定する（§8.3）。
+            if (KC.Workflow && typeof KC.Workflow.notifyRecordSave === 'function') {
+              var wfRecMatchLoad = /record=(\d+)/.exec(loc.hash);
+              if (wfRecMatchLoad) {
+                var wfTriggerLoad = (KC.Popup._mode === 'create') ? 'recordCreate' : 'recordUpdate';
+                KC.Workflow.notifyRecordSave(wfTriggerLoad, wfRecMatchLoad[1]);
+              }
             }
             KC.Popup._close();
             return;
@@ -1917,6 +1951,16 @@
             }
             if (KC.Render && typeof KC.Render._refreshImmediate === 'function') {
               KC.Render._refreshImmediate();
+            }
+            // REQ_workflow-actions §3.1(b)・§3.6 NFR-2・§8.1: recordCreate/recordUpdate トリガーを
+            // 非同期・fire-and-forget で起動する（await しない。モーダルクローズ・再描画をブロックしない）。
+            // KC.Popup._mode（openCreate/openEdit でセット）で新規作成/編集を判定する（§8.3）。
+            if (KC.Workflow && typeof KC.Workflow.notifyRecordSave === 'function') {
+              var wfRecMatchPoll = /record=(\d+)/.exec(loc.hash);
+              if (wfRecMatchPoll) {
+                var wfTriggerPoll = (KC.Popup._mode === 'create') ? 'recordCreate' : 'recordUpdate';
+                KC.Workflow.notifyRecordSave(wfTriggerPoll, wfRecMatchPoll[1]);
+              }
             }
             KC.Popup._close();
             return;
@@ -1996,6 +2040,9 @@
       // 保存待ちフラグをリセット（閉じたので保留中の保存状態はクリア）
       KC.Popup._savePending = false;
 
+      // REQ_workflow-actions §8.3: 作成/編集モードを次回オープンに持ち越さないようリセットする
+      KC.Popup._mode = null;
+
       // iframe を DOM から削除（これにより以降の load イベントは発火しない）
       if (this._iframe && this._iframe.parentNode) {
         this._body.removeChild(this._iframe);
@@ -2048,6 +2095,9 @@
       }
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/edit';
+      // REQ_workflow-actions §8.3: 新規作成モーダルであることを記録する（_show() 呼び出し前にセット）。
+      // 保存成功検知時にこの値を見て recordCreate トリガーを発火する。
+      KC.Popup._mode = 'create';
       this._show(url);
     },
 
@@ -2078,6 +2128,9 @@
       var appId = KC.Config.getAppId();
       var url = '/k/' + appId + '/show#record=' + recordId;
       _log('[KC.Popup.openEdit] open modal:', url);
+      // REQ_workflow-actions §8.3: 編集モーダルであることを記録する（_show() 呼び出し前にセット）。
+      // 保存成功検知時にこの値を見て recordUpdate トリガーを発火する。
+      KC.Popup._mode = 'edit';
       this._show(url);
     }
   };
@@ -2374,6 +2427,12 @@
           // currentEv は live reference なので、ここで更新すれば次回ドラッグ時も最新 rev が使われる
           if (resp && resp.revision && currentEv) {
             currentEv.rev = resp.revision;
+          }
+          // REQ_workflow-actions §3.1(a)・§3.6 NFR-2・§8.1: PUT 成功コールバック内で recordUpdate
+          // トリガーを非同期・fire-and-forget で起動する（await しない。DnD の UI 応答をブロックしない）。
+          // DnD は常に既存レコードの更新（移動・リサイズ）のため recordUpdate 固定でよい。
+          if (KC.Workflow && typeof KC.Workflow.notifyRecordSave === 'function') {
+            KC.Workflow.notifyRecordSave('recordUpdate', currentEv ? currentEv.id : origEv.id);
           }
         })
         .catch(function (err) {
@@ -7045,6 +7104,306 @@
   };
 
   /* ====================================================================
+   * KC.Workflow — ワークフロー（別アプリ連携アクション）実行エンジン
+   * REQ_workflow-actions 準拠
+   *
+   * 構造方針（要件書「将来拡張を見据えた構造要件」）:
+   *   - KC.Workflow.Core は「レコードオブジェクト（kintone REST 形式）+ ワークフロー定義」のみを
+   *     入力として受け取る純粋な実行部とし、KcEvent / KC.Popup 等のカレンダー固有オブジェクトに
+   *     直接依存させない（将来 kc-workflow-core.js への切り出しを見据えた設計）。
+   *   - トリガー側（recordCreate/recordUpdate の DnD/モーダル/標準画面経路の getRecord 補完、
+   *     recordDelete の event.record スナップショット利用など）は KC.Workflow 本体（Core 以外）が担当する。
+   *
+   * §8 改訂1（トリガー再編・2026-07-15）: トリガーの切り口を「経路別」から「操作別」（recordCreate /
+   * recordUpdate / recordDelete の3種）に変更。DnD・モーダル・kintone標準画面のいずれの経路でも、
+   * 操作（作成/更新/削除）が同じであれば同一トリガーとして扱う（経路の区別はしない）。
+   * ==================================================================== */
+  KC.Workflow = {
+    /**
+     * 指定トリガー種別に該当する有効なワークフローを起動する（非同期・fire-and-forget 前提）。
+     * 呼び出し元は await しないこと（NFR-2）。
+     * @param {string} triggerType - 'recordCreate' | 'recordUpdate' | 'recordDelete'
+     * @param {Object} record - kintone REST 形式のレコードオブジェクト
+     * @returns {Promise<void>}
+     */
+    run: async function (triggerType, record) {
+      try {
+        var workflows = KC.Workflow._getEnabledWorkflows(triggerType);
+        if (workflows.length === 0) return;
+        for (var i = 0; i < workflows.length; i++) {
+          await KC.Workflow._runOne(workflows[i], record);
+        }
+      } catch (e) {
+        // ベストエフォート方針（§3.7 NFR-3）: catch した例外はすべて失敗扱いとし、
+        // カレンダー本体の操作には影響させない
+        console.error('[KC.Workflow.run] 予期しないエラー:', e);
+      }
+    },
+
+    /**
+     * 指定トリガー種別に該当する有効なワークフロー定義を抽出する（run/notifyRecordSave 共通）。
+     * @param {string} triggerType
+     * @returns {Array}
+     */
+    _getEnabledWorkflows: function (triggerType) {
+      return (KC.Config.WORKFLOWS || []).filter(function (wf) {
+        return wf && wf.enabled !== false && wf.trigger && wf.trigger.type === triggerType;
+      });
+    },
+
+    /**
+     * 1 ワークフローの発火条件判定 + アクション逐次実行を行う。
+     * @param {Object} workflow - ワークフロー定義
+     * @param {Object} record   - kintone REST 形式のレコード
+     */
+    _runOne: async function (workflow, record) {
+      try {
+        if (!KC.Workflow.Core.matchesConditions(record, workflow.conditions || [])) {
+          _log('[KC.Workflow] 発火条件に一致しないためスキップ:', workflow.name);
+          return;
+        }
+        var actions = workflow.actions || [];
+        for (var i = 0; i < actions.length; i++) {
+          var action = actions[i];
+          try {
+            await KC.Workflow.Core.executeAction(action, record);
+            _log('[KC.Workflow] アクション実行成功:', workflow.name, '#' + (i + 1));
+          } catch (actionErr) {
+            // U-1 確定事項: エラーコードによらず catch した例外はすべて失敗扱いにする
+            console.error('[KC.Workflow] アクション実行失敗: workflow="' + workflow.name +
+              '" action#' + (i + 1) + ' targetApp=' + action.targetAppId, actionErr);
+            // R-2 簡易解決: DnD 重複チェックバナーとの競合は後勝ち上書きを許容し、
+            // console.error には必ず全件記録する（既に上で記録済み）
+            KC.Banner.show(
+              'ワークフロー「' + workflow.name + '」のアクションが失敗しました: ' +
+              (actionErr && actionErr.message ? actionErr.message : String(actionErr)),
+              { hideReload: true }
+            );
+            // U-5 確定事項: 既定は継続。action.continueOnError === false の場合のみ中断する
+            if (action.continueOnError === false) {
+              break;
+            }
+          }
+        }
+      } catch (wfErr) {
+        console.error('[KC.Workflow] ワークフロー実行エラー:', workflow.name, wfErr);
+      }
+    },
+
+    /**
+     * recordCreate / recordUpdate トリガーを起動する（fire-and-forget）。
+     * DnD・モーダル保存のいずれの経路でも、レコード ID から KC.Api.getRecord() で
+     * 全フィールドを再取得してから条件判定・マッピングを行う（§2.1.1, §3.4.3, R-4）。
+     * KcEvent が保持するフィールドのみでは任意フィールド参照のワークフロー要件を満たせないため、
+     * 常に GET で正規化したレコードを使う設計とした（R-4 で許容済みの追加 API 呼び出し）。
+     * §8 改訂1: トリガー種別を引数化し、呼び出し元（DnD は 'recordUpdate' 固定、モーダルは
+     * KC.Popup._mode に応じて 'recordCreate' / 'recordUpdate'）で発火種別を決定させる。
+     * @param {string} triggerType - 'recordCreate' | 'recordUpdate'
+     * @param {string|number} recordId
+     */
+    notifyRecordSave: function (triggerType, recordId) {
+      if (recordId === undefined || recordId === null || recordId === '') return;
+      // 修正1: 該当トリガー種別のワークフローが0件の場合は
+      // GET 自体を発行しない（既存ユーザーへの無用な API 呼び出し抑止）
+      if (KC.Workflow._getEnabledWorkflows(triggerType).length === 0) return;
+      KC.Api.getRecord(recordId).then(function (resp) {
+        return KC.Workflow.run(triggerType, resp.record);
+      }).catch(function (e) {
+        console.error('[KC.Workflow.notifyRecordSave] レコード取得に失敗:', e);
+        KC.Banner.show('ワークフローの実行に失敗しました（レコード取得エラー）。', { hideReload: true });
+      });
+    },
+
+    /**
+     * KC.Workflow.Core — 汎用実行部（カレンダー固有オブジェクトに非依存）。
+     * 入力は「kintone REST 形式のレコード + ワークフロー/アクション定義」のみ。
+     */
+    Core: {
+      /** 選択肢型（値の完全一致判定に in/includes を使う型） */
+      CHOICE_TYPES: ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'STATUS'],
+
+      /**
+       * 発火条件（AND 結合）を判定する（§3.3, U-2 確定）
+       * @param {Object} record - kintone REST 形式のレコード
+       * @param {Array} conditions - [{ fieldCode, fieldType, value }]
+       * @returns {boolean}
+       */
+      matchesConditions: function (record, conditions) {
+        if (!conditions || conditions.length === 0) return true;
+        for (var i = 0; i < conditions.length; i++) {
+          if (!KC.Workflow.Core._matchesOneCondition(record, conditions[i])) return false;
+        }
+        return true;
+      },
+
+      _matchesOneCondition: function (record, cond) {
+        var fieldCode = cond.fieldCode;
+        if (!fieldCode || !record[fieldCode]) return false;
+        var actual = record[fieldCode].value;
+        var fieldType = cond.fieldType;
+        if (fieldType === 'CHECK_BOX') {
+          return Array.isArray(actual) && actual.indexOf(cond.value) !== -1;
+        }
+        if (fieldType === 'USER_SELECT') {
+          return Array.isArray(actual) && actual.some(function (u) { return u && u.code === cond.value; });
+        }
+        // 修正4: NUMBER フィールドは "10" と "10.0" 等の表記ゆれを吸収するため数値比較する。
+        // どちらかが Number() で NaN になる場合は従来の文字列完全一致にフォールバックする。
+        if (fieldType === 'NUMBER') {
+          var actualNum = Number(actual);
+          var condNum = Number(cond.value);
+          if (!isNaN(actualNum) && !isNaN(condNum)) {
+            return actualNum === condNum;
+          }
+        }
+        // DROP_DOWN / RADIO_BUTTON / STATUS / 文字列・数値系フィールド: 完全一致（U-2 確定）
+        return String(actual != null ? actual : '') === String(cond.value);
+      },
+
+      /**
+       * 1 アクション（対象アプリへの検索・作成・更新）を実行する。
+       * @param {Object} action - アクション定義
+       * @param {Object} sourceRecord - 自アプリのレコード（kintone REST 形式）
+       */
+      executeAction: async function (action, sourceRecord) {
+        if (!action || !action.targetAppId) {
+          throw new Error('対象アプリIDが設定されていません。');
+        }
+        var targetRecord = KC.Workflow.Core._buildTargetRecord(action, sourceRecord);
+
+        if (action.mode === 'createOnly') {
+          await KC.Workflow.Core._createRecord(action.targetAppId, targetRecord);
+          return;
+        }
+
+        // updateOnly / upsert: キー一致検索（§3.4.2, §3.4.4）
+        var matched = await KC.Workflow.Core._findByKey(action, sourceRecord);
+        if (matched.length > 1) {
+          // AC-6: 複数件ヒット時は更新をブロックしエラー扱い（固定・§3.4.4）
+          throw new Error(
+            'キー「' + (action.matchKey && action.matchKey.sourceFieldCode) + '」に一致するレコードが' +
+            '対象アプリ側に複数件見つかったため、更新をスキップしました。'
+          );
+        }
+        if (matched.length === 1) {
+          await KC.Workflow.Core._updateRecord(action.targetAppId, matched[0].$id.value, targetRecord);
+          return;
+        }
+        // 0件ヒット
+        if (action.mode === 'upsert') {
+          await KC.Workflow.Core._createRecord(action.targetAppId, targetRecord);
+        }
+        // updateOnly で 0 件の場合は「何もしない」（エラー扱いにしない。§3.4.2）
+      },
+
+      /**
+       * キー一致検索を行う（更新のみ / upsert モード用）。
+       * @param {Object} action
+       * @param {Object} sourceRecord
+       * @returns {Promise<Array>} ヒットしたレコード配列（$id のみ取得）
+       */
+      _findByKey: async function (action, sourceRecord) {
+        var matchKey = action.matchKey;
+        if (!matchKey || !matchKey.sourceFieldCode || !matchKey.targetFieldCode) {
+          throw new Error('キー一致設定（自アプリ⇔対象アプリのフィールド）が不足しています。');
+        }
+        var srcField = sourceRecord[matchKey.sourceFieldCode];
+        var keyValue = srcField && srcField.value != null ? srcField.value : '';
+        // 修正2(b) 二段防御: 設定画面側で配列型を除外していても、既存設定データ（旧バージョン作成分等）に
+        // 配列型フィールドがキーに残っている場合、サイレントに [] を返すと upsert が毎回新規作成を
+        // 繰り返してしまう（NFR-3 違反）。明示的に throw して KC.Banner + console.error の通知経路に乗せる。
+        if (Array.isArray(keyValue)) {
+          throw new Error(
+            'キー一致フィールド ' + matchKey.sourceFieldCode + ' は複数値型のためキーに使用できません。'
+          );
+        }
+        if (keyValue === '') {
+          // キー値が空の場合は判定不能としてヒットなし扱い（従来通り）
+          return [];
+        }
+        var query = '(' + matchKey.targetFieldCode + ' = "' +
+          String(keyValue).replace(/"/g, '\\"') + '") limit 2';
+        var url = kintone.api.url('/k/v1/records.json', true);
+        var resp = await kintone.api(url, 'GET', {
+          app: action.targetAppId,
+          query: query,
+          fields: ['$id']
+        });
+        return resp.records || [];
+      },
+
+      /** 対象アプリへレコードを新規作成する */
+      _createRecord: async function (targetAppId, targetRecord) {
+        var url = kintone.api.url('/k/v1/record.json', true);
+        return kintone.api(url, 'POST', { app: targetAppId, record: targetRecord });
+      },
+
+      /** 対象アプリのレコードを更新する */
+      _updateRecord: async function (targetAppId, targetRecordId, targetRecord) {
+        var url = kintone.api.url('/k/v1/record.json', true);
+        return kintone.api(url, 'PUT', { app: targetAppId, id: targetRecordId, record: targetRecord });
+      },
+
+      /**
+       * フィールドマッピングから対象アプリへ渡すレコードオブジェクトを組み立てる（§3.4.3）。
+       * sourceType は 'fixed' | 'field' の2値。未知の値は将来拡張分（例: 'userInput'）として
+       * スキップ + console.warn する防御的な分岐にする（要件書「将来拡張を見据えた構造要件」）。
+       * @param {Object} action
+       * @param {Object} sourceRecord
+       * @returns {Object} kintone REST 形式のレコードオブジェクト
+       */
+      _buildTargetRecord: function (action, sourceRecord) {
+        var record = {};
+        var mappings = action.fieldMappings || [];
+        for (var i = 0; i < mappings.length; i++) {
+          var m = mappings[i];
+          if (!m.targetFieldCode) continue;
+          if (m.sourceType === 'fixed') {
+            record[m.targetFieldCode] = { value: m.fixedValue !== undefined ? m.fixedValue : '' };
+          } else if (m.sourceType === 'field') {
+            record[m.targetFieldCode] = { value: KC.Workflow.Core._extractSourceValue(sourceRecord, m) };
+          } else {
+            console.warn('[KC.Workflow] 未知の sourceType をスキップ:', m.sourceType, m);
+          }
+        }
+        return record;
+      },
+
+      /**
+       * ソースフィールド値を取得し、必要に応じて型変換する（§3.4.3, U-4 確定）。
+       *   - USER_SELECT → 文字列: コード/名前を選択可能（既定コード）
+       *   - DATETIME → DATE: 日付部分のみ
+       *   - DATE → DATETIME: 00:00:00 を補完
+       * @param {Object} sourceRecord
+       * @param {Object} mapping
+       * @returns {*} 変換後の値
+       */
+      _extractSourceValue: function (sourceRecord, mapping) {
+        var srcCode = mapping.sourceFieldCode;
+        if (!srcCode || !sourceRecord[srcCode]) return '';
+        var srcField = sourceRecord[srcCode];
+        var srcType = mapping.sourceFieldType || '';
+        var targetType = mapping.targetFieldType || '';
+
+        if (srcType === 'USER_SELECT') {
+          var users = Array.isArray(srcField.value) ? srcField.value : [];
+          var useCode = mapping.userValueMode !== 'name';
+          return users.map(function (u) { return useCode ? (u.code || '') : (u.name || ''); }).join(', ');
+        }
+
+        if (srcType === 'DATETIME' && targetType === 'DATE') {
+          return srcField.value ? String(srcField.value).substring(0, 10) : '';
+        }
+        if (srcType === 'DATE' && targetType === 'DATETIME') {
+          return srcField.value ? (srcField.value + 'T00:00:00') : '';
+        }
+
+        return srcField.value;
+      }
+    }
+  };
+
+  /* ====================================================================
    * KC.Render — レンダラーファサード
    * ==================================================================== */
   KC.Render = {
@@ -10828,6 +11187,7 @@
 
   /* ====================================================================
    * 保存成功後にポップアップを閉じてカレンダーを更新
+   * + recordCreate / recordUpdate トリガー（REQ_workflow-actions §3.1・§3.5 NFR-1・§8）
    * ==================================================================== */
   kintone.events.on([
     'app.record.create.submit.success',
@@ -10835,22 +11195,72 @@
   ], function (event) {
     if (window.opener) {
       // 親ウィンドウのカレンダーをリフレッシュ
+      // 【旧実装・死んだ分岐】window.open による別ウィンドウポップアップ方式の名残。
+      // 現行の iframe オーバーレイモーダル方式（KC.Popup）では window.opener は常に null のため
+      // このブロックは実行されない。後方互換のため既存ロジックはそのまま維持する（§2.1.3 参照）。
       try { window.opener.KC_REFRESH && window.opener.KC_REFRESH(); } catch (e) {}
       window.close();
       return event;
     }
+
+    // recordCreate/recordUpdate トリガー判定（§3.1・§3.5 NFR-1・§8.1）:
+    // このハンドラは desktop.js がカレンダーの iframe モーダル内にも読み込まれるため、
+    // カレンダー経由の保存（recordCreate/recordUpdate 側が既に KC.Popup 経由で処理済み）と、
+    // このアプリの標準画面からの直接保存を区別する必要がある。
+    // iframe モーダル内での発火はスキップする（二重発火防止）。
+    var isInsideKcModalIframe = false;
+    try {
+      if (window.self !== window.top) {
+        if (window.frameElement && window.frameElement.dataset && window.frameElement.dataset.kcModal === '1') {
+          isInsideKcModalIframe = true;
+        } else if (!window.frameElement) {
+          // §7.2 R-5 フォールバック: window.frameElement が取得できない環境では、
+          // カレンダーモーダルかどうかまでは区別できないが、iframe 内であること自体を
+          // もって kcModal とみなしスキップする（本プラグイン管理外の iframe 埋め込みは
+          // 通常想定しにくいため許容する）
+          isInsideKcModalIframe = true;
+        }
+      }
+    } catch (frameErr) {
+      console.warn('[KC.Workflow] recordCreate/recordUpdate: iframe 判定に失敗:', frameErr);
+    }
+
+    if (!isInsideKcModalIframe && KC.Workflow && typeof KC.Workflow.run === 'function') {
+      // §8.1: 操作別トリガーへ再編。event.type で作成/更新を判定する
+      // （kintone イベントの event.type は発火元イベント名そのものを保持する。
+      //   desktop.js 内 _kcInitialEvent 判定箇所（app.record.edit.show 等）でも同様に使用している）。
+      var stdTriggerType = (event.type === 'app.record.create.submit.success') ? 'recordCreate' : 'recordUpdate';
+      // NFR-2: kintone イベントハンドラは同期的に return し、ワークフロー実行は待たない
+      KC.Workflow.run(stdTriggerType, event.record).catch(function (wfErr) {
+        console.error('[KC.Workflow] ' + stdTriggerType + ' 実行エラー:', wfErr);
+      });
+    }
+
     return event;
   });
 
   /* ====================================================================
    * 削除成功後も同様
+   * + recordDelete トリガー（REQ_workflow-actions §3.1・§3.8 NFR-4・§8）
    * ==================================================================== */
   kintone.events.on('app.record.detail.delete.submit', function (event) {
     if (window.opener) {
+      // 【旧実装・死んだ分岐】上記と同じ理由で現行方式では実行されないが後方互換のため維持
       try { window.opener.KC_REFRESH && window.opener.KC_REFRESH(); } catch (e) {}
       // 削除の場合はリダイレクトを防ぎ、ウィンドウを閉じる
       setTimeout(function () { window.close(); }, 500);
     }
+
+    // recordDelete トリガー（§3.8 NFR-4・§8.1、物理削除）: このイベントは削除実行前に発火し、
+    // event.record に削除対象レコードの全フィールド値（削除前スナップショット）が含まれる。
+    // 削除後は GET できないため、このスナップショットをそのまま条件判定・マッピングに使用する。
+    // モーダル内・標準画面のどちらから削除しても対象になる（AC-4。iframe 判定は行わない）。
+    if (KC.Workflow && typeof KC.Workflow.run === 'function') {
+      KC.Workflow.run('recordDelete', event.record).catch(function (wfErr) {
+        console.error('[KC.Workflow] recordDelete 実行エラー:', wfErr);
+      });
+    }
+
     return event;
   });
 

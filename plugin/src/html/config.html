@@ -488,6 +488,38 @@
         </section>
 
         <!-- ====================================================
+          セクション 6: ワークフロー (別アプリ連携アクション)
+          REQ_workflow-actions §3.10
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">ワークフロー</h2>
+          <p class="kc-config-section-desc">
+            レコードの作成・更新・削除（カレンダー操作・kintone 標準画面のいずれも対象）を起点に、
+            別の kintone アプリへレコードを追加・更新するアクションを設定します（全項目任意）。
+          </p>
+
+          <div class="kc-workflow-table">
+            <div class="kc-workflow-header">
+              <div class="kc-workflow-header-col kc-workflow-col-handle"></div>
+              <div class="kc-workflow-header-col kc-workflow-col-name">名前</div>
+              <div class="kc-workflow-header-col kc-workflow-col-trigger">トリガー</div>
+              <div class="kc-workflow-header-col kc-workflow-col-enabled">有効</div>
+              <div class="kc-workflow-header-col kc-workflow-col-actions">アクション数</div>
+              <div class="kc-workflow-header-col kc-workflow-col-op"></div>
+            </div>
+            <div id="kc-workflow-rows" class="kc-workflow-rows">
+              <!-- ワークフロー行を JavaScript で動的追加 -->
+            </div>
+          </div>
+
+          <div class="kc-workflow-add-row">
+            <button type="button" id="kc-workflow-add" class="kc-config-btn kc-config-btn-secondary">
+              + ワークフローを追加
+            </button>
+          </div>
+        </section>
+
+        <!-- ====================================================
           操作ボタン (ページ最下部)
         ==================================================== -->
         <div class="kc-config-actions">
@@ -525,6 +557,78 @@
         <div class="kc-modal-footer">
           <button type="button" id="kc-copy-execute" class="kc-config-btn kc-config-btn-primary">コピー実行</button>
           <button type="button" id="kc-copy-modal-cancel" class="kc-config-btn kc-config-btn-secondary">キャンセル</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ワークフロー編集モーダル (初期は hidden) REQ_workflow-actions §3.10 第2階層 -->
+    <div class="kc-modal-overlay" id="kc-workflow-modal" hidden aria-modal="true" role="dialog" aria-labelledby="kc-workflow-modal-title">
+      <div class="kc-modal-content kc-modal-content--wide">
+        <div class="kc-modal-header">
+          <h3 class="kc-modal-title" id="kc-workflow-modal-title">ワークフロー編集</h3>
+          <button type="button" class="kc-modal-close" id="kc-workflow-modal-close" aria-label="閉じる">×</button>
+        </div>
+        <div class="kc-modal-body kc-modal-body--scroll">
+          <p id="kc-workflow-modal-error" class="kc-modal-msg kc-workflow-modal-error" aria-live="polite"></p>
+
+          <div class="kc-config-field-group">
+            <label for="kc-wf-name" class="kc-config-label">
+              ワークフロー名 <span class="kc-required">*</span>
+            </label>
+            <input
+              type="text"
+              id="kc-wf-name"
+              class="kc-config-input"
+              maxlength="100"
+              placeholder="例: 設備予約を資産アプリへ反映"
+            />
+          </div>
+
+          <div class="kc-config-field-group">
+            <label class="kc-config-checkbox-label">
+              <input type="checkbox" id="kc-wf-enabled" checked />
+              有効化する
+            </label>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-wf-trigger" class="kc-config-label">トリガー</label>
+            <select id="kc-wf-trigger" class="kc-config-select">
+              <option value="recordCreate">レコード作成時</option>
+              <option value="recordUpdate">レコード更新時</option>
+              <option value="recordDelete">レコード削除時（物理削除）</option>
+            </select>
+            <p class="kc-config-hint">
+              カレンダー（DnD・モーダル）と kintone 標準画面のどちらの操作でも、
+              作成・更新・削除という操作の種類が同じであれば同じトリガーとして発火します。
+              論理削除（ステータス等の削除フラグ）を扱う場合は「レコード更新時」を選び、
+              発火条件に削除フラグの値を設定してください。条件に一致する状態で保存されるたびに実行されます。
+            </p>
+          </div>
+
+          <h4 class="kc-workflow-modal-subtitle">発火条件（すべて一致した場合のみ実行。0件の場合は常に実行）</h4>
+          <div id="kc-wf-condition-rows" class="kc-wf-condition-rows">
+            <!-- 発火条件行を JavaScript で動的追加 -->
+          </div>
+          <div class="kc-wf-condition-add-row">
+            <button type="button" id="kc-wf-condition-add" class="kc-config-btn kc-config-btn-secondary">
+              + 条件を追加
+            </button>
+          </div>
+
+          <h4 class="kc-workflow-modal-subtitle">アクション（上から順に実行。1件以上必須）</h4>
+          <div id="kc-wf-action-rows" class="kc-wf-action-rows">
+            <!-- アクションブロックを JavaScript で動的追加 -->
+          </div>
+          <div class="kc-wf-action-add-row">
+            <button type="button" id="kc-wf-action-add" class="kc-config-btn kc-config-btn-secondary">
+              + アクションを追加
+            </button>
+          </div>
+        </div>
+        <div class="kc-modal-footer">
+          <button type="button" id="kc-workflow-modal-apply" class="kc-config-btn kc-config-btn-primary">適用</button>
+          <button type="button" id="kc-workflow-modal-cancel" class="kc-config-btn kc-config-btn-secondary">キャンセル</button>
         </div>
       </div>
     </div>
