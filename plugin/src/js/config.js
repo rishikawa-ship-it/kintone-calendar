@@ -20,11 +20,16 @@
  *     searchTargets: [ { fieldCode: "memo" }, { fieldCode: "relatedMeetings" }, ... ],
  *     filterConfig: { groups: [ { id, label, type: 'assignee'|'fieldValue', fieldCode, fieldType, items: [ { id, label, value, defaultChecked } ] } ] },
  *     views: { "<viewId>": { calendarTitle, defaultView } },
- *     workflows: [ { id, name, enabled, trigger: { type }, conditions: [...], actions: [...] }, ... ]
- *       trigger.type: 'recordCreate' | 'recordUpdate'（§8 改訂1: 操作別トリガー。
+ *     workflows: [ { id, name, enabled, trigger: { type, watchFieldCode? },
+ *                    conditionGroups: [...], actions: [...] }, ... ]
+ *       trigger.type: 'recordCreate' | 'recordUpdate' | 'fieldChange'（§8 改訂1: 操作別トリガー。
+ *       §11 改訂4で fieldChange を追加し旧 fieldLinkRules を統合。watchFieldCode は fieldChange のみ必須）。
  *       経路（カレンダー DnD/モーダル or kintone 標準画面）は区別しない。
  *       物理削除トリガー（recordDelete）は §9 改訂2 でスコープ外化。将来拡張の予約値として
- *       enum には含めない。未知の trigger.type を持つワークフローは発火しない）
+ *       enum には含めない。未知の trigger.type を持つワークフローは発火しない。
+ *       actions[].type: 'appAction'（対象アプリへの作成・更新。recordCreate/recordUpdate 専用）|
+ *       'setField'（自レコードフィールドへのセット。fieldChange 専用）。type 未定義は
+ *       後方互換のため appAction とみなす（§11.1）
  *   }
  * v13 変更点 (REQ_workflow-actions):
  *   - workflows 配列を追加（レコードの作成/更新を起点に
@@ -40,6 +45,11 @@
  *   - §10.13.3: 発火条件のデータ形式を conditions（フラット AND 配列）から
  *     conditionGroups（グループ内 AND・グループ間 OR の配列）へ拡張。workflows・fieldLinkRules の
  *     両方に適用。v13 未リリースのためマイグレーション不要
+ *   - §11 改訂4（2026-07-15）: fieldLinkRules トップレベルキーを廃止し、workflows 配列へ統合。
+ *     trigger.type に 'fieldChange' を追加し、actions[].type（'appAction' | 'setField'）で
+ *     許可されるアクション種別をトリガーごとに切り替える。設定画面のセクションも1つに統合。
+ *     version 13 は未リリースのためマイグレーション不要（読込時、旧 fieldLinkRules キーが
+ *     残っていた場合は防御的に fieldChange ワークフローへ変換して取り込む）
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -170,12 +180,14 @@
   /** 配列値（複数値）を保持するフィールド型。キー一致フィールドの候補から除外する用途（修正2）。 */
   var WORKFLOW_ARRAY_VALUE_TYPES = ['CHECK_BOX', 'MULTI_SELECT', 'USER_SELECT', 'ORGANIZATION_SELECT', 'GROUP_SELECT'];
   /**
-   * ワークフローのトリガー種別ラベル（§8.1 改訂1: 操作別トリガーに再編）。
+   * ワークフローのトリガー種別ラベル（§8.1 改訂1: 操作別トリガーに再編。
+   * §11 改訂4: fieldChange（フィールド値変更時）を追加し、旧 fieldLinkRules を統合）。
    * recordDelete（物理削除）は §9 改訂2 で除外（将来拡張の予約値。現時点では選択肢・処理対象外）
    */
   var WORKFLOW_TRIGGER_LABELS = {
     recordCreate: 'レコード作成時',
-    recordUpdate: 'レコード更新時'
+    recordUpdate: 'レコード更新時',
+    fieldChange:  'フィールド値変更時'
   };
   /** ワークフローの動作モードラベル（§3.4.2） */
   var WORKFLOW_MODE_LABELS = {
@@ -250,6 +262,8 @@
 
   /**
    * setConfig で保存する全体設定オブジェクト (version 13)
+   * §11 改訂4: fieldLinkRules トップレベルキーは廃止。workflows 配列に統合済み
+   * （trigger.type: recordCreate/recordUpdate/fieldChange）。
    * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, filterConfig: Object, views: Object, workflows: Array }}
    */
   var currentConfig = {
@@ -278,8 +292,7 @@
       ]
     },
     views: {},
-    workflows: [],
-    fieldLinkRules: []
+    workflows: []
   };
 
   /**
@@ -423,11 +436,13 @@
   /* モーダル内のコピー元 select (実際にユーザーが操作するもの) */
   var elCopySourceModal = document.getElementById('kc-copy-source-modal');
 
-  /* --- セクション 6: ワークフロー (REQ_workflow-actions §3.10) --- */
+  /* --- セクション 6: ワークフロー (REQ_workflow-actions §3.10, §11 改訂4で旧セクション7を統合) --- */
   var elWorkflowRows = document.getElementById('kc-workflow-rows');
   var elWorkflowAdd  = document.getElementById('kc-workflow-add');
+  /* 循環警告（§10.13.2）: 旧セクション7からセクション6直下へ移設（§11.4） */
+  var elFieldLinkCircularWarning = document.getElementById('kc-fieldlink-circular-warning');
 
-  /* --- ワークフロー編集モーダル --- */
+  /* --- ワークフロー編集モーダル（§11 改訂4: 全トリガー種別を1モーダルに統合） --- */
   var elWorkflowModal       = document.getElementById('kc-workflow-modal');
   var elWorkflowModalClose  = document.getElementById('kc-workflow-modal-close');
   var elWorkflowModalCancel = document.getElementById('kc-workflow-modal-cancel');
@@ -436,29 +451,22 @@
   var elWfName          = document.getElementById('kc-wf-name');
   var elWfEnabled       = document.getElementById('kc-wf-enabled');
   var elWfTrigger       = document.getElementById('kc-wf-trigger');
+  /* 発火条件（conditionGroups）はトリガー種別によらず共通の1エディタを使う（§10.13.3, §11.1） */
   var elWfConditionGroups   = document.getElementById('kc-wf-condition-groups');
   var elWfConditionGroupAdd = document.getElementById('kc-wf-condition-group-add');
+  /* グループ間の結合（AND/OR）。§11.6.1: グループ内は各グループの op、グループ間はワークフロー単位で1つ */
+  var elWfConditionGroupsJoin = document.getElementById('kc-wf-condition-groups-join');
+  /* 監視フィールド選択エリア（fieldChange 選択時のみ表示。旧セクション7から移設） */
+  var elWfWatchFieldArea = document.getElementById('kc-wf-watchfield-area');
+  var elFlrWatchField    = document.getElementById('kc-flr-watchfield');
+  /* appAction エディタエリア（recordCreate/recordUpdate 選択時のみ表示） */
+  var elWfAppActionArea = document.getElementById('kc-wf-appaction-area');
   var elWfActionRows    = document.getElementById('kc-wf-action-rows');
   var elWfActionAdd     = document.getElementById('kc-wf-action-add');
-
-  /* --- セクション 7: フィールド連動 (REQ_workflow-actions §10.6) --- */
-  var elFieldLinkRows = document.getElementById('kc-fieldlink-rows');
-  var elFieldLinkAdd  = document.getElementById('kc-fieldlink-add');
-  var elFieldLinkCircularWarning = document.getElementById('kc-fieldlink-circular-warning');
-
-  /* --- フィールド連動ルール編集モーダル --- */
-  var elFieldLinkModal       = document.getElementById('kc-fieldlink-modal');
-  var elFieldLinkModalClose  = document.getElementById('kc-fieldlink-modal-close');
-  var elFieldLinkModalCancel = document.getElementById('kc-fieldlink-modal-cancel');
-  var elFieldLinkModalApply  = document.getElementById('kc-fieldlink-modal-apply');
-  var elFlrModalError   = document.getElementById('kc-fieldlink-modal-error');
-  var elFlrName         = document.getElementById('kc-flr-name');
-  var elFlrEnabled      = document.getElementById('kc-flr-enabled');
-  var elFlrWatchField   = document.getElementById('kc-flr-watchfield');
-  var elFlrConditionGroups   = document.getElementById('kc-flr-condition-groups');
-  var elFlrConditionGroupAdd = document.getElementById('kc-flr-condition-group-add');
-  var elFlrSetActionRows = document.getElementById('kc-flr-setaction-rows');
-  var elFlrSetActionAdd  = document.getElementById('kc-flr-setaction-add');
+  /* setField エディタエリア（fieldChange 選択時のみ表示。旧セクション7のセットアクション部品を移設・流用） */
+  var elWfSetFieldArea    = document.getElementById('kc-wf-setfield-area');
+  var elFlrSetActionRows  = document.getElementById('kc-flr-setaction-rows');
+  var elFlrSetActionAdd   = document.getElementById('kc-flr-setaction-add');
 
   /* --- 操作ボタン (上下 2 セット分を NodeList で取得) --- */
   var elSubmits = document.querySelectorAll('.kc-config-submit');
@@ -1797,11 +1805,17 @@
   }
 
   /* ====================================================================
-   * ワークフロー設定 UI (REQ_workflow-actions §3.10)
+   * ワークフロー設定 UI (REQ_workflow-actions §3.10, §11 改訂4でセクション7「フィールド連動」を統合)
    *
    * 2 階層構成:
-   *   第1階層: セクション6のワークフロー一覧（行リスト、DnD 並び替え可）
+   *   第1階層: セクション6のワークフロー一覧（行リスト、DnD 並び替え可。トリガー種別混在表示）
    *   第2階層: ワークフロー編集モーダル（トリガー・発火条件・アクションのステップ列挙）
+   *
+   * §11.2: トリガー種別によって編集モーダルのアクション編集エリアを丸ごと切り替える
+   * （recordCreate/recordUpdate → appAction エディタ、fieldChange → setField エディタ。
+   * 発火条件（conditionGroups）と監視フィールド以外は同一モーダル内で共存させ、
+   * 表示/非表示のみで出し分ける。これにより「fieldChange に対象アプリへの作成・更新を
+   * 紐付けるUI自体が存在しない」という §10.4.5 の設計ガードを構造的に維持する）。
    *
    * 「適用」でメモリ上の currentConfig.workflows を更新し、画面下部の「保存」で setConfig する
    * （既存の権限ルール等と同じ「メモリ上に蓄積 → 保存ボタンで確定」フローを踏襲。§3.10）。
@@ -1809,6 +1823,70 @@
 
   /** 編集中のワークフロー下書き（モーダル表示中のみ非 null）。適用時に currentConfig.workflows へ反映する */
   var workflowDraft = null;
+
+  /**
+   * 編集モーダルで現在選択されているトリガー種別・アクションカテゴリ（§11.2 AC-26）。
+   * トリガーセレクトの change ハンドラが、カテゴリ変更時に確認ダイアログを出すために保持する。
+   * @type {string} triggerType: 'recordCreate' | 'recordUpdate' | 'fieldChange'
+   */
+  var _wfCurrentTriggerType = 'recordCreate';
+  /** @type {string} actionCategory: 'appAction' | 'setField' */
+  var _wfCurrentActionCategory = 'appAction';
+
+  /**
+   * トリガー種別からアクションカテゴリを求める（§11.2 の許可対応表）。
+   * @param {string} triggerType
+   * @returns {string} 'appAction' | 'setField'
+   */
+  function _wfCategoryForTrigger(triggerType) {
+    return triggerType === 'fieldChange' ? 'setField' : 'appAction';
+  }
+
+  /**
+   * トリガー種別に応じて、編集モーダル内の「監視フィールドエリア」「appAction エディタエリア」
+   * 「setField エディタエリア」の表示/非表示を切り替える（§11.2, §11.4）。
+   * @param {string} triggerType
+   */
+  function syncWorkflowTriggerAreaVisibility(triggerType) {
+    var isFieldChange = triggerType === 'fieldChange';
+    if (elWfWatchFieldArea) { elWfWatchFieldArea.style.display = isFieldChange ? '' : 'none'; }
+    if (elWfAppActionArea)  { elWfAppActionArea.style.display  = isFieldChange ? 'none' : ''; }
+    if (elWfSetFieldArea)   { elWfSetFieldArea.style.display   = isFieldChange ? '' : 'none'; }
+  }
+
+  /**
+   * トリガーセレクトの change ハンドラ（§11.2, AC-26）。
+   * アクションカテゴリ（appAction ⇔ setField）が変わる場合、既に入力済みのアクションが
+   * 新トリガーでは無効になるため、window.confirm で確認し了承時のみクリアする。
+   * キャンセル時はセレクトを元の値に戻す。
+   */
+  function handleWorkflowTriggerChange() {
+    if (!elWfTrigger) return;
+    var newType = elWfTrigger.value;
+    var newCategory = _wfCategoryForTrigger(newType);
+
+    if (newCategory !== _wfCurrentActionCategory) {
+      var hasExistingActions = (_wfCurrentActionCategory === 'appAction')
+        ? !!(elWfActionRows && elWfActionRows.children.length > 0)
+        : !!(elFlrSetActionRows && elFlrSetActionRows.children.length > 0);
+
+      if (hasExistingActions) {
+        var confirmed = window.confirm(
+          'トリガー種別を変更すると、設定済みのアクションは利用できなくなるため削除されます。よろしいですか？'
+        );
+        if (!confirmed) {
+          elWfTrigger.value = _wfCurrentTriggerType; // セレクトを元に戻す（AC-26）
+          return;
+        }
+        if (_wfCurrentActionCategory === 'appAction' && elWfActionRows) { elWfActionRows.innerHTML = ''; }
+        if (_wfCurrentActionCategory === 'setField' && elFlrSetActionRows) { elFlrSetActionRows.innerHTML = ''; }
+      }
+    }
+
+    _wfCurrentTriggerType = newType;
+    _wfCurrentActionCategory = newCategory;
+    syncWorkflowTriggerAreaVisibility(newType);
+  }
 
   /**
    * ワークフロー ID を生成する（タイムスタンプ + 乱数でユニーク性を担保）
@@ -2054,15 +2132,23 @@
   }
 
   /* ====================================================================
-   * 発火条件グループ UI（§10.13.3: AND/OR 複合条件。conditionGroups 形式）
-   * workflows・fieldLinkRules の両方から共通で利用する（ユーザー指示「他の条件設定でもそうだが」）。
-   * グループ内 = AND（buildWorkflowConditionRow を流用した行の集合）、グループ間 = OR。
-   * フィルタ設定（グループ内OR・グループ間AND）とは論理が逆であることに注意（ヘルプ文で明示）。
+   * 発火条件グループ UI（§11.6.1 改訂4追加指示: AND/OR 自由化。conditionGroups 形式）
+   * workflows（全トリガー種別で共通利用。§11.1）。
+   * グループ内の結合（AND/OR）はグループごとに選択可能（.kc-condition-group-op-select）、
+   * グループ間の結合（AND/OR）はワークフロー単位で1つ選択可能（.kc-wf-condition-groups-join）。
+   * 既定値は「グループ内 AND・グループ間 OR」（§10.13.3 当時の固定論理と同じ挙動）。
    * ==================================================================== */
 
   /**
    * 条件グループ 1 件分の編集ブロックを生成する。
-   * @param {Array<Object>} group - このグループに属する条件配列（AND）
+   * §11.6.2 バグ修正: グループ削除ボタンは、円形の1文字アイコン用 CSS
+   * （.kc-fieldvalue-del-btn。「−」1文字専用）に長文「グループを削除」を入れていたため
+   * 表示が崩れていた。ワークフロー全体への影響が大きい操作（グループ全体を削除）であるため、
+   * アイコン化ではなく、フィルタ設定のグループ削除（.kc-filter-group-del-btn）と同じ
+   * ラベル付きセカンダリボタンに揃える（管理者確定方針・案A）。
+   * @param {Object|Array|null} group - { op: 'and'|'or', conditions: [...] } 形式。
+   *   旧「配列そのもの」形式（§10.13.3 当時。グループ内条件の配列）が渡された場合は
+   *   op='and' として防御的に解釈する。
    * @returns {HTMLElement} .kc-condition-group 要素
    */
   function buildConditionGroupBlock(group) {
@@ -2071,22 +2157,46 @@
 
     var header = document.createElement('div');
     header.className = 'kc-condition-group-header';
+
+    var headerLeft = document.createElement('div');
+    headerLeft.className = 'kc-condition-group-header-left';
+
     var label = document.createElement('span');
     label.className = 'kc-condition-group-label';
-    label.textContent = 'グループ（内部の条件は AND）';
+    label.textContent = 'グループ内の条件:';
+
+    var opSelect = document.createElement('select');
+    opSelect.className = 'kc-config-select kc-condition-group-op-select';
+    [
+      { value: 'and', label: 'すべて満たす（AND）' },
+      { value: 'or',  label: 'いずれかを満たす（OR）' }
+    ].forEach(function (o) {
+      var opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      opSelect.appendChild(opt);
+    });
+    opSelect.value = (group && !Array.isArray(group) && group.op === 'or') ? 'or' : 'and';
+
+    headerLeft.appendChild(label);
+    headerLeft.appendChild(opSelect);
+
     var delBtn = document.createElement('button');
     delBtn.type = 'button';
-    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn kc-condition-group-del-btn';
+    delBtn.className = 'kc-config-btn kc-config-btn-secondary kc-condition-group-del-btn';
     delBtn.textContent = 'グループを削除';
     delBtn.addEventListener('click', function () {
       groupEl.parentNode && groupEl.parentNode.removeChild(groupEl);
     });
-    header.appendChild(label);
+    header.appendChild(headerLeft);
     header.appendChild(delBtn);
 
     var rowsEl = document.createElement('div');
     rowsEl.className = 'kc-condition-group-rows';
-    (group || []).forEach(function (cond) {
+    // 防御的フォールバック: 旧「配列そのもの」形式（グループ内条件の配列自体が group）にも対応
+    var conditions = Array.isArray(group) ? group
+      : (group && Array.isArray(group.conditions)) ? group.conditions : [];
+    conditions.forEach(function (cond) {
       rowsEl.appendChild(buildWorkflowConditionRow(cond));
     });
 
@@ -2095,7 +2205,7 @@
     var addBtn = document.createElement('button');
     addBtn.type = 'button';
     addBtn.className = 'kc-config-btn kc-config-btn-secondary';
-    addBtn.textContent = '+ 条件を追加（AND）';
+    addBtn.textContent = '+ 条件を追加';
     addBtn.addEventListener('click', function () {
       rowsEl.appendChild(buildWorkflowConditionRow(null));
     });
@@ -2108,31 +2218,40 @@
   }
 
   /**
-   * conditionGroups 配列の内容でコンテナ DOM を再構築する。
-   * 旧形式（フラットな conditions 配列）が渡された場合は 1 グループとして解釈する（防御的耐性）。
+   * conditionGroups 配列の内容でコンテナ DOM を再構築する（§11.6.1）。
+   * 受け入れる形式（優先順に判定・防御的に正規化）:
+   *   1. 最古形式: フラットな条件オブジェクト配列（グループ概念なし）→ 1グループ（op='and'）として解釈
+   *   2. §10.13.3 形式: [[{fieldCode,...}, ...], ...]（配列の配列）→ 各グループ op='and' として解釈
+   *   3. §11.6.1 形式: [{ op: 'and'|'or', conditions: [...] }, ...]
    * @param {HTMLElement} containerEl
-   * @param {Array} groups - [[{fieldCode, fieldType, value}, ...], ...] または旧形式配列
+   * @param {Array} groups
    */
   function renderConditionGroups(containerEl, groups) {
     if (!containerEl) return;
     containerEl.innerHTML = '';
-    var normalized = (Array.isArray(groups) && groups.length > 0 && !Array.isArray(groups[0]))
-      ? [groups]
-      : (groups || []);
+    var arr = Array.isArray(groups) ? groups : [];
+    var first = arr[0];
+    // 最古形式判定: 先頭要素が配列でも {conditions:...} でもなく、条件オブジェクトそのものである
+    var isFlatConditionsFormat = arr.length > 0 && first && typeof first === 'object' &&
+      !Array.isArray(first) && first.conditions === undefined && first.fieldCode !== undefined;
+    var normalized = isFlatConditionsFormat ? [arr] : arr;
     normalized.forEach(function (group) {
       containerEl.appendChild(buildConditionGroupBlock(group));
     });
   }
 
   /**
-   * コンテナ DOM から conditionGroups 配列を収集する。
+   * コンテナ DOM から conditionGroups 配列を収集する（§11.6.1: { op, conditions } 形式で収集）。
    * @param {HTMLElement} containerEl
-   * @returns {Array<Array<Object>>}
+   * @returns {Array<{op: string, conditions: Array<Object>}>}
    */
   function collectConditionGroups(containerEl) {
     if (!containerEl) return [];
     var groups = [];
     containerEl.querySelectorAll('.kc-condition-group').forEach(function (groupEl) {
+      var opSelect = groupEl.querySelector('.kc-condition-group-op-select');
+      var op = (opSelect && opSelect.value === 'or') ? 'or' : 'and';
+
       var rows = groupEl.querySelectorAll('.kc-wf-condition-row');
       var conds = [];
       rows.forEach(function (row) {
@@ -2149,7 +2268,7 @@
 
         conds.push({ fieldCode: fieldSel.value, fieldType: fieldType, value: value });
       });
-      groups.push(conds);
+      groups.push({ op: op, conditions: conds });
     });
     return groups;
   }
@@ -2638,14 +2757,20 @@
   }
 
   /**
-   * 全ワークフローに対して validateWorkflowActions を実行する（saveConfig からの最終防御）
+   * 全ワークフローに対してトリガー種別に応じたバリデーションを実行する（saveConfig からの最終防御）。
+   * §11.1: recordCreate/recordUpdate は validateWorkflowActions（appAction）、
+   * fieldChange は validateSetActions（setField）を適用する。
    * @param {Array<Object>} workflows
    * @returns {string|null}
    */
-  function validateAllWorkflowsMappings(workflows) {
+  function validateAllWorkflows(workflows) {
     for (var i = 0; i < workflows.length; i++) {
-      var err = validateWorkflowActions(workflows[i].actions || []);
-      if (err) { return 'ワークフロー「' + (workflows[i].name || '(無題)') + '」: ' + err; }
+      var wf = workflows[i];
+      var triggerType = wf.trigger && wf.trigger.type;
+      var err = (triggerType === 'fieldChange')
+        ? validateSetActions(wf.actions || [])
+        : validateWorkflowActions(wf.actions || []);
+      if (err) { return 'ワークフロー「' + (wf.name || '(無題)') + '」: ' + err; }
     }
     return null;
   }
@@ -2658,7 +2783,7 @@
   }
 
   /**
-   * ワークフロー編集モーダルを開く。
+   * ワークフロー編集モーダルを開く（§11 改訂4: 全トリガー種別を1モーダルで編集する）。
    * @param {Object|null} existingWf - 編集対象の既存ワークフロー（省略時は新規作成）
    */
   function openWorkflowModal(existingWf) {
@@ -2667,20 +2792,49 @@
       ? JSON.parse(JSON.stringify(existingWf))
       : { id: generateWorkflowId(), name: '', enabled: true, trigger: { type: 'recordCreate' }, conditionGroups: [], actions: [] };
 
+    var triggerType = (workflowDraft.trigger && workflowDraft.trigger.type) || 'recordCreate';
+
     if (elWfModalError) { elWfModalError.textContent = ''; }
     if (elWfName) { elWfName.value = workflowDraft.name || ''; }
     if (elWfEnabled) { elWfEnabled.checked = workflowDraft.enabled !== false; }
-    if (elWfTrigger) { elWfTrigger.value = (workflowDraft.trigger && workflowDraft.trigger.type) || 'recordCreate'; }
+    if (elWfTrigger) { elWfTrigger.value = triggerType; }
 
     // §10.13.3: conditionGroups 優先。旧形式 conditions のみ保持している既存データへの防御的耐性
+    // （トリガー種別によらず共通の1エディタを使う。§11.1）
     renderConditionGroups(elWfConditionGroups, workflowDraft.conditionGroups || workflowDraft.conditions || []);
+    // §11.6.1: グループ間結合（AND/OR）。既定値 'or'（旧固定論理と同じ挙動）
+    if (elWfConditionGroupsJoin) {
+      elWfConditionGroupsJoin.value = (workflowDraft.conditionGroupsJoin === 'and') ? 'and' : 'or';
+    }
 
+    // 監視フィールド選択（fieldChange のみ意味を持つが、常に描画し表示/非表示で出し分ける）
+    if (elFlrWatchField) {
+      populateTargetFieldSelect(elFlrWatchField, fieldLinkWatchFieldOptions,
+        (workflowDraft.trigger && workflowDraft.trigger.watchFieldCode) || '');
+      syncSelectEmptyClass(elFlrWatchField);
+    }
+
+    // アクション: トリガー種別に応じて appAction / setField のどちらのエディタへ流し込むかを決める
     if (elWfActionRows) {
       elWfActionRows.innerHTML = '';
-      (workflowDraft.actions || []).forEach(function (action) {
-        elWfActionRows.appendChild(buildWorkflowActionBlock(action));
-      });
+      if (triggerType !== 'fieldChange') {
+        (workflowDraft.actions || []).forEach(function (action) {
+          elWfActionRows.appendChild(buildWorkflowActionBlock(action));
+        });
+      }
     }
+    if (elFlrSetActionRows) {
+      elFlrSetActionRows.innerHTML = '';
+      if (triggerType === 'fieldChange') {
+        (workflowDraft.actions || []).forEach(function (action) {
+          elFlrSetActionRows.appendChild(buildSetActionBlock(action));
+        });
+      }
+    }
+
+    _wfCurrentTriggerType = triggerType;
+    _wfCurrentActionCategory = _wfCategoryForTrigger(triggerType);
+    syncWorkflowTriggerAreaVisibility(triggerType);
 
     elWorkflowModal.removeAttribute('hidden');
     document.removeEventListener('keydown', handleWorkflowModalEscKey);
@@ -2702,6 +2856,8 @@
   /**
    * ワークフロー編集モーダルの「適用」ボタンハンドラ。
    * バリデーション成功時のみ currentConfig.workflows に反映しモーダルを閉じる（AC-11）。
+   * §11.1: トリガー種別（recordCreate/recordUpdate → appAction、fieldChange → setField）に応じて
+   * 収集元エディタとバリデーションを切り替える。
    */
   function handleWorkflowModalApply() {
     if (!workflowDraft) return;
@@ -2712,24 +2868,55 @@
       return;
     }
 
-    var actions = collectWorkflowActions();
-    if (actions.length === 0) {
-      if (elWfModalError) { elWfModalError.textContent = 'アクションを1件以上設定してください。'; }
-      return;
-    }
+    var triggerType = elWfTrigger ? elWfTrigger.value : 'recordCreate';
+    var trigger = { type: triggerType };
+    var actions;
 
-    var validationError = validateWorkflowActions(actions);
-    if (validationError) {
-      if (elWfModalError) { elWfModalError.textContent = validationError; }
-      return;
+    if (triggerType === 'fieldChange') {
+      var watchFieldCode = elFlrWatchField ? elFlrWatchField.value : '';
+      if (!watchFieldCode) {
+        if (elWfModalError) { elWfModalError.textContent = '監視フィールドを選択してください。'; }
+        return;
+      }
+      trigger.watchFieldCode = watchFieldCode;
+
+      actions = collectSetActions().map(function (a) {
+        a.type = 'setField';
+        return a;
+      });
+      if (actions.length === 0) {
+        if (elWfModalError) { elWfModalError.textContent = 'セットアクションを1件以上設定してください。'; }
+        return;
+      }
+      var setValidationError = validateSetActions(actions);
+      if (setValidationError) {
+        if (elWfModalError) { elWfModalError.textContent = setValidationError; }
+        return;
+      }
+    } else {
+      actions = collectWorkflowActions().map(function (a) {
+        a.type = 'appAction';
+        return a;
+      });
+      if (actions.length === 0) {
+        if (elWfModalError) { elWfModalError.textContent = 'アクションを1件以上設定してください。'; }
+        return;
+      }
+      var apValidationError = validateWorkflowActions(actions);
+      if (apValidationError) {
+        if (elWfModalError) { elWfModalError.textContent = apValidationError; }
+        return;
+      }
     }
 
     var wf = {
       id: workflowDraft.id,
       name: name,
       enabled: elWfEnabled ? elWfEnabled.checked : true,
-      trigger: { type: elWfTrigger ? elWfTrigger.value : 'recordCreate' },
+      trigger: trigger,
       conditionGroups: collectConditionGroups(elWfConditionGroups),
+      // §11.6.1: グループ間結合（AND/OR）。既定値 'or'
+      conditionGroupsJoin: (elWfConditionGroupsJoin && elWfConditionGroupsJoin.value === 'and') ? 'and' : 'or',
       actions: actions
     };
 
@@ -2822,14 +3009,19 @@
   }
 
   /**
-   * currentConfig.workflows の内容でワークフロー一覧 DOM を再構築する
+   * currentConfig.workflows の内容でワークフロー一覧 DOM を再構築し、循環警告も更新する
+   * （§11.4: 循環警告の表示位置を旧セクション7からセクション6直下へ移設）
    */
   function renderWorkflowList() {
-    if (!elWorkflowRows) return;
-    elWorkflowRows.innerHTML = '';
-    (currentConfig.workflows || []).forEach(function (wf) {
-      elWorkflowRows.appendChild(buildWorkflowListRow(wf));
-    });
+    if (elWorkflowRows) {
+      elWorkflowRows.innerHTML = '';
+      (currentConfig.workflows || []).forEach(function (wf) {
+        elWorkflowRows.appendChild(buildWorkflowListRow(wf));
+      });
+    }
+    if (elFieldLinkCircularWarning) {
+      elFieldLinkCircularWarning.textContent = detectFieldLinkCircularWarning(currentConfig.workflows || []);
+    }
   }
 
   /**
@@ -2854,24 +3046,14 @@
   }
 
   /* ====================================================================
-   * フィールド連動設定 UI (REQ_workflow-actions §10.6)
+   * フィールド連動（setField）アクションエディタ部品 (REQ_workflow-actions §10.6, §11.4)
    *
-   * 2 階層構成（ワークフローと同じパターン）:
-   *   第1階層: セクション7のルール一覧（行リスト、DnD 並び替え可）
-   *   第2階層: ルール編集モーダル（監視フィールド・発火条件・セットアクションのステップ列挙）
-   *
-   * workflows とは別データモデル（fieldLinkRules）・別UIセクション（§10.3）。
+   * §11 改訂4: 旧セクション7・旧 fieldLinkRules データモデルは廃止し、ワークフロー編集モーダル
+   * （§11.2 の #kc-wf-setfield-area）へ移設・流用する部品群のみを残す。
    * セットアクションは fixed/selfField/lookup の3種のみで、別アプリへの書き込みアクションを
-   * 選択する UI は構造的に存在しない（§10.4.5 設計ガード）。
+   * 選択する UI は構造的に存在しない（§10.4.5 設計ガード。openWorkflowModal/handleWorkflowModalApply
+   * 側でトリガー種別ごとにエディタ自体を丸ごと切り替えることで維持する）。
    * ==================================================================== */
-
-  /** 編集中のフィールド連動ルール下書き（モーダル表示中のみ非 null） */
-  var fieldLinkDraft = null;
-
-  /** フィールド連動ルール ID を生成する */
-  function generateFieldLinkRuleId() {
-    return 'flr_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
-  }
 
   /** セットアクション ID を生成する */
   function generateSetActionId() {
@@ -3248,41 +3430,34 @@
   }
 
   /**
-   * 全フィールド連動ルールに対して validateSetActions を実行する（saveConfig からの最終防御）
-   * @param {Array<Object>} rules
-   * @returns {string|null}
-   */
-  function validateAllFieldLinkRules(rules) {
-    for (var i = 0; i < rules.length; i++) {
-      var err = validateSetActions(rules[i].setActions || []);
-      if (err) { return 'フィールド連動ルール「' + (rules[i].name || '(無題)') + '」: ' + err; }
-    }
-    return null;
-  }
-
-  /**
-   * 循環参照の警告を検出する（§10.13.2: ルールAのセット先 ∈ 他ルール（自ルール含む）の監視フィールド）。
-   * 保存はブロックしない（実行時の再入ガードが安全網になるため。§10.13.2）。
-   * @param {Array<Object>} rules
+   * 循環参照の警告を検出する（§10.13.2: ワークフローAのセット先 ∈ 他ワークフロー（自身含む）の
+   * 監視フィールド）。保存はブロックしない（実行時の再入ガードが安全網になるため。§10.13.2）。
+   * §11.1: 対象は trigger.type === 'fieldChange' のワークフローのみ（statusActions を持つのはこの
+   * トリガー種別だけのため）。
+   * @param {Array<Object>} workflows - currentConfig.workflows（全トリガー種別混在）
    * @returns {string} 警告メッセージ（問題なければ空文字）
    */
-  function detectFieldLinkCircularWarning(rules) {
-    var watchFieldToRuleNames = {};
-    rules.forEach(function (rule) {
-      var code = rule.watchField && rule.watchField.fieldCode;
+  function detectFieldLinkCircularWarning(workflows) {
+    var fieldChangeWorkflows = (workflows || []).filter(function (wf) {
+      return wf && wf.trigger && wf.trigger.type === 'fieldChange';
+    });
+
+    var watchFieldToWfNames = {};
+    fieldChangeWorkflows.forEach(function (wf) {
+      var code = wf.trigger.watchFieldCode;
       if (!code) return;
-      if (!watchFieldToRuleNames[code]) { watchFieldToRuleNames[code] = []; }
-      watchFieldToRuleNames[code].push(rule.name || '(無題)');
+      if (!watchFieldToWfNames[code]) { watchFieldToWfNames[code] = []; }
+      watchFieldToWfNames[code].push(wf.name || '(無題)');
     });
 
     var warnings = [];
-    rules.forEach(function (rule) {
-      (rule.setActions || []).forEach(function (action) {
+    fieldChangeWorkflows.forEach(function (wf) {
+      (wf.actions || []).forEach(function (action) {
         var targetCode = action && action.targetFieldCode;
-        if (!targetCode || !watchFieldToRuleNames[targetCode]) return;
+        if (!targetCode || !watchFieldToWfNames[targetCode]) return;
         warnings.push(
-          'ルール「' + (rule.name || '(無題)') + '」のセット先「' + targetCode + '」は、' +
-          'ルール「' + watchFieldToRuleNames[targetCode].join('」「') + '」の監視フィールドです。' +
+          'ワークフロー「' + (wf.name || '(無題)') + '」のセット先「' + targetCode + '」は、' +
+          'ワークフロー「' + watchFieldToWfNames[targetCode].join('」「') + '」の監視フィールドです。' +
           '実行時に無限ループが疑われる場合は自動的に再評価を抑止しますが、意図を確認してください。'
         );
       });
@@ -3290,223 +3465,6 @@
     return warnings.length > 0
       ? '循環の可能性がある設定が検出されました:\n' + warnings.join('\n')
       : '';
-  }
-
-  /**
-   * ESC キーでフィールド連動ルール編集モーダルを閉じるハンドラ
-   */
-  function handleFieldLinkModalEscKey(e) {
-    if (e.key === 'Escape') { closeFieldLinkModal(); }
-  }
-
-  /**
-   * フィールド連動ルール編集モーダルを開く。
-   * @param {Object|null} existingRule - 編集対象の既存ルール（省略時は新規作成）
-   */
-  function openFieldLinkModal(existingRule) {
-    if (!elFieldLinkModal) return;
-    fieldLinkDraft = existingRule
-      ? JSON.parse(JSON.stringify(existingRule))
-      : { id: generateFieldLinkRuleId(), name: '', enabled: true, watchField: null, conditionGroups: [], setActions: [] };
-
-    if (elFlrModalError) { elFlrModalError.textContent = ''; }
-    if (elFlrName) { elFlrName.value = fieldLinkDraft.name || ''; }
-    if (elFlrEnabled) { elFlrEnabled.checked = fieldLinkDraft.enabled !== false; }
-    if (elFlrWatchField) {
-      // モーダル内には静的な #kc-flr-watchfield が既に存在するため、既存の populateTargetFieldSelect
-      // ヘルパー（フィールド一覧・保持値の反映ロジックが workflows のセレクトと共通）で中身を構築し直す
-      populateTargetFieldSelect(elFlrWatchField, fieldLinkWatchFieldOptions,
-        fieldLinkDraft.watchField ? fieldLinkDraft.watchField.fieldCode : '');
-      syncSelectEmptyClass(elFlrWatchField);
-    }
-
-    renderConditionGroups(elFlrConditionGroups, fieldLinkDraft.conditionGroups || fieldLinkDraft.conditions || []);
-
-    if (elFlrSetActionRows) {
-      elFlrSetActionRows.innerHTML = '';
-      (fieldLinkDraft.setActions || []).forEach(function (setAction) {
-        elFlrSetActionRows.appendChild(buildSetActionBlock(setAction));
-      });
-    }
-
-    elFieldLinkModal.removeAttribute('hidden');
-    document.removeEventListener('keydown', handleFieldLinkModalEscKey);
-    document.addEventListener('keydown', handleFieldLinkModalEscKey);
-    if (elFlrName) { elFlrName.focus(); }
-  }
-
-  /**
-   * フィールド連動ルール編集モーダルを閉じる（下書きは破棄する）
-   */
-  function closeFieldLinkModal() {
-    if (!elFieldLinkModal) return;
-    elFieldLinkModal.setAttribute('hidden', '');
-    document.removeEventListener('keydown', handleFieldLinkModalEscKey);
-    fieldLinkDraft = null;
-    if (elFieldLinkAdd) { elFieldLinkAdd.focus(); }
-  }
-
-  /**
-   * フィールド連動ルール編集モーダルの「適用」ボタンハンドラ。
-   * バリデーション成功時のみ currentConfig.fieldLinkRules に反映しモーダルを閉じる。
-   */
-  function handleFieldLinkModalApply() {
-    if (!fieldLinkDraft) return;
-
-    var name = elFlrName ? elFlrName.value.trim() : '';
-    if (!name) {
-      if (elFlrModalError) { elFlrModalError.textContent = 'ルール名を入力してください。'; }
-      return;
-    }
-
-    var watchFieldCode = elFlrWatchField ? elFlrWatchField.value : '';
-    if (!watchFieldCode) {
-      if (elFlrModalError) { elFlrModalError.textContent = '監視フィールドを選択してください。'; }
-      return;
-    }
-    var watchOpt = elFlrWatchField.options[elFlrWatchField.selectedIndex];
-    var watchFieldType = watchOpt ? (watchOpt.dataset.fieldtype || '') : '';
-
-    var setActions = collectSetActions();
-    if (setActions.length === 0) {
-      if (elFlrModalError) { elFlrModalError.textContent = 'セットアクションを1件以上設定してください。'; }
-      return;
-    }
-
-    var validationError = validateSetActions(setActions);
-    if (validationError) {
-      if (elFlrModalError) { elFlrModalError.textContent = validationError; }
-      return;
-    }
-
-    var rule = {
-      id: fieldLinkDraft.id,
-      name: name,
-      enabled: elFlrEnabled ? elFlrEnabled.checked : true,
-      watchField: { fieldCode: watchFieldCode, fieldType: watchFieldType },
-      conditionGroups: collectConditionGroups(elFlrConditionGroups),
-      setActions: setActions
-    };
-
-    // モーダルを開いた後に一覧側で DnD 並び替え/有効トグル変更が行われている可能性があるため、
-    // 配列を書き換える前に必ず現在の DOM 状態を currentConfig.fieldLinkRules に同期する
-    currentConfig.fieldLinkRules = collectFieldLinkRules();
-    var existingIndex = currentConfig.fieldLinkRules.findIndex(function (r) { return r.id === rule.id; });
-    if (existingIndex !== -1) {
-      currentConfig.fieldLinkRules[existingIndex] = rule;
-    } else {
-      currentConfig.fieldLinkRules.push(rule);
-    }
-
-    closeFieldLinkModal();
-    renderFieldLinkList();
-  }
-
-  /**
-   * フィールド連動ルール一覧 1 行を生成する（第1階層）
-   * @param {Object} rule
-   * @returns {HTMLElement} .kc-fieldlink-row 要素
-   */
-  function buildFieldLinkListRow(rule) {
-    var row = document.createElement('div');
-    row.className = 'kc-fieldlink-row';
-    row.dataset.fieldLinkId = rule.id;
-
-    var handle = buildDragHandle();
-    attachRowDragEvents(row, handle);
-
-    var cellHandle = document.createElement('div');
-    cellHandle.className = 'kc-fieldlink-cell kc-fieldlink-col-handle';
-    cellHandle.appendChild(handle);
-
-    var cellName = document.createElement('div');
-    cellName.className = 'kc-fieldlink-cell kc-fieldlink-col-name';
-    cellName.textContent = rule.name || '(無題)';
-
-    var cellWatch = document.createElement('div');
-    cellWatch.className = 'kc-fieldlink-cell kc-fieldlink-col-watch';
-    var badge = document.createElement('span');
-    badge.className = 'kc-workflow-trigger-badge';
-    badge.textContent = (rule.watchField && rule.watchField.fieldCode) || '';
-    cellWatch.appendChild(badge);
-
-    var cellEnabled = document.createElement('div');
-    cellEnabled.className = 'kc-fieldlink-cell kc-fieldlink-col-enabled';
-    var enabledLabel = document.createElement('label');
-    enabledLabel.className = 'kc-config-checkbox-label kc-workflow-enabled-label';
-    var enabledCheckbox = document.createElement('input');
-    enabledCheckbox.type = 'checkbox';
-    enabledCheckbox.className = 'kc-fieldlink-enabled-toggle';
-    enabledCheckbox.checked = rule.enabled !== false;
-    enabledLabel.appendChild(enabledCheckbox);
-    cellEnabled.appendChild(enabledLabel);
-
-    var cellActions = document.createElement('div');
-    cellActions.className = 'kc-fieldlink-cell kc-fieldlink-col-actions';
-    cellActions.textContent = String((rule.setActions || []).length);
-
-    var cellOp = document.createElement('div');
-    cellOp.className = 'kc-fieldlink-cell kc-fieldlink-col-op';
-    var editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'kc-config-btn kc-config-btn-secondary kc-workflow-edit-btn';
-    editBtn.textContent = '編集';
-    editBtn.addEventListener('click', function () { openFieldLinkModal(rule); });
-    var delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn kc-workflow-list-del-btn';
-    delBtn.textContent = '−';
-    delBtn.addEventListener('click', function () {
-      if (!window.confirm('フィールド連動ルール「' + (rule.name || '(無題)') + '」を削除しますか？')) return;
-      currentConfig.fieldLinkRules = collectFieldLinkRules().filter(function (r) { return r.id !== rule.id; });
-      renderFieldLinkList();
-    });
-    cellOp.appendChild(editBtn);
-    cellOp.appendChild(delBtn);
-
-    row.appendChild(cellHandle);
-    row.appendChild(cellName);
-    row.appendChild(cellWatch);
-    row.appendChild(cellEnabled);
-    row.appendChild(cellActions);
-    row.appendChild(cellOp);
-
-    return row;
-  }
-
-  /**
-   * currentConfig.fieldLinkRules の内容でルール一覧 DOM を再構築し、循環警告も更新する
-   */
-  function renderFieldLinkList() {
-    if (elFieldLinkRows) {
-      elFieldLinkRows.innerHTML = '';
-      (currentConfig.fieldLinkRules || []).forEach(function (rule) {
-        elFieldLinkRows.appendChild(buildFieldLinkListRow(rule));
-      });
-    }
-    if (elFieldLinkCircularWarning) {
-      elFieldLinkCircularWarning.textContent = detectFieldLinkCircularWarning(currentConfig.fieldLinkRules || []);
-    }
-  }
-
-  /**
-   * フィールド連動ルール一覧 DOM から最終的な fieldLinkRules 配列を収集する
-   * （DOM 上の並び順・有効/無効トグルの現在値を反映。保存時に呼び出す）
-   * @returns {Array<Object>}
-   */
-  function collectFieldLinkRules() {
-    if (!elFieldLinkRows) return currentConfig.fieldLinkRules || [];
-    var rows = elFieldLinkRows.querySelectorAll('.kc-fieldlink-row');
-    var ordered = [];
-    rows.forEach(function (row) {
-      var id = row.dataset.fieldLinkId;
-      var rule = (currentConfig.fieldLinkRules || []).filter(function (r) { return r.id === id; })[0];
-      if (!rule) return;
-      var toggle = row.querySelector('.kc-fieldlink-enabled-toggle');
-      if (toggle) { rule.enabled = toggle.checked; }
-      ordered.push(rule);
-    });
-    return ordered;
   }
 
   /* ====================================================================
@@ -4624,8 +4582,7 @@
         },
         filterConfig: _buildDefaultFilterConfig(),
         views: {},
-        workflows: [],
-        fieldLinkRules: []
+        workflows: []
       };
       return;
     }
@@ -4731,11 +4688,30 @@
       parsed.version = 13;
     }
 
-    // fieldLinkRules 初期値補完（REQ_workflow-actions §10.5・§10 改訂3）
-    // version 13 は未リリースのため専用マイグレーション段は設けず、単純な初期値補完でよい。
-    if (!Array.isArray(parsed.fieldLinkRules)) {
-      parsed.fieldLinkRules = [];
+    // §11 改訂4: fieldLinkRules トップレベルキーの防御的変換（履歴互換）。
+    // 旧中間ビルド（§10 改訂3当時の別キー保存形式）が残っている環境向けに、存在すれば各ルールを
+    // trigger.type='fieldChange' のワークフローへ変換して workflows へ統合し、
+    // fieldLinkRules キー自体は破棄する。version 13 は未リリースのため簡易変換でよい（§11.1）。
+    if (!Array.isArray(parsed.workflows)) { parsed.workflows = []; }
+    if (Array.isArray(parsed.fieldLinkRules) && parsed.fieldLinkRules.length > 0) {
+      parsed.fieldLinkRules.forEach(function (rule) {
+        if (!rule) return;
+        parsed.workflows.push({
+          id: rule.id || generateWorkflowId(),
+          name: rule.name || '',
+          enabled: rule.enabled !== false,
+          trigger: {
+            type: 'fieldChange',
+            watchFieldCode: rule.watchField && rule.watchField.fieldCode
+          },
+          conditionGroups: rule.conditionGroups || rule.conditions || [],
+          actions: (rule.setActions || []).map(function (a) {
+            return Object.assign({ type: 'setField' }, a);
+          })
+        });
+      });
     }
+    delete parsed.fieldLinkRules;
 
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
@@ -4766,8 +4742,7 @@
         ? parsed.filterConfig
         : _buildDefaultFilterConfig(),
       views:             parsed.views || {},
-      workflows:         Array.isArray(parsed.workflows) ? parsed.workflows : [],
-      fieldLinkRules:    Array.isArray(parsed.fieldLinkRules) ? parsed.fieldLinkRules : []
+      workflows:         Array.isArray(parsed.workflows) ? parsed.workflows : []
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
   }
@@ -5351,11 +5326,10 @@
     // フィルタ設定を収集して currentConfig.filterConfig を更新（REQ_checkbox-filter §6.4, §7）
     currentConfig.filterConfig = collectFilterConfig();
 
-    // ワークフロー設定を収集して currentConfig.workflows を更新（REQ_workflow-actions §3.10）
+    // ワークフロー設定を収集して currentConfig.workflows を更新（REQ_workflow-actions §3.10。
+    // §11 改訂4: fieldLinkRules は廃止済みのため、ここで全トリガー種別（recordCreate/recordUpdate/
+    // fieldChange）分をまとめて収集する）
     currentConfig.workflows = collectWorkflows();
-
-    // フィールド連動設定を収集して currentConfig.fieldLinkRules を更新（REQ_workflow-actions §10.6）
-    currentConfig.fieldLinkRules = collectFieldLinkRules();
 
     // 現在の編集中ビューの個別設定を保存 (新規作成時は後で ID 確定後に保存)
     if (currentViewId) {
@@ -5381,17 +5355,11 @@
       return false;
     }
 
-    // ワークフロー設定のバリデーション（AC-9: CHECK_BOX→単一値マッピング等をブロック）
-    var workflowError = validateAllWorkflowsMappings(currentConfig.workflows || []);
+    // ワークフロー設定のバリデーション（AC-9: CHECK_BOX→単一値マッピング等 / §10.4.2: lookup 必須項目。
+    // §11.1: トリガー種別ごとに appAction/setField いずれかのバリデーションを適用する）
+    var workflowError = validateAllWorkflows(currentConfig.workflows || []);
     if (workflowError) {
       showError(workflowError);
-      return false;
-    }
-
-    // フィールド連動設定のバリデーション（§10.4.2: lookup 必須項目）
-    var fieldLinkError = validateAllFieldLinkRules(currentConfig.fieldLinkRules || []);
-    if (fieldLinkError) {
-      showError(fieldLinkError);
       return false;
     }
 
@@ -5481,8 +5449,9 @@
       });
 
       // 最終的な保存オブジェクト (version 13 形式: permissionRules + fieldValueRules + searchTargets
-      // + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig + workflows
-      // + fieldLinkRules を含む)
+      // + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig + workflows を含む。
+      // §11 改訂4: fieldLinkRules キーは廃止済み。workflows 配列（trigger.type に
+      // recordCreate/recordUpdate/fieldChange を含む）のみで全定義を永続化する（AC-28）)
       var finalConfig = {
         version: 13,
         fieldMapping:       updatedFieldMapping,
@@ -5494,8 +5463,7 @@
         },
         filterConfig:       currentConfig.filterConfig || _buildDefaultFilterConfig(),
         views:              mergedViews,
-        workflows:          currentConfig.workflows || [],
-        fieldLinkRules:     currentConfig.fieldLinkRules || []
+        workflows:          currentConfig.workflows || []
       };
 
       // kintone の required_params チェックは setConfig 第1引数の最上位キーと照合する仕様。
@@ -5724,13 +5692,11 @@
     }
     applySearchTargets(searchTargetsForApply);
 
-    // 3.66. ワークフロー設定 (workflows) を一覧に反映（REQ_workflow-actions §3.10）
-    // loadFields + loadStatuses 完了後に呼ぶこと（ownAppFieldOptions が確定している必要があるため）
+    // 3.66. ワークフロー設定 (workflows) を一覧に反映（REQ_workflow-actions §3.10。
+    // §11 改訂4でセクション7「フィールド連動」を統合したため一覧描画はこの1回で全トリガー種別分を賄う）
+    // loadFields + loadStatuses 完了後に呼ぶこと（ownAppFieldOptions/fieldLinkWatchFieldOptions/
+    // fieldLinkTargetFieldOptions が確定している必要があるため）
     renderWorkflowList();
-
-    // 3.67. フィールド連動設定 (fieldLinkRules) を一覧に反映（REQ_workflow-actions §10.6）
-    // loadFields 完了後に呼ぶこと（fieldLinkWatchFieldOptions/fieldLinkTargetFieldOptions が確定済みの必要があるため）
-    renderFieldLinkList();
 
     // 3.7. メールアドレス初期値チェックボックスを設定値から反映し disabled 状態を更新する
     if (elMailLoginUserDefault) {
@@ -5853,45 +5819,25 @@
       elWorkflowModalApply.addEventListener('click', handleWorkflowModalApply);
     }
     // ワークフロー編集モーダル − 発火条件「+ グループを追加（OR）」ボタン（§10.13.3）
+    // トリガー種別によらず共通の1エディタを使う（§11.1）
     if (elWfConditionGroupAdd) {
       elWfConditionGroupAdd.addEventListener('click', function () {
         if (elWfConditionGroups) { elWfConditionGroups.appendChild(buildConditionGroupBlock(null)); }
       });
     }
-    // ワークフロー編集モーダル − アクション「+ アクションを追加」ボタン
+    // ワークフロー編集モーダル − トリガーセレクト変更（§11.2, AC-25, AC-26）
+    if (elWfTrigger) {
+      elWfTrigger.addEventListener('change', handleWorkflowTriggerChange);
+    }
+    // ワークフロー編集モーダル − appAction エディタ「+ アクションを追加」ボタン
+    // （recordCreate/recordUpdate 選択時のみ表示。§11.2）
     if (elWfActionAdd) {
       elWfActionAdd.addEventListener('click', function () {
         if (elWfActionRows) { elWfActionRows.appendChild(buildWorkflowActionBlock(null)); }
       });
     }
-
-    // フィールド連動 − 一覧「+ ルールを追加」ボタン（REQ_workflow-actions §10.6）
-    if (elFieldLinkAdd) {
-      elFieldLinkAdd.addEventListener('click', function () { openFieldLinkModal(null); });
-    }
-    // フィールド連動ルール編集モーダル − 閉じる / キャンセル / 背景クリック
-    if (elFieldLinkModalClose) {
-      elFieldLinkModalClose.addEventListener('click', closeFieldLinkModal);
-    }
-    if (elFieldLinkModalCancel) {
-      elFieldLinkModalCancel.addEventListener('click', closeFieldLinkModal);
-    }
-    if (elFieldLinkModal) {
-      elFieldLinkModal.addEventListener('click', function (e) {
-        if (e.target === elFieldLinkModal) { closeFieldLinkModal(); }
-      });
-    }
-    // フィールド連動ルール編集モーダル − 適用ボタン
-    if (elFieldLinkModalApply) {
-      elFieldLinkModalApply.addEventListener('click', handleFieldLinkModalApply);
-    }
-    // フィールド連動ルール編集モーダル − 発火条件「+ グループを追加（OR）」ボタン
-    if (elFlrConditionGroupAdd) {
-      elFlrConditionGroupAdd.addEventListener('click', function () {
-        if (elFlrConditionGroups) { elFlrConditionGroups.appendChild(buildConditionGroupBlock(null)); }
-      });
-    }
-    // フィールド連動ルール編集モーダル − 「+ セットアクションを追加」ボタン
+    // ワークフロー編集モーダル − setField エディタ「+ セットアクションを追加」ボタン
+    // （fieldChange 選択時のみ表示。§11 改訂4で旧セクション7から移設）
     if (elFlrSetActionAdd) {
       elFlrSetActionAdd.addEventListener('click', function () {
         if (elFlrSetActionRows) { elFlrSetActionRows.appendChild(buildSetActionBlock(null)); }

@@ -964,3 +964,88 @@ Given/When/Then 形式で記述する。
 - U-14: 後勝ち＋設定画面ヘルプで明記。
 - U-15: builder が実装時に `updateEvent` 全呼び出し元を洗い出し、後方互換（拡張引数省略時は完全に従来動作）を担保する。
 - 軽量 config ロード（§10.2.3）は `workflows` と `fieldLinkRules` の両方を対象にし、**標準画面で workflows が発火しないバグの修正を兼ねる**。
+
+---
+
+## 11. 改訂4: フィールド連動のワークフロー統合（2026-07-15 ユーザー指示・確定）
+
+改訂3で別キー `fieldLinkRules` として実装したフィールド連動を、**`workflows` 配列に統合し、設定セクションも1つにまとめる**（ユーザー指示）。§10.3 の U-11 判断（別キー方式）を本改訂で上書きする。config v13 は未リリース（未push・実機未導入）のためマイグレーション不要で構造変更できる。
+
+### 11.1 統合後のデータモデル（config v13 のまま）
+
+```jsonc
+"workflows": [
+  {
+    "id": "wf_...", "name": "...", "enabled": true,
+    "trigger": {
+      "type": "recordCreate" | "recordUpdate" | "fieldChange",
+      "watchFieldCode": "..."   // fieldChange のみ必須。他は不要
+    },
+    "conditionGroups": [[ {fieldCode, fieldType, value}, ... ], ...],  // 共通（グループ内AND・グループ間OR）
+    "actions": [
+      // トリガーにより許可される type が異なる
+      { "type": "appAction", /* 既存の targetAppId/mode/matchKey/fieldMappings/continueOnError */ },
+      { "type": "setField",  /* 既存 fieldLinkRules の setAction: targetFieldCode/sourceType(fixed|selfField|lookup)/... */ }
+    ]
+  }
+]
+```
+
+- `fieldLinkRules` トップレベルキーは**廃止**。
+- 防御的変換: 読込時に `fieldLinkRules` が存在した場合（中間ビルドを導入した環境対策）、各ルールを `trigger.type='fieldChange'` のワークフローへ変換して `workflows` に取り込み、キーを破棄する（正式リリース前のため本変換は簡易でよい）。
+- アクションの `type` 識別子を新設。既存保存データは v13 未リリースのため考慮不要だが、`type` 未定義の action は `appAction` とみなす防御は入れてよい。
+
+### 11.2 トリガーとアクション種別の対応（設計ガードの継承）
+
+| trigger.type | 許可される action.type | 実行系 |
+|---|---|---|
+| recordCreate / recordUpdate | `appAction` のみ | KC.Workflow（保存後・非同期） |
+| fieldChange | `setField` のみ | KC.FieldLink（保存前・フォーム/DnD相乗り） |
+
+- §10.4.5 の設計ガード（保存前トリガーに書き込みアクションを紐付けない）は、**編集モーダルのアクションUIをトリガー種別で丸ごと切り替える**ことで維持する（fieldChange 選択時は appAction の設定UIが存在しない）。
+- トリガー種別を変更した際、設定済みアクションが新トリガーで無効になる場合は確認ダイアログを出し、了承時にアクションをクリアする。
+
+### 11.3 実行エンジンへの影響（最小化）
+
+- KC.Workflow（保存後）と KC.FieldLink（保存前）の2系統は**そのまま維持**。軽量ロード処理が `workflows` を trigger.type で振り分け、recordCreate/recordUpdate 系を KC.Workflow 用に、fieldChange 系を KC.FieldLink 用（内部形式へマップ）に供給する。
+- 再入ガード・直列化・DnD相乗り・二段防御・conditionGroups 評価など改訂3の実装・検証結果はすべて有効。
+- change イベントの動的登録は fieldChange ワークフローの watchFieldCode 一覧から行う（従来と同等）。
+
+### 11.4 設定画面
+
+- セクション7「フィールド連動」を**廃止**し、セクション6「ワークフロー」に一本化。一覧は全トリガー種別を混在表示（トリガー種別バッジで区別。実行順序は同一トリガー種別内でのみ意味を持つ）。
+- 編集モーダル: トリガーセレクトに「フィールド値変更時」を追加し、選択時のみ監視フィールドセレクトを表示。アクション領域はトリガー種別で切替（既存の setField エディタ部品を移設・流用）。
+- 循環警告・セット先除外・lookup 設定UIなど改訂3の部品はそのまま流用する。
+
+### 11.5 受入基準（追加）
+
+- **AC-24**: ワークフロー一覧に3種のトリガーのワークフローが混在表示され、バッジで区別できる
+- **AC-25**: 編集モーダルで「フィールド値変更時」を選ぶと監視フィールド選択と setField エディタが表示され、appAction（対象アプリへの作成・更新）のUIは表示されない。逆も同様
+- **AC-26**: トリガー種別の変更で既存アクションが無効になる場合、確認の上クリアされる
+- **AC-27**: fieldChange ワークフローの実行挙動（change イベント・DnD相乗り・再入ガード・lookup）が改訂3実装と同一である（AC-15〜23 が統合後も成立する）
+- **AC-28**: 保存される config に fieldLinkRules キーが存在せず、workflows 配列のみで全定義が永続化される
+
+### 11.6 改訂4追加指示（2026-07-15 ユーザー指示・確定）
+
+#### 11.6.1 条件設定の AND/OR 自由化
+
+§10.13.3 の固定論理（グループ内=AND・グループ間=OR）を廃止し、**両方をユーザーが選択可能**にする。
+
+- データ形式（v13 のまま・未リリースのためマイグレーション不要）:
+  ```jsonc
+  "conditionGroups": [
+    { "op": "and" | "or", "conditions": [ {fieldCode, fieldType, value}, ... ] },
+    ...
+  ],
+  "conditionGroupsJoin": "and" | "or"   // グループ間の結合（ワークフロー単位で1つ）
+  ```
+- 既定値: `op: "and"`、`conditionGroupsJoin: "or"`（従来の固定論理と同じ挙動）
+- 防御的フォールバック: 旧「配列の配列」形式が来た場合は各グループ `op:'and'`・`join:'or'` として解釈
+- `KC.Workflow.Core.matchesConditions` を新形式対応に改修（グループ内は op に従い every/some、グループ間は join に従い every/some。空グループ・空配列=無条件で発火、は従来通り）
+- UI: 各グループのヘッダに「すべて満たす（AND）／いずれかを満たす（OR）」セレクト、グループ一覧の上部（または各グループ間）にグループ間結合の AND/OR セレクトを1つ配置。ヘルプ文を新論理に合わせて全面更新（フィルタ設定との論理差の注記は不要になる場合は削除してよい）
+- 保存前後（KC.Workflow / KC.FieldLink）の両実行系・fieldChange/appAction の全トリガーに適用
+
+#### 11.6.2 バグ修正: 条件グループ削除ボタンの表示不良
+
+- ユーザー報告: 条件グループを削除する際の「−」（マイナス）ボタンの表示・挙動がおかしい（改訂3で追加した conditionGroups UI）
+- 対応: 実装時に該当ボタンの DOM 構造・CSS・イベントハンドラを点検し、表示崩れ／誤動作を修正する。修正内容を完了報告に明記すること

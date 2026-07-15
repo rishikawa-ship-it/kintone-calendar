@@ -320,9 +320,18 @@
         ? config.filterConfig
         : { groups: [] };
 
-      // ワークフロー設定 (version 13 以降) を適用 (REQ_workflow-actions §3.9)
-      // v12 以前の設定では workflows が存在しないため空配列で初期化する
-      KC.Config.WORKFLOWS = Array.isArray(config.workflows) ? config.workflows : [];
+      // ワークフロー設定 (version 13 以降) を適用 (REQ_workflow-actions §3.9・§11 改訂4)
+      // v12 以前の設定では workflows が存在しないため KC.Config._applyWorkflowsConfig が空配列で初期化する。
+      // 【レビュー修正1】trigger.type 未フィルタの生配列を直接代入すると、
+      // loadWorkflowAndFieldLinkConfigEarly が振り分けた KC.Config.WORKFLOWS/FIELD_LINK_RULES を
+      // このイベントハンドラ（app.record.index.show）が破壊してしまう（§11.2/§11.3 の設計契約違反・
+      // fieldChange 混入）ため、代入点をこの共通ヘルパーに一本化する（旧 fieldLinkRules キーの
+      // 防御的変換もここで適用される）。
+      try {
+        KC.Config._applyWorkflowsConfig(config);
+      } catch (wfConfigErr) {
+        console.error('[KC.Config.loadFromPluginConfig] ワークフロー設定の適用に失敗:', wfConfigErr);
+      }
 
       // メールアドレス初期値設定 (fieldMapping.mailLoginUserDefault が存在しない場合は false: 後方互換デフォルト)
       KC.Config.MAIL_LOGIN_USER_DEFAULT =
@@ -457,23 +466,99 @@
   KC.Config.FILTER_CONFIG = { groups: [] };
 
   /**
-   * ワークフロー定義配列 (REQ_workflow-actions §3.9, config version 13)
-   * loadFromPluginConfig で上書きされる。初期値は空配列 = ワークフロー機能なし
-   * @type {Array<{id, name, enabled, trigger, conditions, actions}>}
+   * ワークフロー定義配列（保存後・別アプリ連携アクション用。§11 改訂4で統合された workflows のうち
+   * trigger.type が recordCreate/recordUpdate のものだけが loadWorkflowAndFieldLinkConfigEarly に
+   * よってここへ振り分けられる。KC.Workflow._getEnabledWorkflows が参照する）
+   * loadFromPluginConfig / loadWorkflowAndFieldLinkConfigEarly で上書きされる。初期値は空配列。
+   * @type {Array<{id, name, enabled, trigger, conditionGroups, actions}>}
    */
   KC.Config.WORKFLOWS = [];
 
   /**
-   * フィールド連動ルール配列 (REQ_workflow-actions §10.5, config version 13)
-   * loadWorkflowAndFieldLinkConfigEarly で上書きされる。初期値は空配列 = 機能なし。
-   * workflows（別アプリ書き込み・保存後トリガー）とは別のデータモデル（§10.3）。
+   * フィールド連動ルール配列（保存前・自レコードフィールド連動用の内部形式。§10 改訂3 準拠）。
+   * §11 改訂4でトップレベルキー fieldLinkRules は廃止され、統合後の workflows のうち
+   * trigger.type === 'fieldChange' のものを loadWorkflowAndFieldLinkConfigEarly が
+   * この内部形式（改訂3当時と同じ { id, name, enabled, watchField, conditionGroups, setActions }）
+   * へマップし直して供給する。KC.FieldLink の実行ロジック本体はこのマッピングだけで
+   * 変更なしに動作する（§11.3）。初期値は空配列 = 機能なし。
    * @type {Array<{id, name, enabled, watchField, conditionGroups, setActions}>}
    */
   KC.Config.FIELD_LINK_RULES = [];
 
   /**
-   * ワークフロー（workflows）・フィールド連動（fieldLinkRules）設定を軽量に読み込む。
-   * REQ_workflow-actions §10.2.3 / §10.13.4:
+   * 【レビュー修正1】単一の信頼できる代入点: config（version 13 形式のオブジェクト。
+   * バージョンガードは呼び出し元が行う）から、統合後の workflows 配列を trigger.type で
+   * KC.Config.WORKFLOWS（保存後・KC.Workflow 用）/ KC.Config.FIELD_LINK_RULES（保存前・
+   * KC.FieldLink 用の内部形式）へ振り分けて代入する。
+   * この関数だけが KC.Config.WORKFLOWS / KC.Config.FIELD_LINK_RULES へ代入する
+   * （loadWorkflowAndFieldLinkConfigEarly・loadFromPluginConfig の両方がここを呼ぶ。
+   * §11.2/§11.3 の設計契約: KC.Config.WORKFLOWS には appAction 系トリガーのみを保持させる、
+   * という契約を守るため、trigger.type 未フィルタの生配列を直接代入する経路を作らない）。
+   *
+   * §11.1 防御的変換（履歴互換）: 旧中間ビルド（fieldLinkRules 別キー方式。§10 改訂3当時の
+   * 保存形式）が残っている環境向けに、config.fieldLinkRules が存在すれば各ルールを
+   * trigger.type='fieldChange' のワークフローへ変換して取り込む（fieldLinkRules キー自体は
+   * config オブジェクトからは読み取るのみで書き換えない。呼び出し元の config は使い捨てのため
+   * 問題ない）。【レビュー修正2】enabled/id のフォールバック仕様は config.js
+   * loadInitialConfig() 側の実装に統一する（enabled: rule.enabled !== false、
+   * id: rule.id || 生成id。desktop.js 独自の仕様差異を解消）。
+   * @param {Object} config - kintone.plugin.app.getConfig から JSON.parse 済みの設定オブジェクト
+   */
+  KC.Config._applyWorkflowsConfig = function (config) {
+    var workflows = Array.isArray(config.workflows) ? config.workflows.slice() : [];
+
+    if (Array.isArray(config.fieldLinkRules) && config.fieldLinkRules.length > 0) {
+      config.fieldLinkRules.forEach(function (rule) {
+        if (!rule) return;
+        workflows.push({
+          id: rule.id || ('wf_' + Date.now() + '_' + Math.floor(Math.random() * 100000)),
+          name: rule.name || '',
+          enabled: rule.enabled !== false,
+          trigger: {
+            type: 'fieldChange',
+            watchFieldCode: rule.watchField && rule.watchField.fieldCode
+          },
+          conditionGroups: rule.conditionGroups || rule.conditions || [],
+          actions: (rule.setActions || []).map(function (a) {
+            return Object.assign({ type: 'setField' }, a);
+          })
+        });
+      });
+    }
+
+    // recordCreate/recordUpdate → KC.Workflow（保存後）用。§11.3 の設計ガードを維持するため、
+    // ここで trigger.type を明示的に絞り込む（fieldChange が保存後エンジンに混入しないようにする）
+    KC.Config.WORKFLOWS = workflows.filter(function (wf) {
+      return wf && wf.trigger &&
+        (wf.trigger.type === 'recordCreate' || wf.trigger.type === 'recordUpdate');
+    });
+
+    // fieldChange → KC.FieldLink（保存前）用の内部形式へマップ（§10 改訂3の FIELD_LINK_RULES
+    // 形式をそのまま維持することで、KC.FieldLink 本体の実行ロジックには一切手を入れない。§11.3, AC-27）
+    KC.Config.FIELD_LINK_RULES = workflows
+      .filter(function (wf) { return wf && wf.trigger && wf.trigger.type === 'fieldChange'; })
+      .map(function (wf) {
+        return {
+          id: wf.id,
+          name: wf.name,
+          enabled: wf.enabled,
+          watchField: { fieldCode: wf.trigger.watchFieldCode },
+          conditionGroups: wf.conditionGroups || wf.conditions || [],
+          // §11.6.1: グループ間結合（AND/OR）。matchesConditions の groupsJoin 引数として使う
+          conditionGroupsJoin: wf.conditionGroupsJoin,
+          // §11.1 防御的分岐: action.type 未定義は appAction とみなすため、setField 以外は除外する
+          setActions: (wf.actions || []).filter(function (a) {
+            return a && (a.type || 'appAction') === 'setField';
+          })
+        };
+      });
+  };
+
+  /**
+   * ワークフロー（workflows）設定を軽量に読み込み、KC.Config._applyWorkflowsConfig で
+   * trigger.type に応じて保存後実行エンジン（KC.Workflow が参照する KC.Config.WORKFLOWS）と
+   * 保存前実行エンジン（KC.FieldLink が参照する KC.Config.FIELD_LINK_RULES）に振り分ける。
+   * REQ_workflow-actions §10.2.3 / §10.13.4 / §11（改訂4: フィールド連動のワークフロー統合）:
    *   - change イベントの動的登録には、kintone.events.on() 登録より前に監視フィールドコード
    *     一覧が確定している必要があるため、IIFE 内の早い位置（kintone.events.on 登録より前）で
    *     kintone.plugin.app.getConfig(PLUGIN_ID) を同期的に呼び出す軽量ロード処理として新設する。
@@ -499,8 +584,7 @@
       }
       if (!config || !config.version || Number(config.version) < 13) return;
 
-      KC.Config.WORKFLOWS = Array.isArray(config.workflows) ? config.workflows : [];
-      KC.Config.FIELD_LINK_RULES = Array.isArray(config.fieldLinkRules) ? config.fieldLinkRules : [];
+      KC.Config._applyWorkflowsConfig(config);
     } catch (e) {
       console.error('[KC.Config.loadWorkflowAndFieldLinkConfigEarly] 設定の読み込みに失敗:', e);
     }
@@ -7208,6 +7292,13 @@
    * §8 改訂1（トリガー再編・2026-07-15）: トリガーの切り口を「経路別」から「操作別」（recordCreate /
    * recordUpdate の2種。§9 改訂2で recordDelete を除外）に変更。DnD・モーダル・kintone標準画面の
    * いずれの経路でも、操作（作成/更新）が同じであれば同一トリガーとして扱う（経路の区別はしない）。
+   *
+   * §11 改訂4（フィールド連動のワークフロー統合・2026-07-15）: config 上のデータモデルは
+   * fieldLinkRules（保存前・自レコード連動）を廃止し workflows 配列（trigger.type に
+   * recordCreate/recordUpdate/fieldChange の3種）へ一本化されたが、KC.Workflow 自体は
+   * recordCreate/recordUpdate のみを扱う（§11.2）。振り分けは
+   * KC.Config.loadWorkflowAndFieldLinkConfigEarly が行うため、本モジュールの実行ロジックは
+   * 改訂3時点から変更していない（AC-27）。
    * ==================================================================== */
   KC.Workflow = {
     /**
@@ -7233,12 +7324,17 @@
 
     /**
      * 指定トリガー種別に該当する有効なワークフロー定義を抽出する（run/notifyRecordSave 共通）。
+     * §11.2 設計ガードの実行時防御: KC.Config.WORKFLOWS は loadWorkflowAndFieldLinkConfigEarly が
+     * recordCreate/recordUpdate のみに絞り込んだ配列だが、ここでも trigger.type が
+     * recordCreate/recordUpdate のいずれかであることを重ねて確認し、fieldChange（appAction 系ではない
+     * ワークフロー）が誤って保存後エンジンで実行されることのないようにする（§11 改訂4）。
      * @param {string} triggerType
      * @returns {Array}
      */
     _getEnabledWorkflows: function (triggerType) {
       return (KC.Config.WORKFLOWS || []).filter(function (wf) {
-        return wf && wf.enabled !== false && wf.trigger && wf.trigger.type === triggerType;
+        return wf && wf.enabled !== false && wf.trigger && wf.trigger.type === triggerType &&
+          (wf.trigger.type === 'recordCreate' || wf.trigger.type === 'recordUpdate');
       });
     },
 
@@ -7249,13 +7345,20 @@
      */
     _runOne: async function (workflow, record) {
       try {
-        // §10.13.3: 条件モデルを AND/OR 複合（conditionGroups）へ拡張。旧形式 conditions が
-        // 残っている場合は matchesConditions 側で 1 グループとして防御的に解釈する
-        if (!KC.Workflow.Core.matchesConditions(record, workflow.conditionGroups || workflow.conditions || [])) {
+        // §10.13.3 / §11.6.1: 条件モデルを AND/OR 自由選択の複合（conditionGroups + conditionGroupsJoin）
+        // へ拡張。旧形式 conditions が残っている場合は matchesConditions 側で防御的に解釈する
+        if (!KC.Workflow.Core.matchesConditions(
+          record, workflow.conditionGroups || workflow.conditions || [], workflow.conditionGroupsJoin
+        )) {
           _log('[KC.Workflow] 発火条件に一致しないためスキップ:', workflow.name);
           return;
         }
-        var actions = workflow.actions || [];
+        // §11.1/§11.2 防御的分岐: action.type 未定義は appAction とみなす。setField 等の
+        // 保存前アクション種別が誤って混入していた場合でも、保存後エンジンでは実行しない（AC-27 の
+        // 前提となる設計ガードの実行時防御。§11 改訂4）
+        var actions = (workflow.actions || []).filter(function (a) {
+          return a && (a.type || 'appAction') === 'appAction';
+        });
         for (var i = 0; i < actions.length; i++) {
           var action = actions[i];
           try {
@@ -7316,29 +7419,67 @@
       CHOICE_TYPES: ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'STATUS'],
 
       /**
-       * 発火条件を判定する（§10.13.3: 条件グループの配列。グループ内 = AND、グループ間 = OR）。
-       * 「いずれかのグループの条件がすべて成立したら発火」。空配列 or 未定義 = 無条件で発火。
-       * 後方互換: 旧形式（フラットな conditions 配列。要素がグループ配列ではなく条件オブジェクト）が
-       * 渡された場合は、その配列全体を 1 グループとして防御的に解釈する（v13 未リリースのため
-       * 必須要件ではないが、耐性として実装。§10.13.3）。
-       * この改修は workflows・fieldLinkRules の両方から共通で呼び出される（§10.13.3 ユーザー指示）。
+       * conditionGroups の入力形式を正規化する（§11.6.1）。
+       * 受け入れる形式（優先順に判定）:
+       *   1. 最古形式: フラットな条件オブジェクト配列（グループ概念なし）→ 1グループ（op='and'）
+       *   2. §10.13.3 形式: [[{fieldCode,...}, ...], ...]（配列の配列。グループ内は常に AND）
+       *      → 各グループ op='and' として解釈（isLegacyFormat=true）
+       *   3. §11.6.1 形式: [{ op: 'and'|'or', conditions: [...] }, ...]
+       * @param {Array} conditionGroups
+       * @returns {{ groups: Array<{op: string, conditions: Array}>, isLegacyFormat: boolean }}
+       */
+      _normalizeConditionGroups: function (conditionGroups) {
+        if (!Array.isArray(conditionGroups) || conditionGroups.length === 0) {
+          return { groups: [], isLegacyFormat: false };
+        }
+        var first = conditionGroups[0];
+        // 最古形式: 先頭要素が条件オブジェクトそのもの（グループでも {op,conditions} でもない）
+        if (first && typeof first === 'object' && !Array.isArray(first) &&
+            first.conditions === undefined && first.fieldCode !== undefined) {
+          return { groups: [{ op: 'and', conditions: conditionGroups }], isLegacyFormat: true };
+        }
+        var isLegacyFormat = false;
+        var groups = conditionGroups.map(function (g) {
+          if (Array.isArray(g)) {
+            isLegacyFormat = true;
+            return { op: 'and', conditions: g };
+          }
+          return {
+            op: (g && g.op === 'or') ? 'or' : 'and',
+            conditions: (g && Array.isArray(g.conditions)) ? g.conditions : []
+          };
+        });
+        return { groups: groups, isLegacyFormat: isLegacyFormat };
+      },
+
+      /**
+       * 発火条件を判定する（§11.6.1 改訂4追加指示: グループ内・グループ間の AND/OR をそれぞれ
+       * ユーザーが選択可能にした。旧固定論理「グループ内 AND・グループ間 OR」は既定値として維持）。
+       * 空配列 or 未定義 = 無条件で発火。
+       * 後方互換: 旧形式（§10.13.3 の配列の配列、または最古のフラット条件配列）が渡された場合は
+       * 各グループ op='and'・グループ間 join='or' として防御的に解釈する（groupsJoin 引数は無視する）。
+       * この改修は workflows（recordCreate/recordUpdate/fieldChange 全トリガー）から共通で
+       * 呼び出される（§11.1, §11.6.1 ユーザー指示）。
        * @param {Object} record - kintone REST 形式のレコード
-       * @param {Array} conditionGroups - [[{ fieldCode, fieldType, value }, ...], ...] または旧形式配列
+       * @param {Array} conditionGroups - [{ op: 'and'|'or', conditions: [...] }, ...] または旧形式配列
+       * @param {string} [groupsJoin] - グループ間の結合（'and'|'or'）。省略/不正値時は 'or'
        * @returns {boolean}
        */
-      matchesConditions: function (record, conditionGroups) {
-        if (!Array.isArray(conditionGroups) || conditionGroups.length === 0) return true;
+      matchesConditions: function (record, conditionGroups, groupsJoin) {
+        var normalized = KC.Workflow.Core._normalizeConditionGroups(conditionGroups);
+        if (normalized.groups.length === 0) return true;
 
-        // 旧形式（フラットな条件配列）の防御的フォールバック: 先頭要素が配列でなければ
-        // 「グループの配列」ではなく「条件の配列」とみなし、1 グループとして扱う
-        var groups = Array.isArray(conditionGroups[0]) ? conditionGroups : [conditionGroups];
+        var join = normalized.isLegacyFormat ? 'or' : ((groupsJoin === 'and') ? 'and' : 'or');
 
-        return groups.some(function (group) {
-          if (!Array.isArray(group) || group.length === 0) return true;
-          return group.every(function (cond) {
+        var evalGroup = function (group) {
+          if (!group.conditions || group.conditions.length === 0) return true;
+          var method = (group.op === 'or') ? 'some' : 'every';
+          return group.conditions[method](function (cond) {
             return KC.Workflow.Core._matchesOneCondition(record, cond);
           });
-        });
+        };
+
+        return (join === 'and') ? normalized.groups.every(evalGroup) : normalized.groups.some(evalGroup);
       },
 
       _matchesOneCondition: function (record, cond) {
@@ -7542,12 +7683,20 @@
 
   /* ====================================================================
    * KC.FieldLink — フィールド連動（自レコードフィールド連動アクション）
-   * REQ_workflow-actions §10 改訂3 準拠
+   * REQ_workflow-actions §10 改訂3 準拠（実行ロジックは §11 改訂4でも変更していない。AC-27）
    *
-   * KC.Workflow（別アプリ書き込み・保存後トリガー）とは根本的に異なるデータモデル・実行エンジン
-   * （§10.3）。本モジュールは「保存前（change イベント / DnD 送信前）に自レコードの別フィールドへ
+   * KC.Workflow（別アプリ書き込み・保存後トリガー）とは根本的に異なる実行エンジン（§10.3）。
+   * 本モジュールは「保存前（change イベント / DnD 送信前）に自レコードの別フィールドへ
    * 固定値・自レコード他フィールド値・他レコード参照値をセットする」処理のみを担当する。
    * 他アプリへの書き込みアクションは一切持たない（lookup ソースは読み取り専用。§10.4.5）。
+   *
+   * §11 改訂4（フィールド連動のワークフロー統合）: config 上の保存形式は、旧トップレベルキー
+   * fieldLinkRules を廃止し workflows 配列（trigger.type === 'fieldChange'）へ一本化されたが、
+   * KC.FieldLink 自身が参照する KC.Config.FIELD_LINK_RULES は改訂3当時と同じ内部形式
+   * （{ id, name, enabled, watchField: { fieldCode }, conditionGroups, setActions }）のまま
+   * 変わらない。統合後 workflows からこの内部形式へのマッピングは
+   * KC.Config.loadWorkflowAndFieldLinkConfigEarly が担うため、本モジュール以下の実行ロジックは
+   * 一切変更していない（§11.3, AC-27）。
    *
    * ループ対策（§10.13.2 必須要件）:
    *   kintone.app.record.set() は change イベントを発火させることが実機確認済み（§10.13.1(c)）。
@@ -7599,7 +7748,9 @@
         var rules = KC.FieldLink._getRulesFor(fieldCode);
         for (var i = 0; i < rules.length; i++) {
           var rule = rules[i];
-          if (!KC.Workflow.Core.matchesConditions(event.record, rule.conditionGroups || rule.conditions || [])) {
+          if (!KC.Workflow.Core.matchesConditions(
+            event.record, rule.conditionGroups || rule.conditions || [], rule.conditionGroupsJoin
+          )) {
             continue;
           }
           KC.FieldLink._applySyncActions(rule, event.record);
@@ -7810,7 +7961,7 @@
         var conditionGroups = rule.conditionGroups || rule.conditions || [];
         if (conditionGroups.length > 0) {
           var recForCond = await getFullRecord();
-          if (!KC.Workflow.Core.matchesConditions(recForCond, conditionGroups)) continue;
+          if (!KC.Workflow.Core.matchesConditions(recForCond, conditionGroups, rule.conditionGroupsJoin)) continue;
         }
 
         var setActions = rule.setActions || [];
@@ -11468,15 +11619,19 @@
   };
 
   /* ====================================================================
-   * ワークフロー（workflows）・フィールド連動（fieldLinkRules）設定の軽量ロード
-   * + change イベントの動的登録（REQ_workflow-actions §10.2.3, §10.13.4）
+   * ワークフロー（workflows。§11 改訂4でトリガー種別 recordCreate/recordUpdate/fieldChange を
+   * 一本化。fieldLinkRules トップレベルキーは廃止済み）設定の軽量ロード
+   * + change イベントの動的登録（REQ_workflow-actions §10.2.3, §10.13.4, §11.3）
    *
    * kintone.events.on() の登録より前（IIFE 内の早い位置）で同期的に実行する。
    * このロードは desktop.js が読み込まれるすべての画面（カレンダー本体・iframe モーダル内・
    * カレンダーを介さない通常の追加/編集画面）で毎回実行される。既存 loadFromPluginConfig
    * （app.record.index.show 内でのみ呼ばれる）とは独立した経路のため、カレンダーを介さない
-   * 標準の追加/編集画面でも workflows/fieldLinkRules が確実にロードされるようになる
+   * 標準の追加/編集画面でも workflows が確実にロードされるようになる
    * （§10.12: 標準画面で workflows が発火しない既存バグの修正を兼ねる）。
+   * KC.Config.FIELD_LINK_RULES は workflows のうち trigger.type === 'fieldChange' のものを
+   * loadWorkflowAndFieldLinkConfigEarly が内部形式へマップした結果であり、以下の change イベント
+   * 登録ロジック自体は §10 改訂3から変更していない（AC-27）。
    * ==================================================================== */
   KC.Config.loadWorkflowAndFieldLinkConfigEarly();
 
