@@ -464,6 +464,49 @@
   KC.Config.WORKFLOWS = [];
 
   /**
+   * フィールド連動ルール配列 (REQ_workflow-actions §10.5, config version 13)
+   * loadWorkflowAndFieldLinkConfigEarly で上書きされる。初期値は空配列 = 機能なし。
+   * workflows（別アプリ書き込み・保存後トリガー）とは別のデータモデル（§10.3）。
+   * @type {Array<{id, name, enabled, watchField, conditionGroups, setActions}>}
+   */
+  KC.Config.FIELD_LINK_RULES = [];
+
+  /**
+   * ワークフロー（workflows）・フィールド連動（fieldLinkRules）設定を軽量に読み込む。
+   * REQ_workflow-actions §10.2.3 / §10.13.4:
+   *   - change イベントの動的登録には、kintone.events.on() 登録より前に監視フィールドコード
+   *     一覧が確定している必要があるため、IIFE 内の早い位置（kintone.events.on 登録より前）で
+   *     kintone.plugin.app.getConfig(PLUGIN_ID) を同期的に呼び出す軽量ロード処理として新設する。
+   *   - 【バグ修正を兼ねる】既存 loadFromPluginConfig は app.record.index.show イベント内でしか
+   *     呼ばれないため、カレンダーを介さない標準の追加/編集画面では KC.Config.WORKFLOWS が
+   *     常に初期値の空配列のままだった（＝標準画面経由の保存で recordCreate/recordUpdate
+   *     ワークフローが一切発火しない既存バグ。§10.12 管理者訂正）。本関数はこのバグの修正を兼ねる。
+   *   - loadFromPluginConfig の他の副作用（FIELD/PERMISSION_RULES 等の反映）には一切触れない、
+   *     完全に独立した関数とする（§10.11 R-10）。
+   */
+  KC.Config.loadWorkflowAndFieldLinkConfigEarly = function () {
+    try {
+      var rawConfig = kintone.plugin.app.getConfig(PLUGIN_ID);
+      if (!rawConfig || Object.keys(rawConfig).length === 0) return;
+
+      var config;
+      var jsonStr = rawConfig.config;
+      if (jsonStr) {
+        config = JSON.parse(jsonStr);
+      } else {
+        // 互換: rawConfig 全体がオブジェクトの場合を試みる（旧形式。loadFromPluginConfig と同じ扱い）
+        config = rawConfig;
+      }
+      if (!config || !config.version || Number(config.version) < 13) return;
+
+      KC.Config.WORKFLOWS = Array.isArray(config.workflows) ? config.workflows : [];
+      KC.Config.FIELD_LINK_RULES = Array.isArray(config.fieldLinkRules) ? config.fieldLinkRules : [];
+    } catch (e) {
+      console.error('[KC.Config.loadWorkflowAndFieldLinkConfigEarly] 設定の読み込みに失敗:', e);
+    }
+  };
+
+  /**
    * P-7: loadEvents が使う fields パラメータのキャッシュ。
    * loadFromPluginConfig の完了後に _buildCachedFieldList() で一度だけ構築する。
    * null の場合は loadEvents が従来通り毎回構築する（初回起動・設定変更後のフォールバック）。
@@ -1398,8 +1441,14 @@
       return { hasOverlap: false, firstRecord: null, isPermissionError: false };
     },
 
-    /** 更新（差分フィールドのみ） */
-    updateEvent: async function (ev) {
+    /**
+     * 更新（差分フィールドのみ）
+     * @param {Object} ev - KcEvent（title/start/end/allday/... の決め打ちプロパティを見て record を組み立てる）
+     * @param {Object} [extraFields] - REQ_workflow-actions §10.2.4: フィールド連動（fieldLinkRules）の
+     *   DnD 相乗り用。{ フィールドコード: { value: ... } } 形式で record にマージしてから PUT する。
+     *   省略時は完全に従来動作（呼び出し元洗い出し結果は完了報告を参照。§10.10 U-15）。
+     */
+    updateEvent: async function (ev, extraFields) {
       var F = KC.Config.FIELD;
       var record = {};
       if ('title'    in ev && F.title)    record[F.title]    = { value: ev.title || '' };
@@ -1425,6 +1474,25 @@
       if ('account'  in ev && F.account)  record[F.account]  = ev.account ? { value: [{ code: ev.account }] } : { value: [] };
       if ('place'    in ev && F.place)    record[F.place]    = { value: ev.place || '' };
       if ('memo'     in ev && F.memo)     record[F.memo]     = { value: ev.memo || '' };
+
+      // REQ_workflow-actions §10.2.4: フィールド連動の DnD 相乗り分をマージする（省略時は従来動作のまま）
+      // レビュー指摘1(b)（二段防御）: extraFields のキーが updateEvent 自身が管理するフィールドコード
+      // （F.title/F.start/... 等）と衝突する場合はマージしない。config.js 側（修正1(a)）でセット先候補
+      // から除外しているが、保存済みルールが古い場合等に備え、実行時にもここでスキップして
+      // ドラッグで確定した新値が fieldLinkRules の値で上書きされることを防ぐ。
+      if (extraFields) {
+        var managedFieldCodes = [
+          F.title, F.start, F.end, F.allday, F.color, F.status, F.userMail, F.account, F.place, F.memo
+        ].filter(Boolean);
+        Object.keys(extraFields).forEach(function (code) {
+          if (!code) return;
+          if (managedFieldCodes.indexOf(code) !== -1) {
+            console.warn('[KC.Api.updateEvent] extraFields がカレンダー管理フィールドと衝突するためスキップします:', code);
+            return;
+          }
+          record[code] = extraFields[code];
+        });
+      }
 
       if (Object.keys(record).length === 0) return { ok: true };
 
@@ -2416,11 +2484,33 @@
         KC.Banner.hide();
       }
 
+      // ── フィールド連動 相乗り解決フェーズ（REQ_workflow-actions §10.2.4・§10.4.3）───────────────
+      // 監視フィールドが開始/終了/終日のいずれかで、かつ実際に値が変化した場合のみ評価する。
+      // lookup ソースは PUT 前に await で解決する（解決に失敗した場合は相乗りさせず PUT はそのまま
+      // 続行する。日時変更というユーザー操作の主目的を、付随的なフィールド連動の失敗でブロックしない）。
+      var flrChangedFlags = {
+        start:  newStart !== savedStart,
+        end:    newEnd !== savedEnd,
+        // allday は DnD では変化しない（本コードベースの _commitOptimistic 呼び出し元は
+        // いずれも終日/時間帯の別レーン内での移動・リサイズのみで、終日フラグ自体は不変）
+        allday: false
+      };
+      var flrExtraFields = null;
+      if (KC.FieldLink && typeof KC.FieldLink.resolveForDnd === 'function' &&
+          (flrChangedFlags.start || flrChangedFlags.end || flrChangedFlags.allday)) {
+        try {
+          flrExtraFields = await KC.FieldLink.resolveForDnd(origEv, flrChangedFlags);
+        } catch (flrErr) {
+          console.warn('[KC.FieldLink] DnD 相乗り解決で予期しないエラー、日時変更のみ送信します:', flrErr);
+          flrExtraFields = null;
+        }
+      }
+
       // ── 送信フェーズ ─────────────────────────────────────────────────────────
       // API を非同期送信（楽観的: レスポンスを待たない）
       // クロージャが保持する origEv.rev は古い可能性があるため、State の currentEv.rev を使う
       var payload = Object.assign({}, origEv, { start: newStart, end: newEnd, rev: currentEv ? currentEv.rev : origEv.rev });
-      KC.Api.updateEvent(payload)
+      KC.Api.updateEvent(payload, flrExtraFields)
         .then(function (resp) {
           // API 成功時、戻り値の revision を State に反映（要件 §3.10.1）
           // resp は { ok: true, revision: "N" } 形式
@@ -7111,18 +7201,19 @@
    *   - KC.Workflow.Core は「レコードオブジェクト（kintone REST 形式）+ ワークフロー定義」のみを
    *     入力として受け取る純粋な実行部とし、KcEvent / KC.Popup 等のカレンダー固有オブジェクトに
    *     直接依存させない（将来 kc-workflow-core.js への切り出しを見据えた設計）。
-   *   - トリガー側（recordCreate/recordUpdate の DnD/モーダル/標準画面経路の getRecord 補完、
-   *     recordDelete の event.record スナップショット利用など）は KC.Workflow 本体（Core 以外）が担当する。
+   *   - トリガー側（recordCreate/recordUpdate の DnD/モーダル/標準画面経路の getRecord 補完等）は
+   *     KC.Workflow 本体（Core 以外）が担当する。物理削除トリガー（recordDelete）は §9 改訂2により
+   *     スコープ外（将来拡張。event.record スナップショット利用という設計自体は資産として残す）。
    *
    * §8 改訂1（トリガー再編・2026-07-15）: トリガーの切り口を「経路別」から「操作別」（recordCreate /
-   * recordUpdate / recordDelete の3種）に変更。DnD・モーダル・kintone標準画面のいずれの経路でも、
-   * 操作（作成/更新/削除）が同じであれば同一トリガーとして扱う（経路の区別はしない）。
+   * recordUpdate の2種。§9 改訂2で recordDelete を除外）に変更。DnD・モーダル・kintone標準画面の
+   * いずれの経路でも、操作（作成/更新）が同じであれば同一トリガーとして扱う（経路の区別はしない）。
    * ==================================================================== */
   KC.Workflow = {
     /**
      * 指定トリガー種別に該当する有効なワークフローを起動する（非同期・fire-and-forget 前提）。
      * 呼び出し元は await しないこと（NFR-2）。
-     * @param {string} triggerType - 'recordCreate' | 'recordUpdate' | 'recordDelete'
+     * @param {string} triggerType - 'recordCreate' | 'recordUpdate'
      * @param {Object} record - kintone REST 形式のレコードオブジェクト
      * @returns {Promise<void>}
      */
@@ -7158,7 +7249,9 @@
      */
     _runOne: async function (workflow, record) {
       try {
-        if (!KC.Workflow.Core.matchesConditions(record, workflow.conditions || [])) {
+        // §10.13.3: 条件モデルを AND/OR 複合（conditionGroups）へ拡張。旧形式 conditions が
+        // 残っている場合は matchesConditions 側で 1 グループとして防御的に解釈する
+        if (!KC.Workflow.Core.matchesConditions(record, workflow.conditionGroups || workflow.conditions || [])) {
           _log('[KC.Workflow] 発火条件に一致しないためスキップ:', workflow.name);
           return;
         }
@@ -7223,17 +7316,29 @@
       CHOICE_TYPES: ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'STATUS'],
 
       /**
-       * 発火条件（AND 結合）を判定する（§3.3, U-2 確定）
+       * 発火条件を判定する（§10.13.3: 条件グループの配列。グループ内 = AND、グループ間 = OR）。
+       * 「いずれかのグループの条件がすべて成立したら発火」。空配列 or 未定義 = 無条件で発火。
+       * 後方互換: 旧形式（フラットな conditions 配列。要素がグループ配列ではなく条件オブジェクト）が
+       * 渡された場合は、その配列全体を 1 グループとして防御的に解釈する（v13 未リリースのため
+       * 必須要件ではないが、耐性として実装。§10.13.3）。
+       * この改修は workflows・fieldLinkRules の両方から共通で呼び出される（§10.13.3 ユーザー指示）。
        * @param {Object} record - kintone REST 形式のレコード
-       * @param {Array} conditions - [{ fieldCode, fieldType, value }]
+       * @param {Array} conditionGroups - [[{ fieldCode, fieldType, value }, ...], ...] または旧形式配列
        * @returns {boolean}
        */
-      matchesConditions: function (record, conditions) {
-        if (!conditions || conditions.length === 0) return true;
-        for (var i = 0; i < conditions.length; i++) {
-          if (!KC.Workflow.Core._matchesOneCondition(record, conditions[i])) return false;
-        }
-        return true;
+      matchesConditions: function (record, conditionGroups) {
+        if (!Array.isArray(conditionGroups) || conditionGroups.length === 0) return true;
+
+        // 旧形式（フラットな条件配列）の防御的フォールバック: 先頭要素が配列でなければ
+        // 「グループの配列」ではなく「条件の配列」とみなし、1 グループとして扱う
+        var groups = Array.isArray(conditionGroups[0]) ? conditionGroups : [conditionGroups];
+
+        return groups.some(function (group) {
+          if (!Array.isArray(group) || group.length === 0) return true;
+          return group.every(function (cond) {
+            return KC.Workflow.Core._matchesOneCondition(record, cond);
+          });
+        });
       },
 
       _matchesOneCondition: function (record, cond) {
@@ -7332,6 +7437,38 @@
         return resp.records || [];
       },
 
+      /**
+       * キー一致検索で対象アプリ（自アプリ含む）から値を1件読み取る（読み取り方向。§10.2.6）。
+       * 既存 _findByKey は「書き込み方向（他アプリへの反映）」専用で $id しか取得しないため流用不可。
+       * こちらは fieldLinkRules の lookup ソース用に、転記したい値フィールドを取得する新規ヘルパー。
+       * 0件ヒット: undefined を返す（呼び出し元は「何もしない」。§10.4.2 ユーザー確定）。
+       * 複数件ヒット: console.warn を出し undefined を返す（先頭レコードを使わない。同上）。
+       * @param {string|number} appId
+       * @param {string} targetKeyFieldCode - 参照先アプリ側のキーフィールドコード
+       * @param {*} keyValue - 自レコード側キーフィールドの現在値
+       * @param {string} valueFieldCode - 転記元（読み取る）フィールドコード
+       * @returns {Promise<*|undefined>}
+       */
+      lookupValueByKey: async function (appId, targetKeyFieldCode, keyValue, valueFieldCode) {
+        var query = '(' + targetKeyFieldCode + ' = "' +
+          String(keyValue).replace(/"/g, '\\"') + '") limit 2';
+        var url = kintone.api.url('/k/v1/records.json', true);
+        var resp = await kintone.api(url, 'GET', {
+          app: appId,
+          query: query,
+          fields: ['$id', valueFieldCode]
+        });
+        var records = resp.records || [];
+        if (records.length === 0) return undefined;
+        if (records.length > 1) {
+          console.warn('[KC.Workflow.Core.lookupValueByKey] キー一致レコードが複数件見つかったためスキップします。' +
+            'appId=' + appId + ' key=' + targetKeyFieldCode + '="' + keyValue + '"');
+          return undefined;
+        }
+        var field = records[0][valueFieldCode];
+        return field ? field.value : undefined;
+      },
+
       /** 対象アプリへレコードを新規作成する */
       _createRecord: async function (targetAppId, targetRecord) {
         var url = kintone.api.url('/k/v1/record.json', true);
@@ -7400,6 +7537,320 @@
 
         return srcField.value;
       }
+    }
+  };
+
+  /* ====================================================================
+   * KC.FieldLink — フィールド連動（自レコードフィールド連動アクション）
+   * REQ_workflow-actions §10 改訂3 準拠
+   *
+   * KC.Workflow（別アプリ書き込み・保存後トリガー）とは根本的に異なるデータモデル・実行エンジン
+   * （§10.3）。本モジュールは「保存前（change イベント / DnD 送信前）に自レコードの別フィールドへ
+   * 固定値・自レコード他フィールド値・他レコード参照値をセットする」処理のみを担当する。
+   * 他アプリへの書き込みアクションは一切持たない（lookup ソースは読み取り専用。§10.4.5）。
+   *
+   * ループ対策（§10.13.2 必須要件）:
+   *   kintone.app.record.set() は change イベントを発火させることが実機確認済み（§10.13.1(c)）。
+   *   ルール実行によるセット中は _applying フラグを立て、フラグ中の change 発火ではルール評価を
+   *   スキップする。同期パス（event.record 書き換え）が change を再発火させるかは未検証のため、
+   *   同期・非同期の両パスに一律でこのガードを適用する（挙動差に依存しない設計）。
+   * ==================================================================== */
+  KC.FieldLink = {
+    /** 再入ガード（§10.13.2）。true の間は onChange 内でルール評価そのものをスキップする */
+    _applying: false,
+
+    /**
+     * レビュー指摘3: 並行 lookup の lost update 防止用モジュールスコープ Promise チェーン。
+     * 複数の監視フィールドがほぼ同時に変更された場合、それぞれの _resolveLookupActionsAsync が
+     * 並行して get() → set() を行うと、後着の set(全体) が先着の変更を上書きしてしまう。
+     * get→set 区間をこのチェーンで直列化し、次の呼び出しは前の get→set 完了後にのみ実行させる。
+     * エラー時もチェーンが途切れない（catch して継続する）よう、必ず _setQueue に catch 済みの
+     * Promise を再代入すること。
+     */
+    _setQueue: Promise.resolve(),
+
+    /**
+     * 監視フィールドコードに一致する有効な fieldLinkRules を返す。
+     * @param {string} fieldCode
+     * @returns {Array}
+     */
+    _getRulesFor: function (fieldCode) {
+      return (KC.Config.FIELD_LINK_RULES || []).filter(function (rule) {
+        return rule && rule.enabled !== false && rule.watchField && rule.watchField.fieldCode === fieldCode;
+      });
+    },
+
+    /**
+     * 追加/編集画面の change イベントハンドラ本体（§10.2.3 で動的登録される）。
+     * kintone 仕様上、イベントハンドラー内で kintone.app.record.set() は呼べないため（§10.2.2）、
+     * 同期ソース（fixed/selfField）は event.record を直接書き換えて return する。
+     * lookup（非同期ソース）はここでは何もせず、return 後に非同期解決してから
+     * kintone.app.record.get() → value 書き換え → kintone.app.record.set(全体) で反映する
+     * （§10.13.1(b): 部分オブジェクトは不可のため必ず get→全体set パターンを使う）。
+     * @param {Object} event - kintone change イベントオブジェクト
+     * @param {string} fieldCode - 監視フィールドコード（登録時にクロージャで固定。§10.2.3）
+     * @returns {Object} event（同期・即座に return する）
+     */
+    onChange: function (event, fieldCode) {
+      // 再入ガード: 自分自身のルール実行によるセットで発火した change は評価しない（§10.13.2）
+      if (KC.FieldLink._applying) return event;
+
+      try {
+        var rules = KC.FieldLink._getRulesFor(fieldCode);
+        for (var i = 0; i < rules.length; i++) {
+          var rule = rules[i];
+          if (!KC.Workflow.Core.matchesConditions(event.record, rule.conditionGroups || rule.conditions || [])) {
+            continue;
+          }
+          KC.FieldLink._applySyncActions(rule, event.record);
+          KC.FieldLink._resolveLookupActionsAsync(rule); // 非同期・fire-and-forget（return を待たない）
+        }
+      } catch (e) {
+        console.error('[KC.FieldLink.onChange] 予期しないエラー:', e);
+      }
+      return event;
+    },
+
+    /** userValueMode を参照して code/name 抽出が必要なフィールド型（selfField ソース。レビュー指摘2） */
+    _USER_VALUE_MODE_TYPES: ['USER_SELECT', 'ORGANIZATION_SELECT', 'GROUP_SELECT'],
+
+    /**
+     * selfField ソースの値を、必要に応じて code/name 抽出したうえで返す（レビュー指摘2）。
+     * USER_SELECT/ORGANIZATION_SELECT/GROUP_SELECT は配列型のため、非配列型のセット先フィールドへ
+     * そのままセットすると生の配列オブジェクトが入ってしまう。KC.Workflow.Core._extractSourceValue
+     * （既存ワークフロー側の実装パターン、desktop.js 内 USER_SELECT 分岐）と同様に、
+     * action.userValueMode（'code'|'name'、既定 'code'）で単一の文字列へ変換する。
+     * @param {Object} srcField - kintone record 形式のフィールドオブジェクト（{ type, value }）
+     * @param {Object} action - setActions の1件（userValueMode を参照）
+     * @returns {*} セット先フィールドにそのまま代入できる値
+     */
+    _extractSelfFieldValue: function (srcField, action) {
+      if (!srcField) return undefined;
+      if (KC.FieldLink._USER_VALUE_MODE_TYPES.indexOf(srcField.type) !== -1) {
+        var items = Array.isArray(srcField.value) ? srcField.value : [];
+        var useCode = action.userValueMode !== 'name';
+        return items.map(function (u) { return useCode ? (u.code || '') : (u.name || ''); }).join(', ');
+      }
+      return srcField.value;
+    },
+
+    /**
+     * fixed/selfField（同期ソース）のセットアクションを event.record 上で直接書き換える。
+     * @param {Object} rule
+     * @param {Object} record - change イベントの event.record
+     */
+    _applySyncActions: function (rule, record) {
+      var setActions = rule.setActions || [];
+      var appliedAny = false;
+      for (var i = 0; i < setActions.length; i++) {
+        var action = setActions[i];
+        if (!action || !action.targetFieldCode || action.sourceType === 'lookup') continue;
+        var field = record[action.targetFieldCode];
+        if (!field) continue; // フォーム上に存在しないフィールドはスキップ（安全側）
+
+        if (action.sourceType === 'fixed') {
+          field.value = action.fixedValue !== undefined ? action.fixedValue : '';
+          appliedAny = true;
+        } else if (action.sourceType === 'selfField') {
+          var srcField = record[action.selfFieldCode];
+          if (srcField) {
+            field.value = KC.FieldLink._extractSelfFieldValue(srcField, action);
+            appliedAny = true;
+          }
+        }
+      }
+      // 同期パスが change を再発火させるかは未検証のため、一律でガードを適用する（§10.13.2）
+      if (appliedAny) {
+        KC.FieldLink._applying = true;
+        setTimeout(function () { KC.FieldLink._applying = false; }, 0);
+      }
+    },
+
+    /**
+     * lookup（非同期ソース）のセットアクションを解決し、フォームへ反映する（§10.9.2）。
+     * change ハンドラの return 後に非同期で実行される（fire-and-forget。呼び出し元は await しない）。
+     * @param {Object} rule
+     */
+    _resolveLookupActionsAsync: async function (rule) {
+      var lookupActions = (rule.setActions || []).filter(function (a) {
+        return a && a.sourceType === 'lookup' && a.targetFieldCode;
+      });
+      if (lookupActions.length === 0) return;
+
+      try {
+        var resolvedValues = {}; // targetFieldCode -> value
+        // キー値の読み取りは、解決処理を開始した時点のフォーム最新値を使う
+        var baseline = kintone.app.record.get();
+
+        for (var i = 0; i < lookupActions.length; i++) {
+          var action = lookupActions[i];
+          var lk = action.lookup;
+          if (!lk || !lk.appId || !lk.selfKeyFieldCode || !lk.targetKeyFieldCode || !lk.valueFieldCode) {
+            console.warn('[KC.FieldLink] lookup 設定が不足しているためスキップ:', rule.name, action);
+            continue;
+          }
+          var keyField = baseline.record[lk.selfKeyFieldCode];
+          var keyValue = keyField && keyField.value != null ? keyField.value : '';
+          if (keyValue === '') continue; // キー値なし → 何もしない（§10.4.2 確定）
+
+          try {
+            var value = await KC.Workflow.Core.lookupValueByKey(lk.appId, lk.targetKeyFieldCode, keyValue, lk.valueFieldCode);
+            if (value === undefined) continue; // 0件/複数件（Core 側で console.warn 済み）→ 何もしない
+            resolvedValues[action.targetFieldCode] = value;
+          } catch (lookupErr) {
+            console.error('[KC.FieldLink] lookup 解決エラー:', rule.name, action, lookupErr);
+          }
+        }
+
+        if (Object.keys(resolvedValues).length === 0) return;
+
+        // レビュー指摘3: get→set 区間をモジュールスコープの Promise チェーンで直列化する。
+        // 次の呼び出しは、前の呼び出しの get→set が完了してから自分の get を実行する。
+        // §10.13.1(b): 部分オブジェクトは不可。get() で全体を取り直してから value のみ書き換えて set(全体)
+        KC.FieldLink._setQueue = KC.FieldLink._setQueue.then(function () {
+          return KC.FieldLink._applyResolvedValues(rule, resolvedValues);
+        }).catch(function (queueErr) {
+          // ここで catch して継続しないと、以降のすべての呼び出しが _setQueue 経由で
+          // 永久に評価されなくなる（チェーンが途切れる）ため、必ずキャッチしてから継続する
+          console.error('[KC.FieldLink] set キュー処理でエラー:', rule.name, queueErr);
+        });
+        await KC.FieldLink._setQueue;
+      } catch (e) {
+        console.error('[KC.FieldLink] lookup 反映処理で予期しないエラー:', rule.name, e);
+      }
+    },
+
+    /**
+     * get() → value 書き換え → set(全体) の一連の処理を実行する（_setQueue によって直列化される区間）。
+     * @param {Object} rule
+     * @param {Object} resolvedValues - { targetFieldCode: 値 }
+     */
+    _applyResolvedValues: function (rule, resolvedValues) {
+      KC.FieldLink._applying = true;
+      try {
+        var current = kintone.app.record.get();
+        Object.keys(resolvedValues).forEach(function (code) {
+          if (current.record[code]) { current.record[code].value = resolvedValues[code]; }
+        });
+        kintone.app.record.set(current);
+      } catch (e) {
+        console.error('[KC.FieldLink] set() 実行時にエラー:', rule.name, e);
+      } finally {
+        // set() が同期的に change を発火させるか非同期かは不明のため、setTimeout(0) で安全に下ろす（§10.13.2）
+        setTimeout(function () { KC.FieldLink._applying = false; }, 0);
+      }
+    },
+
+    /**
+     * KcEvent（desktop.js の簡易イベント表現）から任意フィールドの値を取り出す。
+     * KcEvent が保持する固定フィールド（title/start/end/color/status/place/userMail/account/memo）
+     * のみ対応。それ以外（任意フィールド）は undefined を返し、呼び出し元が getRecord で補完する（§2.1.1）。
+     * @param {Object} origEv - KcEvent
+     * @param {string} fieldCode
+     * @returns {*|undefined}
+     */
+    _extractSelfFieldValueFromKcEvent: function (origEv, fieldCode) {
+      var F = KC.Config.FIELD;
+      if (!fieldCode) return undefined;
+      if (fieldCode === F.title)    return origEv.title;
+      if (fieldCode === F.start)    return origEv.start;
+      if (fieldCode === F.end)      return origEv.end;
+      if (fieldCode === F.color)    return origEv.color;
+      if (fieldCode === F.status)   return origEv.status;
+      if (fieldCode === F.place)    return origEv.place;
+      if (fieldCode === F.userMail) return origEv.userMail;
+      if (fieldCode === F.account)  return origEv.account;
+      if (fieldCode === F.memo)     return origEv.memo;
+      return undefined;
+    },
+
+    /**
+     * DnD（移動・リサイズ）の PUT 送信前に、開始/終了/終日いずれかの変化に対応する
+     * fieldLinkRules を解決し、PUT に相乗りさせる extraFields を組み立てる（§10.2.4, §10.4.3）。
+     * lookup ソースは PUT 前に await で解決する。解決失敗時はそのセットのみスキップし、
+     * 日時変更の PUT 自体はそのまま続行させる（呼び出し元 _commitOptimistic 側の方針）。
+     * @param {Object} origEv - KcEvent（DnD 開始時点。_commitOptimistic 内で mutate 済みの可能性あり）
+     * @param {{start: boolean, end: boolean, allday: boolean}} changedFlags
+     * @returns {Promise<Object|null>} { フィールドコード: { value } } 形式。該当なしは null
+     */
+    resolveForDnd: async function (origEv, changedFlags) {
+      var F = KC.Config.FIELD;
+      var watchFieldCandidates = [];
+      if (changedFlags.start && F.start)   watchFieldCandidates.push(F.start);
+      if (changedFlags.end && F.end)       watchFieldCandidates.push(F.end);
+      if (changedFlags.allday && F.allday) watchFieldCandidates.push(F.allday);
+      if (watchFieldCandidates.length === 0) return null;
+
+      var rules = (KC.Config.FIELD_LINK_RULES || []).filter(function (rule) {
+        return rule && rule.enabled !== false && rule.watchField &&
+          watchFieldCandidates.indexOf(rule.watchField.fieldCode) !== -1;
+      });
+      if (rules.length === 0) return null;
+
+      // 発火条件判定・selfField ソースの補完に、KcEvent に無い任意フィールドの値が必要になる
+      // 場合がある。必要になった時点で一度だけ GET し、以降はキャッシュを再利用する（R-4）。
+      var fullRecord = null;
+      var getFullRecord = function () {
+        if (fullRecord) return Promise.resolve(fullRecord);
+        return KC.Api.getRecord(origEv.id).then(function (resp) {
+          fullRecord = resp.record;
+          // レビュー指摘4: GET はサーバーの旧値（PUT 未送信）のため、DnD で確定済みの新しい
+          // 開始/終了の値（origEv.start/.end。_commitOptimistic の楽観更新で既に上書き済み）で
+          // 上書きしてから条件判定・selfField 補完に使う。これにより発火条件が開始/終了日時
+          // 自身を参照する場合でも、ドラッグ前の値ではなく確定後の新値で判定される。
+          if (F.start && fullRecord[F.start]) { fullRecord[F.start] = { value: origEv.start }; }
+          if (F.end   && fullRecord[F.end])   { fullRecord[F.end]   = { value: origEv.end }; }
+          return fullRecord;
+        });
+      };
+
+      var extraFields = {};
+      for (var i = 0; i < rules.length; i++) {
+        var rule = rules[i];
+        var conditionGroups = rule.conditionGroups || rule.conditions || [];
+        if (conditionGroups.length > 0) {
+          var recForCond = await getFullRecord();
+          if (!KC.Workflow.Core.matchesConditions(recForCond, conditionGroups)) continue;
+        }
+
+        var setActions = rule.setActions || [];
+        for (var j = 0; j < setActions.length; j++) {
+          var action = setActions[j];
+          if (!action || !action.targetFieldCode) continue;
+
+          if (action.sourceType === 'fixed') {
+            extraFields[action.targetFieldCode] = { value: action.fixedValue !== undefined ? action.fixedValue : '' };
+          } else if (action.sourceType === 'selfField') {
+            var val = KC.FieldLink._extractSelfFieldValueFromKcEvent(origEv, action.selfFieldCode);
+            if (val === undefined) {
+              var rec = await getFullRecord();
+              // レビュー指摘2: USER_SELECT/ORGANIZATION_SELECT/GROUP_SELECT ソースは配列型のため、
+              // userValueMode（code/name）で単一値へ抽出してからセットする（_applySyncActions と共通処理）
+              var recSrcField = rec[action.selfFieldCode];
+              val = recSrcField ? KC.FieldLink._extractSelfFieldValue(recSrcField, action) : '';
+            }
+            extraFields[action.targetFieldCode] = { value: val };
+          } else if (action.sourceType === 'lookup') {
+            try {
+              var lk = action.lookup;
+              if (!lk || !lk.appId || !lk.selfKeyFieldCode || !lk.targetKeyFieldCode || !lk.valueFieldCode) continue;
+              var keyVal = KC.FieldLink._extractSelfFieldValueFromKcEvent(origEv, lk.selfKeyFieldCode);
+              if (keyVal === undefined) {
+                var rec2 = await getFullRecord();
+                keyVal = rec2[lk.selfKeyFieldCode] ? rec2[lk.selfKeyFieldCode].value : '';
+              }
+              if (keyVal === '' || keyVal == null) continue;
+              var lookedUp = await KC.Workflow.Core.lookupValueByKey(lk.appId, lk.targetKeyFieldCode, keyVal, lk.valueFieldCode);
+              if (lookedUp === undefined) continue; // 0件/複数件 → 相乗りさせず PUT は続行（AC-19, AC-20）
+              extraFields[action.targetFieldCode] = { value: lookedUp };
+            } catch (lookupErr) {
+              console.warn('[KC.FieldLink] DnD: lookup 解決失敗、このセットのみスキップします:', rule.name, lookupErr);
+            }
+          }
+        }
+      }
+
+      return Object.keys(extraFields).length > 0 ? extraFields : null;
     }
   };
 
@@ -11017,6 +11468,38 @@
   };
 
   /* ====================================================================
+   * ワークフロー（workflows）・フィールド連動（fieldLinkRules）設定の軽量ロード
+   * + change イベントの動的登録（REQ_workflow-actions §10.2.3, §10.13.4）
+   *
+   * kintone.events.on() の登録より前（IIFE 内の早い位置）で同期的に実行する。
+   * このロードは desktop.js が読み込まれるすべての画面（カレンダー本体・iframe モーダル内・
+   * カレンダーを介さない通常の追加/編集画面）で毎回実行される。既存 loadFromPluginConfig
+   * （app.record.index.show 内でのみ呼ばれる）とは独立した経路のため、カレンダーを介さない
+   * 標準の追加/編集画面でも workflows/fieldLinkRules が確実にロードされるようになる
+   * （§10.12: 標準画面で workflows が発火しない既存バグの修正を兼ねる）。
+   * ==================================================================== */
+  KC.Config.loadWorkflowAndFieldLinkConfigEarly();
+
+  (function _registerFieldLinkChangeEvents() {
+    var watchedCodes = [];
+    (KC.Config.FIELD_LINK_RULES || []).forEach(function (rule) {
+      if (!rule || rule.enabled === false) return;
+      var code = rule.watchField && rule.watchField.fieldCode;
+      if (code && watchedCodes.indexOf(code) === -1) { watchedCodes.push(code); }
+    });
+    watchedCodes.forEach(function (code) {
+      // 対応外フィールド型・存在しないフィールドコードを指定した場合、kintone 仕様上
+      // イベントハンドラー自体が実行されないだけなので、画面によらず一律登録して問題ない（§10.2.1）。
+      kintone.events.on('app.record.create.change.' + code, function (event) {
+        return KC.FieldLink.onChange(event, code);
+      });
+      kintone.events.on('app.record.edit.change.' + code, function (event) {
+        return KC.FieldLink.onChange(event, code);
+      });
+    });
+  })();
+
+  /* ====================================================================
    * kintone.events 登録
    * ==================================================================== */
   kintone.events.on('app.record.index.show', function (event) {
@@ -11241,7 +11724,8 @@
 
   /* ====================================================================
    * 削除成功後も同様
-   * + recordDelete トリガー（REQ_workflow-actions §3.1・§3.8 NFR-4・§8）
+   * 物理削除トリガー（recordDelete）は REQ_workflow-actions §9 改訂2 によりスコープ外
+   * （将来拡張。運用上の削除は論理削除＝recordUpdate＋発火条件で表現する）
    * ==================================================================== */
   kintone.events.on('app.record.detail.delete.submit', function (event) {
     if (window.opener) {
@@ -11249,16 +11733,6 @@
       try { window.opener.KC_REFRESH && window.opener.KC_REFRESH(); } catch (e) {}
       // 削除の場合はリダイレクトを防ぎ、ウィンドウを閉じる
       setTimeout(function () { window.close(); }, 500);
-    }
-
-    // recordDelete トリガー（§3.8 NFR-4・§8.1、物理削除）: このイベントは削除実行前に発火し、
-    // event.record に削除対象レコードの全フィールド値（削除前スナップショット）が含まれる。
-    // 削除後は GET できないため、このスナップショットをそのまま条件判定・マッピングに使用する。
-    // モーダル内・標準画面のどちらから削除しても対象になる（AC-4。iframe 判定は行わない）。
-    if (KC.Workflow && typeof KC.Workflow.run === 'function') {
-      KC.Workflow.run('recordDelete', event.record).catch(function (wfErr) {
-        console.error('[KC.Workflow] recordDelete 実行エラー:', wfErr);
-      });
     }
 
     return event;

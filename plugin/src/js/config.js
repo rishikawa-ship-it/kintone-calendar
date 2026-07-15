@@ -21,15 +21,25 @@
  *     filterConfig: { groups: [ { id, label, type: 'assignee'|'fieldValue', fieldCode, fieldType, items: [ { id, label, value, defaultChecked } ] } ] },
  *     views: { "<viewId>": { calendarTitle, defaultView } },
  *     workflows: [ { id, name, enabled, trigger: { type }, conditions: [...], actions: [...] }, ... ]
- *       trigger.type: 'recordCreate' | 'recordUpdate' | 'recordDelete'（§8 改訂1: 操作別トリガー。
- *       経路（カレンダー DnD/モーダル or kintone 標準画面）は区別しない）
+ *       trigger.type: 'recordCreate' | 'recordUpdate'（§8 改訂1: 操作別トリガー。
+ *       経路（カレンダー DnD/モーダル or kintone 標準画面）は区別しない。
+ *       物理削除トリガー（recordDelete）は §9 改訂2 でスコープ外化。将来拡張の予約値として
+ *       enum には含めない。未知の trigger.type を持つワークフローは発火しない）
  *   }
  * v13 変更点 (REQ_workflow-actions):
- *   - workflows 配列を追加（レコードの作成/更新/削除（物理削除）を起点に
+ *   - workflows 配列を追加（レコードの作成/更新を起点に
  *     別アプリへレコードを追加/更新するワークフロー定義）
  *   - v12→v13 マイグレーション: workflows が未定義または配列でない場合は [] で補完
- *   - §8 改訂1（2026-07-15）: トリガーを経路別（旧enum）から操作別（recordCreate/recordUpdate/
- *     recordDelete）に再編。version 13 は未リリースのためマイグレーション不要
+ *   - §8 改訂1（2026-07-15）: トリガーを経路別（旧enum）から操作別（recordCreate/recordUpdate）に再編。
+ *     version 13 は未リリースのためマイグレーション不要
+ *   - §9 改訂2（2026-07-15）: 物理削除トリガー（recordDelete）を除外。運用上の削除は論理削除
+ *     （recordUpdate ＋ 発火条件）で表現するため
+ *   - §10 改訂3（2026-07-15）: fieldLinkRules 配列を追加（保存前・自レコードフィールド連動）。
+ *     workflows とは別データモデル・別UIセクション（§10.3）。version 13 は未リリースのため
+ *     単純な初期値補完（[] 未定義時補完）でよく、専用のマイグレーション処理は不要（§10.5）
+ *   - §10.13.3: 発火条件のデータ形式を conditions（フラット AND 配列）から
+ *     conditionGroups（グループ内 AND・グループ間 OR の配列）へ拡張。workflows・fieldLinkRules の
+ *     両方に適用。v13 未リリースのためマイグレーション不要
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -159,17 +169,52 @@
   var WORKFLOW_MULTI_VALUE_TARGET_TYPES = ['CHECK_BOX'];
   /** 配列値（複数値）を保持するフィールド型。キー一致フィールドの候補から除外する用途（修正2）。 */
   var WORKFLOW_ARRAY_VALUE_TYPES = ['CHECK_BOX', 'MULTI_SELECT', 'USER_SELECT', 'ORGANIZATION_SELECT', 'GROUP_SELECT'];
-  /** ワークフローのトリガー種別ラベル（§8.1 改訂1: 操作別トリガーに再編） */
+  /**
+   * ワークフローのトリガー種別ラベル（§8.1 改訂1: 操作別トリガーに再編）。
+   * recordDelete（物理削除）は §9 改訂2 で除外（将来拡張の予約値。現時点では選択肢・処理対象外）
+   */
   var WORKFLOW_TRIGGER_LABELS = {
     recordCreate: 'レコード作成時',
-    recordUpdate: 'レコード更新時',
-    recordDelete: 'レコード削除時（物理削除）'
+    recordUpdate: 'レコード更新時'
   };
   /** ワークフローの動作モードラベル（§3.4.2） */
   var WORKFLOW_MODE_LABELS = {
     createOnly: '新規作成のみ',
     updateOnly: '更新のみ（ヒットしなければ何もしない）',
     upsert:     'upsert（あれば更新・なければ新規作成）'
+  };
+
+  /**
+   * フィールド連動設定（REQ_workflow-actions §10）関連のフィールド型フィルタ
+   */
+  /**
+   * 監視フィールドとして選択可能な型（§10.4.1: change イベントが発火し得る型のみ。
+   * 公式仕様で対応が確認できている型から、本改訂のスコープ外である SUBTABLE を除外した集合）
+   */
+  var FIELDLINK_WATCH_FIELD_TYPES = [
+    'RADIO_BUTTON', 'DROP_DOWN', 'CHECK_BOX', 'MULTI_SELECT', 'USER_SELECT',
+    'ORGANIZATION_SELECT', 'GROUP_SELECT', 'DATE', 'TIME', 'DATETIME',
+    'SINGLE_LINE_TEXT', 'NUMBER', 'LOOKUP'
+  ];
+  /**
+   * セット先フィールド候補から除外する型（§10.4.4）。
+   * FILE（添付ファイル）は kintone.app.record.set() で書き換え不可と公式に明記されているため確定除外。
+   * CALC/LOOKUP/STATUS/CATEGORY/REFERENCE_TABLE は公式ページで断定記載はないが保守的に除外する提案
+   * （§10.10 U-12: 実機検証で範囲を確定する前提）。加えて GROUP（レイアウト要素）と、既存
+   * WORKFLOW_EXCLUDED_TARGET_TYPES で書込不可のシステム項目として扱われている
+   * RECORD_NUMBER/CREATOR/MODIFIER/CREATED_TIME/UPDATED_TIME/STATUS_ASSIGNEE も、
+   * セット対象として意味を持たないため builder 判断で同様に除外する（要件書に明記のない拡張分）。
+   */
+  var FIELDLINK_EXCLUDED_TARGET_TYPES = [
+    'FILE', 'CALC', 'LOOKUP', 'STATUS', 'STATUS_ASSIGNEE', 'CATEGORY',
+    'REFERENCE_TABLE', 'SUBTABLE', 'GROUP',
+    'RECORD_NUMBER', 'CREATOR', 'MODIFIER', 'CREATED_TIME', 'UPDATED_TIME'
+  ];
+  /** フィールド連動セットアクションの値ソース種別ラベル（§10.4.2） */
+  var FIELDLINK_SOURCE_TYPE_LABELS = {
+    fixed:     '固定値',
+    selfField: '自レコードの他フィールド',
+    lookup:    '他レコードを参照（別アプリ含む）'
   };
 
   /* ====================================================================
@@ -233,7 +278,8 @@
       ]
     },
     views: {},
-    workflows: []
+    workflows: [],
+    fieldLinkRules: []
   };
 
   /**
@@ -264,6 +310,21 @@
    * @type {Array<{code: string, label: string, type: string}>}
    */
   var ownAppFieldOptions = [];
+
+  /**
+   * フィールド連動設定 UI（監視フィールド選択）で使用するフィールド一覧（REQ_workflow-actions §10.4.1）。
+   * loadFields 後に設定される。change イベントが発火し得る型（FIELDLINK_WATCH_FIELD_TYPES）のみ。
+   * @type {Array<{code: string, label: string, type: string}>}
+   */
+  var fieldLinkWatchFieldOptions = [];
+
+  /**
+   * フィールド連動設定 UI（セット先フィールド選択・自レコードキー選択）で使用する
+   * フィールド一覧（REQ_workflow-actions §10.4.4）。loadFields 後に設定される。
+   * FIELDLINK_EXCLUDED_TARGET_TYPES を除外。
+   * @type {Array<{code: string, label: string, type: string}>}
+   */
+  var fieldLinkTargetFieldOptions = [];
 
   /**
    * 権限フィールド設定で使用するプロセス管理ステータス一覧
@@ -375,10 +436,29 @@
   var elWfName          = document.getElementById('kc-wf-name');
   var elWfEnabled       = document.getElementById('kc-wf-enabled');
   var elWfTrigger       = document.getElementById('kc-wf-trigger');
-  var elWfConditionRows = document.getElementById('kc-wf-condition-rows');
-  var elWfConditionAdd  = document.getElementById('kc-wf-condition-add');
+  var elWfConditionGroups   = document.getElementById('kc-wf-condition-groups');
+  var elWfConditionGroupAdd = document.getElementById('kc-wf-condition-group-add');
   var elWfActionRows    = document.getElementById('kc-wf-action-rows');
   var elWfActionAdd     = document.getElementById('kc-wf-action-add');
+
+  /* --- セクション 7: フィールド連動 (REQ_workflow-actions §10.6) --- */
+  var elFieldLinkRows = document.getElementById('kc-fieldlink-rows');
+  var elFieldLinkAdd  = document.getElementById('kc-fieldlink-add');
+  var elFieldLinkCircularWarning = document.getElementById('kc-fieldlink-circular-warning');
+
+  /* --- フィールド連動ルール編集モーダル --- */
+  var elFieldLinkModal       = document.getElementById('kc-fieldlink-modal');
+  var elFieldLinkModalClose  = document.getElementById('kc-fieldlink-modal-close');
+  var elFieldLinkModalCancel = document.getElementById('kc-fieldlink-modal-cancel');
+  var elFieldLinkModalApply  = document.getElementById('kc-fieldlink-modal-apply');
+  var elFlrModalError   = document.getElementById('kc-fieldlink-modal-error');
+  var elFlrName         = document.getElementById('kc-flr-name');
+  var elFlrEnabled      = document.getElementById('kc-flr-enabled');
+  var elFlrWatchField   = document.getElementById('kc-flr-watchfield');
+  var elFlrConditionGroups   = document.getElementById('kc-flr-condition-groups');
+  var elFlrConditionGroupAdd = document.getElementById('kc-flr-condition-group-add');
+  var elFlrSetActionRows = document.getElementById('kc-flr-setaction-rows');
+  var elFlrSetActionAdd  = document.getElementById('kc-flr-setaction-add');
 
   /* --- 操作ボタン (上下 2 セット分を NodeList で取得) --- */
   var elSubmits = document.querySelectorAll('.kc-config-submit');
@@ -1973,30 +2053,105 @@
     return row;
   }
 
+  /* ====================================================================
+   * 発火条件グループ UI（§10.13.3: AND/OR 複合条件。conditionGroups 形式）
+   * workflows・fieldLinkRules の両方から共通で利用する（ユーザー指示「他の条件設定でもそうだが」）。
+   * グループ内 = AND（buildWorkflowConditionRow を流用した行の集合）、グループ間 = OR。
+   * フィルタ設定（グループ内OR・グループ間AND）とは論理が逆であることに注意（ヘルプ文で明示）。
+   * ==================================================================== */
+
   /**
-   * モーダル内の発火条件行を DOM から収集する。
-   * フィールド未選択・値未入力の行はスキップする。
-   * @returns {Array<{fieldCode, fieldType, value}>}
+   * 条件グループ 1 件分の編集ブロックを生成する。
+   * @param {Array<Object>} group - このグループに属する条件配列（AND）
+   * @returns {HTMLElement} .kc-condition-group 要素
    */
-  function collectWorkflowConditions() {
-    if (!elWfConditionRows) return [];
-    var rows = elWfConditionRows.querySelectorAll('.kc-wf-condition-row');
-    var result = [];
-    rows.forEach(function (row) {
-      var fieldSel = row.querySelector('.kc-wf-cond-field-select');
-      if (!fieldSel || !fieldSel.value) return;
-      var selOpt = fieldSel.options[fieldSel.selectedIndex];
-      var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
-      if (fieldSel.value === '$status') { fieldType = 'STATUS'; }
+  function buildConditionGroupBlock(group) {
+    var groupEl = document.createElement('div');
+    groupEl.className = 'kc-condition-group';
 
-      var valueSel = row.querySelector('.kc-wf-cond-value-select');
-      var valueInput = row.querySelector('.kc-wf-cond-value-input');
-      var value = valueSel ? valueSel.value : (valueInput ? valueInput.value.trim() : '');
-      if (!value) return;
-
-      result.push({ fieldCode: fieldSel.value, fieldType: fieldType, value: value });
+    var header = document.createElement('div');
+    header.className = 'kc-condition-group-header';
+    var label = document.createElement('span');
+    label.className = 'kc-condition-group-label';
+    label.textContent = 'グループ（内部の条件は AND）';
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn kc-condition-group-del-btn';
+    delBtn.textContent = 'グループを削除';
+    delBtn.addEventListener('click', function () {
+      groupEl.parentNode && groupEl.parentNode.removeChild(groupEl);
     });
-    return result;
+    header.appendChild(label);
+    header.appendChild(delBtn);
+
+    var rowsEl = document.createElement('div');
+    rowsEl.className = 'kc-condition-group-rows';
+    (group || []).forEach(function (cond) {
+      rowsEl.appendChild(buildWorkflowConditionRow(cond));
+    });
+
+    var addRow = document.createElement('div');
+    addRow.className = 'kc-condition-group-add-row';
+    var addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'kc-config-btn kc-config-btn-secondary';
+    addBtn.textContent = '+ 条件を追加（AND）';
+    addBtn.addEventListener('click', function () {
+      rowsEl.appendChild(buildWorkflowConditionRow(null));
+    });
+    addRow.appendChild(addBtn);
+
+    groupEl.appendChild(header);
+    groupEl.appendChild(rowsEl);
+    groupEl.appendChild(addRow);
+    return groupEl;
+  }
+
+  /**
+   * conditionGroups 配列の内容でコンテナ DOM を再構築する。
+   * 旧形式（フラットな conditions 配列）が渡された場合は 1 グループとして解釈する（防御的耐性）。
+   * @param {HTMLElement} containerEl
+   * @param {Array} groups - [[{fieldCode, fieldType, value}, ...], ...] または旧形式配列
+   */
+  function renderConditionGroups(containerEl, groups) {
+    if (!containerEl) return;
+    containerEl.innerHTML = '';
+    var normalized = (Array.isArray(groups) && groups.length > 0 && !Array.isArray(groups[0]))
+      ? [groups]
+      : (groups || []);
+    normalized.forEach(function (group) {
+      containerEl.appendChild(buildConditionGroupBlock(group));
+    });
+  }
+
+  /**
+   * コンテナ DOM から conditionGroups 配列を収集する。
+   * @param {HTMLElement} containerEl
+   * @returns {Array<Array<Object>>}
+   */
+  function collectConditionGroups(containerEl) {
+    if (!containerEl) return [];
+    var groups = [];
+    containerEl.querySelectorAll('.kc-condition-group').forEach(function (groupEl) {
+      var rows = groupEl.querySelectorAll('.kc-wf-condition-row');
+      var conds = [];
+      rows.forEach(function (row) {
+        var fieldSel = row.querySelector('.kc-wf-cond-field-select');
+        if (!fieldSel || !fieldSel.value) return;
+        var selOpt = fieldSel.options[fieldSel.selectedIndex];
+        var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
+        if (fieldSel.value === '$status') { fieldType = 'STATUS'; }
+
+        var valueSel = row.querySelector('.kc-wf-cond-value-select');
+        var valueInput = row.querySelector('.kc-wf-cond-value-input');
+        var value = valueSel ? valueSel.value : (valueInput ? valueInput.value.trim() : '');
+        if (!value) return;
+
+        conds.push({ fieldCode: fieldSel.value, fieldType: fieldType, value: value });
+      });
+      groups.push(conds);
+    });
+    return groups;
   }
 
   /**
@@ -2510,19 +2665,16 @@
     if (!elWorkflowModal) return;
     workflowDraft = existingWf
       ? JSON.parse(JSON.stringify(existingWf))
-      : { id: generateWorkflowId(), name: '', enabled: true, trigger: { type: 'recordCreate' }, conditions: [], actions: [] };
+      : { id: generateWorkflowId(), name: '', enabled: true, trigger: { type: 'recordCreate' }, conditionGroups: [], actions: [] };
 
     if (elWfModalError) { elWfModalError.textContent = ''; }
     if (elWfName) { elWfName.value = workflowDraft.name || ''; }
     if (elWfEnabled) { elWfEnabled.checked = workflowDraft.enabled !== false; }
     if (elWfTrigger) { elWfTrigger.value = (workflowDraft.trigger && workflowDraft.trigger.type) || 'recordCreate'; }
 
-    if (elWfConditionRows) {
-      elWfConditionRows.innerHTML = '';
-      (workflowDraft.conditions || []).forEach(function (cond) {
-        elWfConditionRows.appendChild(buildWorkflowConditionRow(cond));
-      });
-    }
+    // §10.13.3: conditionGroups 優先。旧形式 conditions のみ保持している既存データへの防御的耐性
+    renderConditionGroups(elWfConditionGroups, workflowDraft.conditionGroups || workflowDraft.conditions || []);
+
     if (elWfActionRows) {
       elWfActionRows.innerHTML = '';
       (workflowDraft.actions || []).forEach(function (action) {
@@ -2577,7 +2729,7 @@
       name: name,
       enabled: elWfEnabled ? elWfEnabled.checked : true,
       trigger: { type: elWfTrigger ? elWfTrigger.value : 'recordCreate' },
-      conditions: collectWorkflowConditions(),
+      conditionGroups: collectConditionGroups(elWfConditionGroups),
       actions: actions
     };
 
@@ -2697,6 +2849,662 @@
       var toggle = row.querySelector('.kc-workflow-enabled-toggle');
       if (toggle) { wf.enabled = toggle.checked; }
       ordered.push(wf);
+    });
+    return ordered;
+  }
+
+  /* ====================================================================
+   * フィールド連動設定 UI (REQ_workflow-actions §10.6)
+   *
+   * 2 階層構成（ワークフローと同じパターン）:
+   *   第1階層: セクション7のルール一覧（行リスト、DnD 並び替え可）
+   *   第2階層: ルール編集モーダル（監視フィールド・発火条件・セットアクションのステップ列挙）
+   *
+   * workflows とは別データモデル（fieldLinkRules）・別UIセクション（§10.3）。
+   * セットアクションは fixed/selfField/lookup の3種のみで、別アプリへの書き込みアクションを
+   * 選択する UI は構造的に存在しない（§10.4.5 設計ガード）。
+   * ==================================================================== */
+
+  /** 編集中のフィールド連動ルール下書き（モーダル表示中のみ非 null） */
+  var fieldLinkDraft = null;
+
+  /** フィールド連動ルール ID を生成する */
+  function generateFieldLinkRuleId() {
+    return 'flr_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+  }
+
+  /** セットアクション ID を生成する */
+  function generateSetActionId() {
+    return 'sa_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+  }
+
+  /**
+   * セット先フィールド選択ドロップダウンを生成する（§10.4.4: FIELDLINK_EXCLUDED_TARGET_TYPES を除外）
+   * @param {string} selectedCode
+   * @returns {HTMLSelectElement}
+   */
+  function buildFieldLinkTargetFieldSelect(selectedCode) {
+    var sel = document.createElement('select');
+    sel.className = 'kc-config-select kc-workflow-target-field-select kc-flr-setaction-target-select';
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- フィールドを選択 --';
+    sel.appendChild(emptyOpt);
+
+    fieldLinkTargetFieldOptions.forEach(function (f) {
+      var opt = document.createElement('option');
+      opt.value = f.code;
+      opt.dataset.fieldtype = f.type;
+      opt.textContent = f.label + ' (' + f.code + ')';
+      sel.appendChild(opt);
+    });
+
+    if (selectedCode) {
+      sel.value = selectedCode;
+      if (sel.value !== selectedCode) {
+        var missingOpt = document.createElement('option');
+        missingOpt.value = selectedCode;
+        missingOpt.textContent = selectedCode + ' (フィールドが見つかりません、または対応外の型です)';
+        missingOpt.className = 'kc-option-missing';
+        sel.appendChild(missingOpt);
+        sel.value = selectedCode;
+      }
+    }
+    attachSelectEmptyClassSync(sel);
+    return sel;
+  }
+
+  /**
+   * lookup（他レコード参照）の参照先アプリのフィールド一覧を取得する（§10.4.2）。
+   * 成功時は row._lookupTargetFields に格納し、キー/転記元フィールド選択を有効化する。
+   * ワークフローの fetchTargetAppFields と同じ API パターンを流用（既存 buildTargetFieldOptionsFromProps
+   * / populateTargetFieldSelect を再利用）。
+   * @param {HTMLElement} row - .kc-flr-lookup-wrap 要素（_lookupTargetFields をキャッシュする）
+   * @param {string} appId
+   * @returns {Promise<void>}
+   */
+  function fetchFieldLinkLookupFields(row, appId) {
+    var statusEl = row.querySelector('.kc-flr-lookup-fetch-status');
+    var keySel = row.querySelector('.kc-flr-lookup-targetkey');
+    var valSel = row.querySelector('.kc-flr-lookup-valuefield');
+    if (!appId) {
+      if (statusEl) { statusEl.textContent = ''; }
+      row._lookupTargetFields = [];
+      if (keySel) { keySel.disabled = true; populateTargetFieldSelect(keySel, [], keySel.value, true); }
+      if (valSel) { valSel.disabled = true; populateTargetFieldSelect(valSel, [], valSel.value); }
+      return Promise.resolve();
+    }
+    if (statusEl) {
+      statusEl.textContent = '取得中...';
+      statusEl.className = 'kc-workflow-fetch-status kc-flr-lookup-fetch-status';
+    }
+    return kintone.api(kintone.api.url('/k/v1/app/form/fields', true), 'GET', { app: appId })
+      .then(function (resp) {
+        row._lookupTargetFields = buildTargetFieldOptionsFromProps(resp.properties);
+        if (statusEl) {
+          statusEl.textContent = 'フィールド取得済み（' + row._lookupTargetFields.length + '件）';
+          statusEl.className = 'kc-workflow-fetch-status kc-flr-lookup-fetch-status kc-workflow-fetch-status--ok';
+        }
+        if (keySel) { keySel.disabled = false; populateTargetFieldSelect(keySel, row._lookupTargetFields, keySel.value, true); }
+        if (valSel) { valSel.disabled = false; populateTargetFieldSelect(valSel, row._lookupTargetFields, valSel.value); }
+      })
+      .catch(function (err) {
+        console.error('[KC Config] フィールド連動: 参照先アプリのフィールド取得に失敗:', err);
+        row._lookupTargetFields = [];
+        if (statusEl) {
+          statusEl.textContent = 'フィールド取得に失敗しました（アプリID・権限を確認してください）';
+          statusEl.className = 'kc-workflow-fetch-status kc-flr-lookup-fetch-status kc-workflow-fetch-status--error';
+        }
+        if (keySel) { keySel.disabled = true; populateTargetFieldSelect(keySel, [], keySel.value, true); }
+        if (valSel) { valSel.disabled = true; populateTargetFieldSelect(valSel, [], valSel.value); }
+      });
+  }
+
+  /**
+   * セットアクション 1 件分の編集ブロックを生成する（§10.4.2, §10.6）。
+   * ワークフローのアクションブロック（.kc-workflow-action-block 系クラス）と同じ「カード」パターンを
+   * 流用する（視覚的に同一の widget のため CSS 追加不要）。
+   * @param {Object|null} setAction - { id, targetFieldCode, sourceType, fixedValue, selfFieldCode,
+   *                                    userValueMode, lookup: { appId, selfKeyFieldCode,
+   *                                    targetKeyFieldCode, valueFieldCode } }
+   * @returns {HTMLElement} .kc-workflow-action-block 要素
+   */
+  function buildSetActionBlock(setAction) {
+    var block = document.createElement('div');
+    block.className = 'kc-workflow-action-block';
+    block._actionId = (setAction && setAction.id) ? setAction.id : generateSetActionId();
+
+    var handle = buildDragHandle();
+    attachRowDragEvents(block, handle);
+
+    var header = document.createElement('div');
+    header.className = 'kc-workflow-action-header';
+    header.appendChild(handle);
+    var title = document.createElement('span');
+    title.className = 'kc-workflow-action-title';
+    title.textContent = 'セットアクション';
+    header.appendChild(title);
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn kc-workflow-action-del-btn';
+    delBtn.textContent = '−';
+    delBtn.addEventListener('click', function () {
+      block.parentNode && block.parentNode.removeChild(block);
+    });
+    header.appendChild(delBtn);
+    block.appendChild(header);
+
+    var body = document.createElement('div');
+    body.className = 'kc-workflow-action-body';
+
+    // セット先フィールド（§10.4.4）
+    var targetGroup = document.createElement('div');
+    targetGroup.className = 'kc-config-field-group';
+    var targetLabel = document.createElement('label');
+    targetLabel.className = 'kc-config-label';
+    targetLabel.textContent = 'セット先フィールド';
+    var targetSel = buildFieldLinkTargetFieldSelect(setAction ? setAction.targetFieldCode : '');
+    targetGroup.appendChild(targetLabel);
+    targetGroup.appendChild(targetSel);
+    body.appendChild(targetGroup);
+
+    // 値ソース種別（§10.4.2）
+    var sourceGroup = document.createElement('div');
+    sourceGroup.className = 'kc-config-field-group';
+    var sourceLabel = document.createElement('label');
+    sourceLabel.className = 'kc-config-label';
+    sourceLabel.textContent = '値ソース';
+    var sourceTypeSel = document.createElement('select');
+    sourceTypeSel.className = 'kc-config-select kc-flr-setaction-sourcetype';
+    ['fixed', 'selfField', 'lookup'].forEach(function (t) {
+      var opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = FIELDLINK_SOURCE_TYPE_LABELS[t];
+      sourceTypeSel.appendChild(opt);
+    });
+    var initialSourceType = (setAction && ['fixed', 'selfField', 'lookup'].indexOf(setAction.sourceType) !== -1)
+      ? setAction.sourceType : 'fixed';
+    sourceTypeSel.value = initialSourceType;
+    sourceGroup.appendChild(sourceLabel);
+    sourceGroup.appendChild(sourceTypeSel);
+    body.appendChild(sourceGroup);
+
+    var valueWrap = document.createElement('div');
+    valueWrap.className = 'kc-workflow-mapping-value-wrapper kc-flr-setaction-value-wrapper';
+    body.appendChild(valueWrap);
+
+    function renderValueControl(sourceType) {
+      valueWrap.innerHTML = '';
+
+      if (sourceType === 'fixed') {
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'kc-config-input kc-workflow-mapping-fixed-value';
+        input.placeholder = '固定値を入力';
+        input.value = (setAction && setAction.sourceType === 'fixed' && setAction.fixedValue !== undefined)
+          ? setAction.fixedValue : '';
+        valueWrap.appendChild(input);
+
+      } else if (sourceType === 'selfField') {
+        var sel = buildOwnFieldSelect(
+          (setAction && setAction.sourceType === 'selfField') ? setAction.selfFieldCode : '',
+          'kc-workflow-mapping-source-select'
+        );
+        valueWrap.appendChild(sel);
+
+        // USER_SELECT ソースの場合のみ「コード/名前」選択を表示する（ワークフローの mapping と同パターン）
+        var userModeSel = document.createElement('select');
+        userModeSel.className = 'kc-config-select kc-workflow-mapping-usermode';
+        userModeSel.style.display = 'none';
+        [
+          { value: 'code', label: 'コードを渡す' },
+          { value: 'name', label: '名前を渡す' }
+        ].forEach(function (o) {
+          var opt = document.createElement('option');
+          opt.value = o.value;
+          opt.textContent = o.label;
+          userModeSel.appendChild(opt);
+        });
+        userModeSel.value = (setAction && setAction.userValueMode === 'name') ? 'name' : 'code';
+        valueWrap.appendChild(userModeSel);
+
+        var syncUserModeVisibility = function () {
+          var opt = sel.options[sel.selectedIndex];
+          var t = opt ? (opt.dataset.fieldtype || '') : '';
+          userModeSel.style.display = (t === 'USER_SELECT') ? '' : 'none';
+        };
+        sel.addEventListener('change', syncUserModeVisibility);
+        syncUserModeVisibility();
+
+      } else {
+        // lookup: 参照先アプリID＋フィールド取得ボタン、自レコードキー/参照先キー/転記元フィールド選択
+        var lookupWrap = document.createElement('div');
+        lookupWrap.className = 'kc-flr-lookup-wrap';
+
+        var appRow = document.createElement('div');
+        appRow.className = 'kc-workflow-appid-row';
+        var appInput = document.createElement('input');
+        appInput.type = 'text';
+        appInput.className = 'kc-config-input kc-flr-lookup-appid';
+        appInput.placeholder = '例: 42';
+        appInput.value = (setAction && setAction.lookup && setAction.lookup.appId) ? setAction.lookup.appId : '';
+        var fetchBtn = document.createElement('button');
+        fetchBtn.type = 'button';
+        fetchBtn.className = 'kc-config-btn kc-config-btn-secondary kc-workflow-fetch-btn';
+        fetchBtn.textContent = 'フィールド取得';
+        var fetchStatus = document.createElement('span');
+        fetchStatus.className = 'kc-workflow-fetch-status kc-flr-lookup-fetch-status';
+        fetchBtn.addEventListener('click', function () {
+          fetchFieldLinkLookupFields(lookupWrap, appInput.value.trim());
+        });
+        appRow.appendChild(appInput);
+        appRow.appendChild(fetchBtn);
+        appRow.appendChild(fetchStatus);
+        lookupWrap.appendChild(appRow);
+
+        var keyArea = document.createElement('div');
+        keyArea.className = 'kc-workflow-keyarea';
+
+        var selfKeyWrap = document.createElement('div');
+        selfKeyWrap.className = 'kc-workflow-keyarea-col';
+        var selfKeyLabel = document.createElement('label');
+        selfKeyLabel.className = 'kc-config-label';
+        selfKeyLabel.textContent = '自レコードのキー項目';
+        // 既定値: 監視フィールド自身のコード（§10.4.2）。変更可能。
+        var defaultSelfKey = (setAction && setAction.lookup && setAction.lookup.selfKeyFieldCode)
+          ? setAction.lookup.selfKeyFieldCode
+          : (elFlrWatchField ? elFlrWatchField.value : '');
+        var selfKeySel = buildOwnFieldSelect(defaultSelfKey, 'kc-flr-lookup-selfkey', true);
+        selfKeyWrap.appendChild(selfKeyLabel);
+        selfKeyWrap.appendChild(selfKeySel);
+
+        var keyArrow = document.createElement('span');
+        keyArrow.className = 'kc-workflow-keyarea-arrow';
+        keyArrow.textContent = '=';
+
+        var targetKeyWrap = document.createElement('div');
+        targetKeyWrap.className = 'kc-workflow-keyarea-col';
+        var targetKeyLabel = document.createElement('label');
+        targetKeyLabel.className = 'kc-config-label';
+        targetKeyLabel.textContent = '参照先アプリのキー項目';
+        var targetKeySel = document.createElement('select');
+        targetKeySel.className = 'kc-config-select kc-workflow-target-field-select kc-flr-lookup-targetkey';
+        targetKeySel.disabled = true;
+        populateTargetFieldSelect(
+          targetKeySel, [], setAction && setAction.lookup ? setAction.lookup.targetKeyFieldCode : '', true
+        );
+        targetKeyWrap.appendChild(targetKeyLabel);
+        targetKeyWrap.appendChild(targetKeySel);
+
+        keyArea.appendChild(selfKeyWrap);
+        keyArea.appendChild(keyArrow);
+        keyArea.appendChild(targetKeyWrap);
+        lookupWrap.appendChild(keyArea);
+
+        var valueFieldGroup = document.createElement('div');
+        valueFieldGroup.className = 'kc-config-field-group';
+        var valueFieldLabel = document.createElement('label');
+        valueFieldLabel.className = 'kc-config-label';
+        valueFieldLabel.textContent = '転記元フィールド（参照先アプリ）';
+        var valueFieldSel = document.createElement('select');
+        valueFieldSel.className = 'kc-config-select kc-workflow-target-field-select kc-flr-lookup-valuefield';
+        valueFieldSel.disabled = true;
+        populateTargetFieldSelect(
+          valueFieldSel, [], setAction && setAction.lookup ? setAction.lookup.valueFieldCode : ''
+        );
+        valueFieldGroup.appendChild(valueFieldLabel);
+        valueFieldGroup.appendChild(valueFieldSel);
+        lookupWrap.appendChild(valueFieldGroup);
+
+        var lookupHint = document.createElement('p');
+        lookupHint.className = 'kc-config-hint';
+        lookupHint.textContent =
+          'キーが一致するレコードが0件の場合は何もせず、複数件見つかった場合はセットをスキップします' +
+          '（コンソールに警告を記録します）。';
+        lookupWrap.appendChild(lookupHint);
+
+        valueWrap.appendChild(lookupWrap);
+
+        // 既存アプリID指定済みなら自動でフィールドを再取得する（キー/転記元の選択済み値を正しく表示するため）
+        if (setAction && setAction.lookup && setAction.lookup.appId) {
+          fetchFieldLinkLookupFields(lookupWrap, setAction.lookup.appId);
+        }
+      }
+    }
+    renderValueControl(sourceTypeSel.value);
+    sourceTypeSel.addEventListener('change', function () { renderValueControl(sourceTypeSel.value); });
+
+    block.appendChild(body);
+    return block;
+  }
+
+  /**
+   * モーダル内のセットアクションブロックを DOM から収集する。
+   * セット先フィールド未選択のブロックは保存しない。
+   * @returns {Array<Object>}
+   */
+  function collectSetActions() {
+    if (!elFlrSetActionRows) return [];
+    var blocks = elFlrSetActionRows.querySelectorAll('.kc-workflow-action-block');
+    var result = [];
+    blocks.forEach(function (block) {
+      var targetSel = block.querySelector('.kc-flr-setaction-target-select');
+      var targetFieldCode = targetSel ? targetSel.value : '';
+      if (!targetFieldCode) return;
+
+      var sourceTypeSel = block.querySelector('.kc-flr-setaction-sourcetype');
+      var sourceType = sourceTypeSel ? sourceTypeSel.value : 'fixed';
+
+      var entry = { id: block._actionId, targetFieldCode: targetFieldCode, sourceType: sourceType };
+
+      if (sourceType === 'fixed') {
+        var fixedInput = block.querySelector('.kc-workflow-mapping-fixed-value');
+        entry.fixedValue = fixedInput ? fixedInput.value : '';
+      } else if (sourceType === 'selfField') {
+        var sourceSel = block.querySelector('.kc-workflow-mapping-source-select');
+        entry.selfFieldCode = sourceSel ? sourceSel.value : '';
+        var sourceOpt = sourceSel ? sourceSel.options[sourceSel.selectedIndex] : null;
+        var sourceFieldType = sourceOpt ? (sourceOpt.dataset.fieldtype || '') : '';
+        if (sourceFieldType === 'USER_SELECT') {
+          var userModeSel = block.querySelector('.kc-workflow-mapping-usermode');
+          entry.userValueMode = userModeSel ? userModeSel.value : 'code';
+        }
+      } else if (sourceType === 'lookup') {
+        var appInput = block.querySelector('.kc-flr-lookup-appid');
+        var selfKeySel = block.querySelector('.kc-flr-lookup-selfkey');
+        var targetKeySel = block.querySelector('.kc-flr-lookup-targetkey');
+        var valueFieldSel = block.querySelector('.kc-flr-lookup-valuefield');
+        entry.lookup = {
+          appId: appInput ? appInput.value.trim() : '',
+          selfKeyFieldCode: selfKeySel ? selfKeySel.value : '',
+          targetKeyFieldCode: targetKeySel ? targetKeySel.value : '',
+          valueFieldCode: valueFieldSel ? valueFieldSel.value : ''
+        };
+      }
+
+      result.push(entry);
+    });
+    return result;
+  }
+
+  /**
+   * セットアクション配列に対する保存時バリデーションを行う（§10.4.2 lookup 必須項目）。
+   * @param {Array<Object>} setActions
+   * @returns {string|null} エラーメッセージ（問題なければ null）
+   */
+  function validateSetActions(setActions) {
+    for (var i = 0; i < setActions.length; i++) {
+      var action = setActions[i];
+      if (action.sourceType === 'lookup') {
+        var lk = action.lookup || {};
+        if (!lk.appId || !lk.selfKeyFieldCode || !lk.targetKeyFieldCode || !lk.valueFieldCode) {
+          return 'セットアクション' + (i + 1) + ': 「他レコードを参照」では参照先アプリID・' +
+            '自レコードのキー項目・参照先アプリのキー項目・転記元フィールドがすべて必須です。';
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 全フィールド連動ルールに対して validateSetActions を実行する（saveConfig からの最終防御）
+   * @param {Array<Object>} rules
+   * @returns {string|null}
+   */
+  function validateAllFieldLinkRules(rules) {
+    for (var i = 0; i < rules.length; i++) {
+      var err = validateSetActions(rules[i].setActions || []);
+      if (err) { return 'フィールド連動ルール「' + (rules[i].name || '(無題)') + '」: ' + err; }
+    }
+    return null;
+  }
+
+  /**
+   * 循環参照の警告を検出する（§10.13.2: ルールAのセット先 ∈ 他ルール（自ルール含む）の監視フィールド）。
+   * 保存はブロックしない（実行時の再入ガードが安全網になるため。§10.13.2）。
+   * @param {Array<Object>} rules
+   * @returns {string} 警告メッセージ（問題なければ空文字）
+   */
+  function detectFieldLinkCircularWarning(rules) {
+    var watchFieldToRuleNames = {};
+    rules.forEach(function (rule) {
+      var code = rule.watchField && rule.watchField.fieldCode;
+      if (!code) return;
+      if (!watchFieldToRuleNames[code]) { watchFieldToRuleNames[code] = []; }
+      watchFieldToRuleNames[code].push(rule.name || '(無題)');
+    });
+
+    var warnings = [];
+    rules.forEach(function (rule) {
+      (rule.setActions || []).forEach(function (action) {
+        var targetCode = action && action.targetFieldCode;
+        if (!targetCode || !watchFieldToRuleNames[targetCode]) return;
+        warnings.push(
+          'ルール「' + (rule.name || '(無題)') + '」のセット先「' + targetCode + '」は、' +
+          'ルール「' + watchFieldToRuleNames[targetCode].join('」「') + '」の監視フィールドです。' +
+          '実行時に無限ループが疑われる場合は自動的に再評価を抑止しますが、意図を確認してください。'
+        );
+      });
+    });
+    return warnings.length > 0
+      ? '循環の可能性がある設定が検出されました:\n' + warnings.join('\n')
+      : '';
+  }
+
+  /**
+   * ESC キーでフィールド連動ルール編集モーダルを閉じるハンドラ
+   */
+  function handleFieldLinkModalEscKey(e) {
+    if (e.key === 'Escape') { closeFieldLinkModal(); }
+  }
+
+  /**
+   * フィールド連動ルール編集モーダルを開く。
+   * @param {Object|null} existingRule - 編集対象の既存ルール（省略時は新規作成）
+   */
+  function openFieldLinkModal(existingRule) {
+    if (!elFieldLinkModal) return;
+    fieldLinkDraft = existingRule
+      ? JSON.parse(JSON.stringify(existingRule))
+      : { id: generateFieldLinkRuleId(), name: '', enabled: true, watchField: null, conditionGroups: [], setActions: [] };
+
+    if (elFlrModalError) { elFlrModalError.textContent = ''; }
+    if (elFlrName) { elFlrName.value = fieldLinkDraft.name || ''; }
+    if (elFlrEnabled) { elFlrEnabled.checked = fieldLinkDraft.enabled !== false; }
+    if (elFlrWatchField) {
+      // モーダル内には静的な #kc-flr-watchfield が既に存在するため、既存の populateTargetFieldSelect
+      // ヘルパー（フィールド一覧・保持値の反映ロジックが workflows のセレクトと共通）で中身を構築し直す
+      populateTargetFieldSelect(elFlrWatchField, fieldLinkWatchFieldOptions,
+        fieldLinkDraft.watchField ? fieldLinkDraft.watchField.fieldCode : '');
+      syncSelectEmptyClass(elFlrWatchField);
+    }
+
+    renderConditionGroups(elFlrConditionGroups, fieldLinkDraft.conditionGroups || fieldLinkDraft.conditions || []);
+
+    if (elFlrSetActionRows) {
+      elFlrSetActionRows.innerHTML = '';
+      (fieldLinkDraft.setActions || []).forEach(function (setAction) {
+        elFlrSetActionRows.appendChild(buildSetActionBlock(setAction));
+      });
+    }
+
+    elFieldLinkModal.removeAttribute('hidden');
+    document.removeEventListener('keydown', handleFieldLinkModalEscKey);
+    document.addEventListener('keydown', handleFieldLinkModalEscKey);
+    if (elFlrName) { elFlrName.focus(); }
+  }
+
+  /**
+   * フィールド連動ルール編集モーダルを閉じる（下書きは破棄する）
+   */
+  function closeFieldLinkModal() {
+    if (!elFieldLinkModal) return;
+    elFieldLinkModal.setAttribute('hidden', '');
+    document.removeEventListener('keydown', handleFieldLinkModalEscKey);
+    fieldLinkDraft = null;
+    if (elFieldLinkAdd) { elFieldLinkAdd.focus(); }
+  }
+
+  /**
+   * フィールド連動ルール編集モーダルの「適用」ボタンハンドラ。
+   * バリデーション成功時のみ currentConfig.fieldLinkRules に反映しモーダルを閉じる。
+   */
+  function handleFieldLinkModalApply() {
+    if (!fieldLinkDraft) return;
+
+    var name = elFlrName ? elFlrName.value.trim() : '';
+    if (!name) {
+      if (elFlrModalError) { elFlrModalError.textContent = 'ルール名を入力してください。'; }
+      return;
+    }
+
+    var watchFieldCode = elFlrWatchField ? elFlrWatchField.value : '';
+    if (!watchFieldCode) {
+      if (elFlrModalError) { elFlrModalError.textContent = '監視フィールドを選択してください。'; }
+      return;
+    }
+    var watchOpt = elFlrWatchField.options[elFlrWatchField.selectedIndex];
+    var watchFieldType = watchOpt ? (watchOpt.dataset.fieldtype || '') : '';
+
+    var setActions = collectSetActions();
+    if (setActions.length === 0) {
+      if (elFlrModalError) { elFlrModalError.textContent = 'セットアクションを1件以上設定してください。'; }
+      return;
+    }
+
+    var validationError = validateSetActions(setActions);
+    if (validationError) {
+      if (elFlrModalError) { elFlrModalError.textContent = validationError; }
+      return;
+    }
+
+    var rule = {
+      id: fieldLinkDraft.id,
+      name: name,
+      enabled: elFlrEnabled ? elFlrEnabled.checked : true,
+      watchField: { fieldCode: watchFieldCode, fieldType: watchFieldType },
+      conditionGroups: collectConditionGroups(elFlrConditionGroups),
+      setActions: setActions
+    };
+
+    // モーダルを開いた後に一覧側で DnD 並び替え/有効トグル変更が行われている可能性があるため、
+    // 配列を書き換える前に必ず現在の DOM 状態を currentConfig.fieldLinkRules に同期する
+    currentConfig.fieldLinkRules = collectFieldLinkRules();
+    var existingIndex = currentConfig.fieldLinkRules.findIndex(function (r) { return r.id === rule.id; });
+    if (existingIndex !== -1) {
+      currentConfig.fieldLinkRules[existingIndex] = rule;
+    } else {
+      currentConfig.fieldLinkRules.push(rule);
+    }
+
+    closeFieldLinkModal();
+    renderFieldLinkList();
+  }
+
+  /**
+   * フィールド連動ルール一覧 1 行を生成する（第1階層）
+   * @param {Object} rule
+   * @returns {HTMLElement} .kc-fieldlink-row 要素
+   */
+  function buildFieldLinkListRow(rule) {
+    var row = document.createElement('div');
+    row.className = 'kc-fieldlink-row';
+    row.dataset.fieldLinkId = rule.id;
+
+    var handle = buildDragHandle();
+    attachRowDragEvents(row, handle);
+
+    var cellHandle = document.createElement('div');
+    cellHandle.className = 'kc-fieldlink-cell kc-fieldlink-col-handle';
+    cellHandle.appendChild(handle);
+
+    var cellName = document.createElement('div');
+    cellName.className = 'kc-fieldlink-cell kc-fieldlink-col-name';
+    cellName.textContent = rule.name || '(無題)';
+
+    var cellWatch = document.createElement('div');
+    cellWatch.className = 'kc-fieldlink-cell kc-fieldlink-col-watch';
+    var badge = document.createElement('span');
+    badge.className = 'kc-workflow-trigger-badge';
+    badge.textContent = (rule.watchField && rule.watchField.fieldCode) || '';
+    cellWatch.appendChild(badge);
+
+    var cellEnabled = document.createElement('div');
+    cellEnabled.className = 'kc-fieldlink-cell kc-fieldlink-col-enabled';
+    var enabledLabel = document.createElement('label');
+    enabledLabel.className = 'kc-config-checkbox-label kc-workflow-enabled-label';
+    var enabledCheckbox = document.createElement('input');
+    enabledCheckbox.type = 'checkbox';
+    enabledCheckbox.className = 'kc-fieldlink-enabled-toggle';
+    enabledCheckbox.checked = rule.enabled !== false;
+    enabledLabel.appendChild(enabledCheckbox);
+    cellEnabled.appendChild(enabledLabel);
+
+    var cellActions = document.createElement('div');
+    cellActions.className = 'kc-fieldlink-cell kc-fieldlink-col-actions';
+    cellActions.textContent = String((rule.setActions || []).length);
+
+    var cellOp = document.createElement('div');
+    cellOp.className = 'kc-fieldlink-cell kc-fieldlink-col-op';
+    var editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'kc-config-btn kc-config-btn-secondary kc-workflow-edit-btn';
+    editBtn.textContent = '編集';
+    editBtn.addEventListener('click', function () { openFieldLinkModal(rule); });
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn kc-workflow-list-del-btn';
+    delBtn.textContent = '−';
+    delBtn.addEventListener('click', function () {
+      if (!window.confirm('フィールド連動ルール「' + (rule.name || '(無題)') + '」を削除しますか？')) return;
+      currentConfig.fieldLinkRules = collectFieldLinkRules().filter(function (r) { return r.id !== rule.id; });
+      renderFieldLinkList();
+    });
+    cellOp.appendChild(editBtn);
+    cellOp.appendChild(delBtn);
+
+    row.appendChild(cellHandle);
+    row.appendChild(cellName);
+    row.appendChild(cellWatch);
+    row.appendChild(cellEnabled);
+    row.appendChild(cellActions);
+    row.appendChild(cellOp);
+
+    return row;
+  }
+
+  /**
+   * currentConfig.fieldLinkRules の内容でルール一覧 DOM を再構築し、循環警告も更新する
+   */
+  function renderFieldLinkList() {
+    if (elFieldLinkRows) {
+      elFieldLinkRows.innerHTML = '';
+      (currentConfig.fieldLinkRules || []).forEach(function (rule) {
+        elFieldLinkRows.appendChild(buildFieldLinkListRow(rule));
+      });
+    }
+    if (elFieldLinkCircularWarning) {
+      elFieldLinkCircularWarning.textContent = detectFieldLinkCircularWarning(currentConfig.fieldLinkRules || []);
+    }
+  }
+
+  /**
+   * フィールド連動ルール一覧 DOM から最終的な fieldLinkRules 配列を収集する
+   * （DOM 上の並び順・有効/無効トグルの現在値を反映。保存時に呼び出す）
+   * @returns {Array<Object>}
+   */
+  function collectFieldLinkRules() {
+    if (!elFieldLinkRows) return currentConfig.fieldLinkRules || [];
+    var rows = elFieldLinkRows.querySelectorAll('.kc-fieldlink-row');
+    var ordered = [];
+    rows.forEach(function (row) {
+      var id = row.dataset.fieldLinkId;
+      var rule = (currentConfig.fieldLinkRules || []).filter(function (r) { return r.id === id; })[0];
+      if (!rule) return;
+      var toggle = row.querySelector('.kc-fieldlink-enabled-toggle');
+      if (toggle) { rule.enabled = toggle.checked; }
+      ordered.push(rule);
     });
     return ordered;
   }
@@ -3816,7 +4624,8 @@
         },
         filterConfig: _buildDefaultFilterConfig(),
         views: {},
-        workflows: []
+        workflows: [],
+        fieldLinkRules: []
       };
       return;
     }
@@ -3922,6 +4731,12 @@
       parsed.version = 13;
     }
 
+    // fieldLinkRules 初期値補完（REQ_workflow-actions §10.5・§10 改訂3）
+    // version 13 は未リリースのため専用マイグレーション段は設けず、単純な初期値補完でよい。
+    if (!Array.isArray(parsed.fieldLinkRules)) {
+      parsed.fieldLinkRules = [];
+    }
+
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
     rules.forEach(function (rule) {
@@ -3951,7 +4766,8 @@
         ? parsed.filterConfig
         : _buildDefaultFilterConfig(),
       views:             parsed.views || {},
-      workflows:         Array.isArray(parsed.workflows) ? parsed.workflows : []
+      workflows:         Array.isArray(parsed.workflows) ? parsed.workflows : [],
+      fieldLinkRules:    Array.isArray(parsed.fieldLinkRules) ? parsed.fieldLinkRules : []
     };
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
   }
@@ -4067,6 +4883,42 @@
         ownAppFieldOptions.push({ code: code, label: field.label || code, type: field.type });
       });
       ownAppFieldOptions.sort(function (a, b) {
+        if (a.label < b.label) return -1;
+        if (a.label > b.label) return 1;
+        return 0;
+      });
+
+      // フィールド連動: 監視フィールド候補を収集する（FIELDLINK_WATCH_FIELD_TYPES のみ。§10.4.1）
+      fieldLinkWatchFieldOptions = [];
+      Object.keys(props).forEach(function (code) {
+        var field = props[code];
+        if (FIELDLINK_WATCH_FIELD_TYPES.indexOf(field.type) === -1) return;
+        fieldLinkWatchFieldOptions.push({ code: code, label: field.label || code, type: field.type });
+      });
+      fieldLinkWatchFieldOptions.sort(function (a, b) {
+        if (a.label < b.label) return -1;
+        if (a.label > b.label) return 1;
+        return 0;
+      });
+
+      // フィールド連動: セット先フィールド候補を収集する（FIELDLINK_EXCLUDED_TARGET_TYPES を除外。§10.4.4）
+      // レビュー指摘1(a): 保存済み fieldMapping で使用中の管理フィールド（title/start/end/allday/color/
+      // status/userMail/account/place/memo）も候補から除外する。DnD 確定時に KC.Api.updateEvent が
+      // extraFields を無条件マージするため、これらをセット先に選べてしまうと、ドラッグで確定した
+      // 新日時等が fieldLinkRules の値で上書きされ得る（desktop.js 側の二段防御(b)と合わせて対策）。
+      var flrFm = currentConfig.fieldMapping || {};
+      var reservedFieldMappingCodes = [
+        flrFm.fieldTitle, flrFm.fieldStart, flrFm.fieldEnd, flrFm.fieldAllday, flrFm.fieldColor,
+        flrFm.fieldStatus, flrFm.fieldUserMail, flrFm.fieldAccount, flrFm.fieldPlace, flrFm.fieldMemo
+      ].filter(Boolean);
+      fieldLinkTargetFieldOptions = [];
+      Object.keys(props).forEach(function (code) {
+        var field = props[code];
+        if (FIELDLINK_EXCLUDED_TARGET_TYPES.indexOf(field.type) !== -1) return;
+        if (reservedFieldMappingCodes.indexOf(code) !== -1) return;
+        fieldLinkTargetFieldOptions.push({ code: code, label: field.label || code, type: field.type });
+      });
+      fieldLinkTargetFieldOptions.sort(function (a, b) {
         if (a.label < b.label) return -1;
         if (a.label > b.label) return 1;
         return 0;
@@ -4502,6 +5354,9 @@
     // ワークフロー設定を収集して currentConfig.workflows を更新（REQ_workflow-actions §3.10）
     currentConfig.workflows = collectWorkflows();
 
+    // フィールド連動設定を収集して currentConfig.fieldLinkRules を更新（REQ_workflow-actions §10.6）
+    currentConfig.fieldLinkRules = collectFieldLinkRules();
+
     // 現在の編集中ビューの個別設定を保存 (新規作成時は後で ID 確定後に保存)
     if (currentViewId) {
       currentConfig.views[currentViewId] = collectViewConfig();
@@ -4530,6 +5385,13 @@
     var workflowError = validateAllWorkflowsMappings(currentConfig.workflows || []);
     if (workflowError) {
       showError(workflowError);
+      return false;
+    }
+
+    // フィールド連動設定のバリデーション（§10.4.2: lookup 必須項目）
+    var fieldLinkError = validateAllFieldLinkRules(currentConfig.fieldLinkRules || []);
+    if (fieldLinkError) {
+      showError(fieldLinkError);
       return false;
     }
 
@@ -4619,7 +5481,8 @@
       });
 
       // 最終的な保存オブジェクト (version 13 形式: permissionRules + fieldValueRules + searchTargets
-      // + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig + workflows を含む)
+      // + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig + workflows
+      // + fieldLinkRules を含む)
       var finalConfig = {
         version: 13,
         fieldMapping:       updatedFieldMapping,
@@ -4631,7 +5494,8 @@
         },
         filterConfig:       currentConfig.filterConfig || _buildDefaultFilterConfig(),
         views:              mergedViews,
-        workflows:          currentConfig.workflows || []
+        workflows:          currentConfig.workflows || [],
+        fieldLinkRules:     currentConfig.fieldLinkRules || []
       };
 
       // kintone の required_params チェックは setConfig 第1引数の最上位キーと照合する仕様。
@@ -4864,6 +5728,10 @@
     // loadFields + loadStatuses 完了後に呼ぶこと（ownAppFieldOptions が確定している必要があるため）
     renderWorkflowList();
 
+    // 3.67. フィールド連動設定 (fieldLinkRules) を一覧に反映（REQ_workflow-actions §10.6）
+    // loadFields 完了後に呼ぶこと（fieldLinkWatchFieldOptions/fieldLinkTargetFieldOptions が確定済みの必要があるため）
+    renderFieldLinkList();
+
     // 3.7. メールアドレス初期値チェックボックスを設定値から反映し disabled 状態を更新する
     if (elMailLoginUserDefault) {
       var savedMail = currentConfig.fieldMapping && currentConfig.fieldMapping.mailLoginUserDefault;
@@ -4984,16 +5852,49 @@
     if (elWorkflowModalApply) {
       elWorkflowModalApply.addEventListener('click', handleWorkflowModalApply);
     }
-    // ワークフロー編集モーダル − 発火条件「+ 条件を追加」ボタン
-    if (elWfConditionAdd) {
-      elWfConditionAdd.addEventListener('click', function () {
-        if (elWfConditionRows) { elWfConditionRows.appendChild(buildWorkflowConditionRow(null)); }
+    // ワークフロー編集モーダル − 発火条件「+ グループを追加（OR）」ボタン（§10.13.3）
+    if (elWfConditionGroupAdd) {
+      elWfConditionGroupAdd.addEventListener('click', function () {
+        if (elWfConditionGroups) { elWfConditionGroups.appendChild(buildConditionGroupBlock(null)); }
       });
     }
     // ワークフロー編集モーダル − アクション「+ アクションを追加」ボタン
     if (elWfActionAdd) {
       elWfActionAdd.addEventListener('click', function () {
         if (elWfActionRows) { elWfActionRows.appendChild(buildWorkflowActionBlock(null)); }
+      });
+    }
+
+    // フィールド連動 − 一覧「+ ルールを追加」ボタン（REQ_workflow-actions §10.6）
+    if (elFieldLinkAdd) {
+      elFieldLinkAdd.addEventListener('click', function () { openFieldLinkModal(null); });
+    }
+    // フィールド連動ルール編集モーダル − 閉じる / キャンセル / 背景クリック
+    if (elFieldLinkModalClose) {
+      elFieldLinkModalClose.addEventListener('click', closeFieldLinkModal);
+    }
+    if (elFieldLinkModalCancel) {
+      elFieldLinkModalCancel.addEventListener('click', closeFieldLinkModal);
+    }
+    if (elFieldLinkModal) {
+      elFieldLinkModal.addEventListener('click', function (e) {
+        if (e.target === elFieldLinkModal) { closeFieldLinkModal(); }
+      });
+    }
+    // フィールド連動ルール編集モーダル − 適用ボタン
+    if (elFieldLinkModalApply) {
+      elFieldLinkModalApply.addEventListener('click', handleFieldLinkModalApply);
+    }
+    // フィールド連動ルール編集モーダル − 発火条件「+ グループを追加（OR）」ボタン
+    if (elFlrConditionGroupAdd) {
+      elFlrConditionGroupAdd.addEventListener('click', function () {
+        if (elFlrConditionGroups) { elFlrConditionGroups.appendChild(buildConditionGroupBlock(null)); }
+      });
+    }
+    // フィールド連動ルール編集モーダル − 「+ セットアクションを追加」ボタン
+    if (elFlrSetActionAdd) {
+      elFlrSetActionAdd.addEventListener('click', function () {
+        if (elFlrSetActionRows) { elFlrSetActionRows.appendChild(buildSetActionBlock(null)); }
       });
     }
 

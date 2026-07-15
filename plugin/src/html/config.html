@@ -520,6 +520,42 @@
         </section>
 
         <!-- ====================================================
+          セクション 7: フィールド連動 (自レコードフィールド連動アクション)
+          REQ_workflow-actions §10.6
+        ==================================================== -->
+        <section class="kc-config-section">
+          <h2 class="kc-config-section-title">フィールド連動</h2>
+          <p class="kc-config-section-desc">
+            追加/編集画面でフィールドの値を変更した瞬間（保存前）に、同じレコードの別フィールドへ
+            固定値・自レコードの他フィールド値・他レコード（別アプリ含む）の値を自動でセットします。
+            DnD（移動・リサイズ）で開始/終了/終日が変化した場合も同様に反映されます。
+            別アプリへの書き込みは行いません（読み取りのみ。上のワークフローとは別機能です）。
+          </p>
+
+          <div id="kc-fieldlink-circular-warning" class="kc-config-hint kc-fieldlink-circular-warning" aria-live="polite"></div>
+
+          <div class="kc-fieldlink-table">
+            <div class="kc-fieldlink-header">
+              <div class="kc-fieldlink-header-col kc-fieldlink-col-handle"></div>
+              <div class="kc-fieldlink-header-col kc-fieldlink-col-name">名前</div>
+              <div class="kc-fieldlink-header-col kc-fieldlink-col-watch">監視フィールド</div>
+              <div class="kc-fieldlink-header-col kc-fieldlink-col-enabled">有効</div>
+              <div class="kc-fieldlink-header-col kc-fieldlink-col-actions">セット数</div>
+              <div class="kc-fieldlink-header-col kc-fieldlink-col-op"></div>
+            </div>
+            <div id="kc-fieldlink-rows" class="kc-fieldlink-rows">
+              <!-- フィールド連動ルール行を JavaScript で動的追加 -->
+            </div>
+          </div>
+
+          <div class="kc-fieldlink-add-row">
+            <button type="button" id="kc-fieldlink-add" class="kc-config-btn kc-config-btn-secondary">
+              + ルールを追加
+            </button>
+          </div>
+        </section>
+
+        <!-- ====================================================
           操作ボタン (ページ最下部)
         ==================================================== -->
         <div class="kc-config-actions">
@@ -596,7 +632,6 @@
             <select id="kc-wf-trigger" class="kc-config-select">
               <option value="recordCreate">レコード作成時</option>
               <option value="recordUpdate">レコード更新時</option>
-              <option value="recordDelete">レコード削除時（物理削除）</option>
             </select>
             <p class="kc-config-hint">
               カレンダー（DnD・モーダル）と kintone 標準画面のどちらの操作でも、
@@ -606,13 +641,16 @@
             </p>
           </div>
 
-          <h4 class="kc-workflow-modal-subtitle">発火条件（すべて一致した場合のみ実行。0件の場合は常に実行）</h4>
-          <div id="kc-wf-condition-rows" class="kc-wf-condition-rows">
-            <!-- 発火条件行を JavaScript で動的追加 -->
+          <h4 class="kc-workflow-modal-subtitle">発火条件（グループ内は AND、グループ間は OR。0件の場合は常に実行）</h4>
+          <p class="kc-config-hint">
+            フィルタ設定（グループ内 OR・グループ間 AND）とは条件の組み合わせ方が逆です。
+          </p>
+          <div id="kc-wf-condition-groups" class="kc-condition-groups">
+            <!-- 条件グループを JavaScript で動的追加 -->
           </div>
-          <div class="kc-wf-condition-add-row">
-            <button type="button" id="kc-wf-condition-add" class="kc-config-btn kc-config-btn-secondary">
-              + 条件を追加
+          <div class="kc-wf-condition-group-add-row">
+            <button type="button" id="kc-wf-condition-group-add" class="kc-config-btn kc-config-btn-secondary">
+              + グループを追加（OR）
             </button>
           </div>
 
@@ -629,6 +667,84 @@
         <div class="kc-modal-footer">
           <button type="button" id="kc-workflow-modal-apply" class="kc-config-btn kc-config-btn-primary">適用</button>
           <button type="button" id="kc-workflow-modal-cancel" class="kc-config-btn kc-config-btn-secondary">キャンセル</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- フィールド連動ルール編集モーダル (初期は hidden) REQ_workflow-actions §10.6 第2階層 -->
+    <div class="kc-modal-overlay" id="kc-fieldlink-modal" hidden aria-modal="true" role="dialog" aria-labelledby="kc-fieldlink-modal-title">
+      <div class="kc-modal-content kc-modal-content--wide">
+        <div class="kc-modal-header">
+          <h3 class="kc-modal-title" id="kc-fieldlink-modal-title">フィールド連動ルール編集</h3>
+          <button type="button" class="kc-modal-close" id="kc-fieldlink-modal-close" aria-label="閉じる">×</button>
+        </div>
+        <div class="kc-modal-body kc-modal-body--scroll">
+          <p id="kc-fieldlink-modal-error" class="kc-modal-msg kc-workflow-modal-error" aria-live="polite"></p>
+
+          <div class="kc-config-field-group">
+            <label for="kc-flr-name" class="kc-config-label">
+              ルール名 <span class="kc-required">*</span>
+            </label>
+            <input
+              type="text"
+              id="kc-flr-name"
+              class="kc-config-input"
+              maxlength="100"
+              placeholder="例: 開始日時変更で担当拠点を自動セット"
+            />
+          </div>
+
+          <div class="kc-config-field-group">
+            <label class="kc-config-checkbox-label">
+              <input type="checkbox" id="kc-flr-enabled" checked />
+              有効化する
+            </label>
+          </div>
+
+          <div class="kc-config-field-group">
+            <label for="kc-flr-watchfield" class="kc-config-label">
+              監視フィールド <span class="kc-required">*</span>
+            </label>
+            <select id="kc-flr-watchfield" class="kc-config-select">
+              <option value="">-- フィールドを選択 --</option>
+            </select>
+            <p class="kc-config-hint">
+              値が変更された瞬間（保存前）に発火します。DnD（移動・リサイズ）では、監視フィールドが
+              開始日時・終了日時・終日のいずれかで、かつ実際に値が変化した場合のみ発火します。
+              テーブル内フィールドは選択できません。
+            </p>
+          </div>
+
+          <h4 class="kc-workflow-modal-subtitle">発火条件（グループ内は AND、グループ間は OR。0件の場合は常に実行）</h4>
+          <p class="kc-config-hint">
+            フィルタ設定（グループ内 OR・グループ間 AND）とは条件の組み合わせ方が逆です。
+          </p>
+          <div id="kc-flr-condition-groups" class="kc-condition-groups">
+            <!-- 条件グループを JavaScript で動的追加 -->
+          </div>
+          <div class="kc-wf-condition-group-add-row">
+            <button type="button" id="kc-flr-condition-group-add" class="kc-config-btn kc-config-btn-secondary">
+              + グループを追加（OR）
+            </button>
+          </div>
+
+          <h4 class="kc-workflow-modal-subtitle">セットアクション（上から順に適用。1件以上必須）</h4>
+          <p class="kc-config-hint">
+            固定値・自レコードの他フィールド値・他レコード（別アプリ含む）の参照のみ設定できます。
+            対象アプリへの作成・更新は行いません（このルールでは選択肢自体がありません）。
+          </p>
+          <div id="kc-flr-setaction-rows" class="kc-wf-action-rows">
+            <!-- セットアクションブロックを JavaScript で動的追加 -->
+          </div>
+          <div class="kc-wf-action-add-row">
+            <button type="button" id="kc-flr-setaction-add" class="kc-config-btn kc-config-btn-secondary">
+              + セットアクションを追加
+            </button>
+          </div>
+        </div>
+        <div class="kc-modal-footer">
+          <button type="button" id="kc-fieldlink-modal-apply" class="kc-config-btn kc-config-btn-primary">適用</button>
+          <button type="button" id="kc-fieldlink-modal-cancel" class="kc-config-btn kc-config-btn-secondary">キャンセル</button>
         </div>
       </div>
     </div>

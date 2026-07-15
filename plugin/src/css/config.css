@@ -1722,14 +1722,45 @@ body {
   padding-top: 14px;
 }
 
-/* 発火条件 1 行（フィールド選択 / 値 / 削除） */
-.kc-wf-condition-rows {
+/* ====================================================================
+ * 発火条件グループ UI（§10.13.3: AND/OR 複合条件。workflows・fieldLinkRules 共通）
+ * グループ内（.kc-condition-group-rows）= AND、グループ間（.kc-condition-groups）= OR
+ * ==================================================================== */
+.kc-condition-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.kc-condition-group {
+  border: 1px solid #d8dce4;
+  border-radius: 6px;
+  background: #f8f9fb;
+  padding: 10px 12px;
+}
+
+.kc-condition-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.kc-condition-group-label {
+  font-size: 12px;
+  font-weight: bold;
+  color: #555;
+}
+
+.kc-condition-group-rows {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-bottom: 8px;
 }
 
+/* 発火条件 1 行（フィールド選択 / 値 / 削除） */
 .kc-wf-condition-row {
   display: grid;
   grid-template-columns: 1.2fr 1.2fr 40px;
@@ -1740,6 +1771,10 @@ body {
 .kc-wf-cond-value-wrapper select,
 .kc-wf-cond-value-wrapper input {
   width: 100%;
+}
+
+.kc-wf-condition-group-add-row {
+  margin-top: 0;
 }
 
 /* アクションブロック（対象アプリ・動作モード・キー・マッピング・失敗時継続を内包するカード） */
@@ -1861,13 +1896,120 @@ body {
   margin-bottom: 0;
 }
 
+/* ====================================================================
+ * フィールド連動設定 UI (REQ_workflow-actions §10.6)
+ * 第1階層: ルール一覧テーブル（.kc-fieldlink-*）
+ * 第2階層（編集モーダル）は既存ワークフローの .kc-workflow-action-block / .kc-flr-lookup-wrap 等の
+ * カード・キーエリア CSS をそのまま再利用するため、ここでは一覧テーブルと循環警告のみ定義する。
+ * ==================================================================== */
+
+.kc-fieldlink-circular-warning {
+  color: #a15c00;
+  white-space: pre-line;
+}
+
+.kc-fieldlink-table {
+  border: 1px solid #d8dce4;
+  border-radius: 4px;
+  overflow: visible;
+  margin-bottom: 10px;
+}
+
+.kc-fieldlink-header {
+  display: grid;
+  grid-template-columns: 24px 2fr 1.4fr 60px 90px 120px;
+  gap: 8px;
+  align-items: center;
+  background: #e8ecf1;
+  border-bottom: 1px solid #d0d5df;
+  padding: 6px 8px;
+}
+
+.kc-fieldlink-header-col {
+  font-size: 12px;
+  font-weight: bold;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kc-fieldlink-rows {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+.kc-fieldlink-row {
+  display: grid;
+  grid-template-columns: 24px 2fr 1.4fr 60px 90px 120px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eaecf0;
+  transition: background 0.1s;
+}
+
+.kc-fieldlink-row:last-child:not(.kc-drag-over-bottom) {
+  border-bottom: none;
+}
+
+.kc-fieldlink-row:hover {
+  background: #f0f4f8;
+}
+
+.kc-fieldlink-cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kc-fieldlink-col-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kc-fieldlink-col-name {
+  font-size: 13px;
+  color: #333;
+}
+
+.kc-fieldlink-col-enabled,
+.kc-fieldlink-col-actions {
+  text-align: center;
+}
+
+.kc-fieldlink-col-op {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.kc-fieldlink-add-row {
+  margin-top: 0;
+}
+
+/* lookup（他レコード参照）セットアクションの内部レイアウト。既存ワークフローの
+   appid-row / keyarea / config-field-group / config-hint をそのまま再利用しつつ縦間隔を揃える */
+.kc-flr-lookup-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
 @media (max-width: 600px) {
   .kc-modal-content--wide {
     width: 100%;
   }
 
   .kc-workflow-header,
-  .kc-workflow-row {
+  .kc-workflow-row,
+  .kc-fieldlink-header,
+  .kc-fieldlink-row {
     grid-template-columns: 20px 1.6fr 1fr 44px 60px 90px;
     font-size: 12px;
   }
