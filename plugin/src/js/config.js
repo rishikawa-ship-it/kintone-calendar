@@ -21,7 +21,11 @@
  *     filterConfig: { groups: [ { id, label, type: 'assignee'|'fieldValue', fieldCode, fieldType, items: [ { id, label, value, defaultChecked } ] } ] },
  *     views: { "<viewId>": { calendarTitle, defaultView } },
  *     workflows: [ { id, name, enabled, trigger: { type, watchFieldCode? },
- *                    conditionGroups: [...], actions: [...] }, ... ]
+ *                    conditionTree: { op, children: [...] }, actions: [...] }, ... ]
+ *       conditionTree（§12 改訂5）: ルートは常に1グループノード（op: 'and'|'or', children: [...]）。
+ *       children の各要素は { type:'condition', fieldCode, fieldType, value } または
+ *       { type:'group', op, children: [...] }（再帰・深さ無制限。旧 conditionGroups/
+ *       conditionGroupsJoin は廃止し、読込時に normalizeConditionTree で本形式へ変換する）
  *       trigger.type: 'recordCreate' | 'recordUpdate' | 'fieldChange'（§8 改訂1: 操作別トリガー。
  *       §11 改訂4で fieldChange を追加し旧 fieldLinkRules を統合。watchFieldCode は fieldChange のみ必須）。
  *       経路（カレンダー DnD/モーダル or kintone 標準画面）は区別しない。
@@ -50,6 +54,14 @@
  *     許可されるアクション種別をトリガーごとに切り替える。設定画面のセクションも1つに統合。
  *     version 13 は未リリースのためマイグレーション不要（読込時、旧 fieldLinkRules キーが
  *     残っていた場合は防御的に fieldChange ワークフローへ変換して取り込む）
+ *   - §11.6.1 改訂4追加指示（2026-07-15）: 発火条件を conditionGroups（グループ内 AND/OR
+ *     自由選択）+ conditionGroupsJoin（グループ間 AND/OR）の2階層モデルへ拡張。
+ *   - §12 改訂5（2026-07-15）: 上記2階層モデルを廃止し、グループの入れ子を許す再帰的な
+ *     conditionTree（{op, children:[...]}）に置換。UI 上の新規ネスト作成は3階層まで
+ *     （データ自体は深さ無制限）。normalizeConditionTree で旧3形式（最古フラット配列 /
+ *     conditionGroups の配列の配列 / conditionGroups+conditionGroupsJoin）を読込時にツリーへ
+ *     変換する。desktop.js 側 KC.Workflow.Core.normalizeConditionTree と完全に同一の変換規則
+ *     （別スクリプトコンテキストのため実装は重複するが、ロジックは相互参照して同一に保つこと）
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -451,11 +463,11 @@
   var elWfName          = document.getElementById('kc-wf-name');
   var elWfEnabled       = document.getElementById('kc-wf-enabled');
   var elWfTrigger       = document.getElementById('kc-wf-trigger');
-  /* 発火条件（conditionGroups）はトリガー種別によらず共通の1エディタを使う（§10.13.3, §11.1） */
-  var elWfConditionGroups   = document.getElementById('kc-wf-condition-groups');
-  var elWfConditionGroupAdd = document.getElementById('kc-wf-condition-group-add');
-  /* グループ間の結合（AND/OR）。§11.6.1: グループ内は各グループの op、グループ間はワークフロー単位で1つ */
-  var elWfConditionGroupsJoin = document.getElementById('kc-wf-condition-groups-join');
+  /* 発火条件（conditionTree）はトリガー種別によらず共通の1エディタを使う（§10.13.3, §11.1, §12 改訂5）。
+     ルートは常に1グループノードのため、コンテナには常に .kc-condtree-group が1つだけ描画される
+     （旧 kc-wf-condition-group-add / kc-wf-condition-groups-join は廃止。ルート自身の
+     グループヘッダにある「+ グループ」「+ 条件」ボタンで代替する） */
+  var elWfConditionTree = document.getElementById('kc-wf-condition-tree');
   /* 監視フィールド選択エリア（fieldChange 選択時のみ表示。旧セクション7から移設） */
   var elWfWatchFieldArea = document.getElementById('kc-wf-watchfield-area');
   var elFlrWatchField    = document.getElementById('kc-flr-watchfield');
@@ -1242,7 +1254,20 @@
    * dragstart はハンドル要素に、その他は行要素に登録する。
    * ドロップ時は行を新位置の前/後に insertBefore で挿入する。
    * 外部ファイルドラッグなど、text/plain データを持たない dragenter は無視する。
-   * @param {HTMLElement} row - .kc-permission-row または .kc-fieldvalue-row 要素
+   *
+   * §12 改訂5 レビュー修正（Blocker）: 条件ツリー（.kc-condtree-group の入れ子）や、既存の
+   * フィルタグループ（.kc-filter-group-row の中に .kc-filter-item-row が入る）のように、
+   * この関数でドラッグ可能にした要素が別の階層内にネストされるケースがある。
+   * (a) dragover/drop の e.stopPropagation() を必須にする（ネスト先の drop 処理が、
+   *     ドラッグ元・ドロップ先いずれとも無関係な祖先コンテナの drop ハンドラへバブリングし、
+   *     多重処理されることを防ぐ）。
+   * (b) drop 時の「ドラッグ中の行」検索を container.children（直接の子のみ）に限定する
+   *     （querySelector は子孫全体を検索するため、ネストしたグループ内の要素が、無関係な
+   *     祖先コンテナの drop 処理にヒットして階層をまたいで移動してしまうバグがあった）。
+   * フラットなリスト（権限テーブル・フィルタ設定のグループ行・ワークフロー一覧等、行の子が
+   * ネストを持たない場合）では、直接の子のみの検索は従来の querySelector と同じ結果になり、
+   * stopPropagation も他に伝播先の同種リスナーが存在しないため挙動に影響しない。
+   * @param {HTMLElement} row - .kc-permission-row または .kc-fieldvalue-row 等の行要素
    * @param {HTMLElement} handle - buildDragHandle() で生成したハンドル要素
    */
   function attachRowDragEvents(row, handle) {
@@ -1263,9 +1288,10 @@
       // 全行のハイライトクラスを除去（REQ_checkbox-filter: .kc-filter-group-row も対象に追加）
       var container = row.parentNode;
       if (container) {
+        // §12 改訂5: 条件ツリーの行（.kc-condtree-row）・グループ（.kc-condtree-group）も対象に追加
         var allRows = container.querySelectorAll(
           '.kc-permission-row, .kc-fieldvalue-row, .kc-filter-group-row, .kc-filter-item-row, ' +
-          '.kc-workflow-row, .kc-workflow-action-block'
+          '.kc-workflow-row, .kc-workflow-action-block, .kc-condtree-row, .kc-condtree-group'
         );
         allRows.forEach(function (r) {
           r.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
@@ -1274,10 +1300,13 @@
     });
 
     // dragover: デフォルト動作を preventDefault してドロップを許可し、挿入線を表示
+    // §12 改訂5 レビュー修正(b): 祖先の同種リスナー（ネストしたグループ/フィルタ項目の親グループ等）
+    // への多重バブリングを stopPropagation で止める
     row.addEventListener('dragover', function (e) {
       // text/plain を持たないドラッグ（外部ファイルなど）は無視
       if (!e.dataTransfer.types || e.dataTransfer.types.indexOf('text/plain') === -1) return;
       e.preventDefault();
+      e.stopPropagation();
       e.dataTransfer.dropEffect = 'move';
       var rect = row.getBoundingClientRect();
       var isUpperHalf = e.clientY < rect.top + rect.height / 2;
@@ -1289,10 +1318,12 @@
     row.addEventListener('dragenter', function (e) {
       if (!e.dataTransfer.types || e.dataTransfer.types.indexOf('text/plain') === -1) return;
       e.preventDefault();
+      e.stopPropagation();
     });
 
     // dragleave: 挿入線を消す（子要素へ移動した場合は relatedTarget で判定）
     row.addEventListener('dragleave', function (e) {
+      e.stopPropagation();
       if (!row.contains(e.relatedTarget)) {
         row.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
       }
@@ -1303,11 +1334,17 @@
       // text/plain を持たないドラッグは無視
       if (!e.dataTransfer.types || e.dataTransfer.types.indexOf('text/plain') === -1) return;
       e.preventDefault();
+      // §12 改訂5 レビュー修正(b): 祖先の drop ハンドラへのバブリングによる多重処理を防ぐ
+      e.stopPropagation();
       var container = row.parentNode;
       if (!container) return;
 
-      // ドラッグ中クラスを持つ行がドラッグ元
-      var draggingRow = container.querySelector('.kc-dragging');
+      // §12 改訂5 レビュー修正(a): 直接の子のみを検索する（querySelector は子孫全体を検索してしまい、
+      // ネストしたグループ/項目内の要素が、無関係な祖先コンテナの drop 処理にヒットして
+      // 階層をまたいで移動してしまうバグがあった。フラットなリストでは従来と同じ結果になる）
+      var draggingRow = Array.prototype.find.call(container.children, function (el) {
+        return el.classList.contains('kc-dragging');
+      });
       if (!draggingRow || draggingRow === row) {
         row.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
         return;
@@ -1813,7 +1850,7 @@
    *
    * §11.2: トリガー種別によって編集モーダルのアクション編集エリアを丸ごと切り替える
    * （recordCreate/recordUpdate → appAction エディタ、fieldChange → setField エディタ。
-   * 発火条件（conditionGroups）と監視フィールド以外は同一モーダル内で共存させ、
+   * 発火条件（conditionTree。§12 改訂5）と監視フィールド以外は同一モーダル内で共存させ、
    * 表示/非表示のみで出し分ける。これにより「fieldChange に対象アプリへの作成・更新を
    * 紐付けるUI自体が存在しない」という §10.4.5 の設計ガードを構造的に維持する）。
    *
@@ -2105,17 +2142,164 @@
     return wrapper;
   }
 
+  /* ====================================================================
+   * 発火条件ツリー UI（§12 改訂5: 条件ツリー化・グループの入れ子）
+   * workflows（全トリガー種別で共通利用。§11.1）。
+   * §11.6.1 の2階層モデル（conditionGroups + conditionGroupsJoin）を廃止し、再帰的な
+   * conditionTree（{op, children:[{type:'condition',...}|{type:'group',op,children:[...]}]}）
+   * に統一する。ルートは常に1グループノード。UI 上の新規ネスト作成は3階層まで（ルート=1階層目）。
+   * データ自体は深さ無制限（既存の深い構造は表示・評価するが、そこへの新規グループ追加のみ不可）。
+   * ==================================================================== */
+
+  /** UI 上で新規にネストを作成できる最大階層数（ルート=1階層目。§12.3） */
+  var WORKFLOW_CONDITION_TREE_MAX_DEPTH = 3;
+
   /**
-   * 発火条件 1 行を生成する
-   * @param {Object|null} cond
-   * @returns {HTMLElement} .kc-wf-condition-row 要素
+   * 旧3形式の発火条件を再帰ツリー（conditionTree）へ正規化する（§12.1 改訂5）。
+   * ★★★ 相互参照: desktop.js の KC.Workflow.Core.normalizeConditionTree と完全に同一の
+   * 変換規則にすること。別スクリプトコンテキストのため実装自体の重複は許容するが、片方だけ
+   * 直すと UI 表示（本関数）と実行時評価（desktop.js 側）で結果がズレる（AC-33）。修正時は
+   * 両方に反映する。 ★★★
+   * 受け入れる入力（優先順に判定）:
+   *   0. conditionTree が既にツリー形式（{op, children:[...]}）ならそのまま返す
+   *   1. 最古形式: フラットな条件オブジェクト配列（グループ概念なし）
+   *      → { op: 'and', children: [条件ノード, ...] }
+   *   2. §10.13.3 形式: [[{fieldCode,...}, ...], ...]（配列の配列。グループ内は常に AND）
+   *      → { op: 'or', children: [{type:'group', op:'and', children:[...]}, ...] }
+   *   3. §11.6.1 形式: [{ op: 'and'|'or', conditions: [...] }, ...] + conditionGroupsJoin
+   *      → { op: join, children: [{type:'group', op:g.op, children:[...]}, ...] }
+   * @param {Object|null} conditionTree - 既に新形式ツリーであればそのまま優先する
+   * @param {Array|null} conditionGroups - 旧形式（配列の配列 / {op,conditions}[] / フラット条件配列）
+   * @param {string} [groupsJoin] - 旧§11.6.1形式のグループ間結合（'and'|'or'）。既定 'or'
+   * @returns {{op: string, children: Array}} 条件ツリー（ルートは常にグループノード）
    */
-  function buildWorkflowConditionRow(cond) {
+  function normalizeConditionTree(conditionTree, conditionGroups, groupsJoin) {
+    if (conditionTree && typeof conditionTree === 'object' && Array.isArray(conditionTree.children)) {
+      return conditionTree;
+    }
+    var arr = Array.isArray(conditionGroups) ? conditionGroups : [];
+    if (arr.length === 0) return { op: 'and', children: [] };
+
+    var toConditionNode = function (c) {
+      return { type: 'condition', fieldCode: c.fieldCode, fieldType: c.fieldType, value: c.value };
+    };
+
+    var first = arr[0];
+    // 最古形式: 先頭要素が条件オブジェクトそのもの（グループでも {op,conditions} でもない）
+    if (first && typeof first === 'object' && !Array.isArray(first) &&
+        first.conditions === undefined && first.fieldCode !== undefined) {
+      return { op: 'and', children: arr.map(toConditionNode) };
+    }
+
+    var groupNodes = arr.map(function (g) {
+      if (Array.isArray(g)) {
+        return { type: 'group', op: 'and', children: g.map(toConditionNode) };
+      }
+      return {
+        type: 'group',
+        op: (g && g.op === 'or') ? 'or' : 'and',
+        children: (g && Array.isArray(g.conditions)) ? g.conditions.map(toConditionNode) : []
+      };
+    });
+    // §10.13.3（配列の配列）形式は常にグループ間 OR。§11.6.1 形式は groupsJoin に従う（既定 'or'）
+    var isArrayOfArraysFormat = Array.isArray(first);
+    var rootOp = isArrayOfArraysFormat ? 'or' : ((groupsJoin === 'and') ? 'and' : 'or');
+    return { op: rootOp, children: groupNodes };
+  }
+
+  /**
+   * 条件ツリーのグループ深さを算出する（ルート=1）。DOM 上の実際の位置から動的に算出するため、
+   * 「外へ」「グループ化」「グループを解除」等の構造変更後も常に正しい値になる。
+   * @param {HTMLElement} groupEl - .kc-condtree-group 要素
+   * @returns {number}
+   */
+  function getConditionTreeGroupDepth(groupEl) {
+    var depth = 1;
+    var ancestorGroup = groupEl && groupEl.parentNode ? groupEl.parentNode.closest('.kc-condtree-group') : null;
+    while (ancestorGroup) {
+      depth++;
+      ancestorGroup = ancestorGroup.parentNode ? ancestorGroup.parentNode.closest('.kc-condtree-group') : null;
+    }
+    return depth;
+  }
+
+  /**
+   * 構造変更（+グループ/+条件/外へ/グループ化/グループを解除/削除）のたびに呼び出し、
+   * ツリー全体の「+ グループ」「グループ化」ボタンの有効/無効、「外へ」ボタンの表示/非表示を
+   * 現在の DOM 構造に基づいて再計算する（§12.3: 深さ3のグループでは新規ネスト操作を無効化）。
+   * @param {HTMLElement} rootContainerEl - #kc-wf-condition-tree
+   */
+  function refreshConditionTreeDepthUI(rootContainerEl) {
+    if (!rootContainerEl) return;
+    rootContainerEl.querySelectorAll('.kc-condtree-group').forEach(function (groupEl) {
+      var depth = getConditionTreeGroupDepth(groupEl);
+      if (groupEl._addGroupBtn) { groupEl._addGroupBtn.disabled = (depth >= WORKFLOW_CONDITION_TREE_MAX_DEPTH); }
+    });
+    rootContainerEl.querySelectorAll('.kc-condtree-row, .kc-condtree-group').forEach(function (nodeEl) {
+      var containerGroupEl = nodeEl.parentNode && nodeEl.parentNode.closest('.kc-condtree-group');
+      if (!containerGroupEl) return;
+      var containerDepth = getConditionTreeGroupDepth(containerGroupEl);
+      if (nodeEl._outwardBtn) { nodeEl._outwardBtn.hidden = (containerDepth <= 1); }
+      if (nodeEl._groupifyBtn) { nodeEl._groupifyBtn.disabled = (containerDepth >= WORKFLOW_CONDITION_TREE_MAX_DEPTH); }
+    });
+  }
+
+  /**
+   * 行（条件・グループ共通）を、現在の親グループから「1つ外側」の親グループへ移動する（§12.3「外へ」）。
+   * ルート直下の行は呼び出し元でボタン自体を非表示にしているため、このガードは防御的。
+   * @param {HTMLElement} nodeEl - .kc-condtree-row または .kc-condtree-group
+   */
+  function moveConditionTreeNodeOutward(nodeEl) {
+    var currentContainer = nodeEl.parentNode;
+    if (!currentContainer) return;
+    var currentGroupEl = currentContainer.closest('.kc-condtree-group');
+    if (!currentGroupEl) return;
+    var grandContainer = currentGroupEl.parentNode;
+    if (!grandContainer || !grandContainer.classList || !grandContainer.classList.contains('kc-condtree-children')) return;
+    grandContainer.insertBefore(nodeEl, currentGroupEl.nextSibling);
+    refreshConditionTreeDepthUI(elWfConditionTree);
+  }
+
+  /**
+   * 行（条件・グループ共通）を新しいグループで包む（§12.3「グループ化」）。
+   * @param {HTMLElement} nodeEl - .kc-condtree-row または .kc-condtree-group
+   */
+  function groupifyConditionTreeNode(nodeEl) {
+    var currentContainer = nodeEl.parentNode;
+    if (!currentContainer) return;
+    var newGroupEl = buildConditionTreeGroupNode({ op: 'and', children: [] }, false);
+    currentContainer.insertBefore(newGroupEl, nodeEl);
+    newGroupEl._childrenEl.appendChild(nodeEl);
+    refreshConditionTreeDepthUI(elWfConditionTree);
+  }
+
+  /**
+   * 発火条件 1 行（条件ノード）を生成する（§12.3）。
+   * @param {Object|null} cond - { fieldCode, fieldType, value } 形式
+   * @returns {HTMLElement} .kc-condtree-row 要素
+   */
+  function buildConditionTreeRow(cond) {
     var row = document.createElement('div');
-    row.className = 'kc-wf-condition-row';
+    row.className = 'kc-condtree-row';
+    row.dataset.nodeType = 'condition';
+
+    var handle = buildDragHandle();
+    attachRowDragEvents(row, handle);
 
     var fieldSel = buildWorkflowConditionFieldSelect(cond);
     var valueWrap = buildWorkflowConditionValueControl(cond, fieldSel);
+
+    var outwardBtn = document.createElement('button');
+    outwardBtn.type = 'button';
+    outwardBtn.className = 'kc-config-btn kc-config-btn-secondary kc-condtree-outward-btn';
+    outwardBtn.textContent = '↰ 外へ';
+    outwardBtn.addEventListener('click', function () { moveConditionTreeNodeOutward(row); });
+
+    var groupifyBtn = document.createElement('button');
+    groupifyBtn.type = 'button';
+    groupifyBtn.className = 'kc-config-btn kc-config-btn-secondary kc-condtree-groupify-btn';
+    groupifyBtn.textContent = '⊕ グループ化';
+    groupifyBtn.addEventListener('click', function () { groupifyConditionTreeNode(row); });
 
     var delBtn = document.createElement('button');
     delBtn.type = 'button';
@@ -2123,50 +2307,53 @@
     delBtn.textContent = '−';
     delBtn.addEventListener('click', function () {
       row.parentNode && row.parentNode.removeChild(row);
+      refreshConditionTreeDepthUI(elWfConditionTree);
     });
 
+    row.appendChild(handle);
     row.appendChild(fieldSel);
     row.appendChild(valueWrap);
+    row.appendChild(outwardBtn);
+    row.appendChild(groupifyBtn);
     row.appendChild(delBtn);
+
+    row._outwardBtn = outwardBtn;
+    row._groupifyBtn = groupifyBtn;
     return row;
   }
 
-  /* ====================================================================
-   * 発火条件グループ UI（§11.6.1 改訂4追加指示: AND/OR 自由化。conditionGroups 形式）
-   * workflows（全トリガー種別で共通利用。§11.1）。
-   * グループ内の結合（AND/OR）はグループごとに選択可能（.kc-condition-group-op-select）、
-   * グループ間の結合（AND/OR）はワークフロー単位で1つ選択可能（.kc-wf-condition-groups-join）。
-   * 既定値は「グループ内 AND・グループ間 OR」（§10.13.3 当時の固定論理と同じ挙動）。
-   * ==================================================================== */
-
   /**
-   * 条件グループ 1 件分の編集ブロックを生成する。
-   * §11.6.2 バグ修正: グループ削除ボタンは、円形の1文字アイコン用 CSS
-   * （.kc-fieldvalue-del-btn。「−」1文字専用）に長文「グループを削除」を入れていたため
-   * 表示が崩れていた。ワークフロー全体への影響が大きい操作（グループ全体を削除）であるため、
-   * アイコン化ではなく、フィルタ設定のグループ削除（.kc-filter-group-del-btn）と同じ
-   * ラベル付きセカンダリボタンに揃える（管理者確定方針・案A）。
-   * @param {Object|Array|null} group - { op: 'and'|'or', conditions: [...] } 形式。
-   *   旧「配列そのもの」形式（§10.13.3 当時。グループ内条件の配列）が渡された場合は
-   *   op='and' として防御的に解釈する。
-   * @returns {HTMLElement} .kc-condition-group 要素
+   * 条件グループ 1 件分の編集ブロックを再帰的に生成する（§12.3）。
+   * ルート（isRoot=true）は「グループを解除」「グループを削除」「外へ」「グループ化」を持たない
+   * （親が存在しないため）。§11.6.2 バグ修正のラベル付きセカンダリボタン方針を継続する。
+   * @param {Object} groupData - { op: 'and'|'or', children: [...] } 形式（正規化済みであること）
+   * @param {boolean} isRoot - ルートグループかどうか
+   * @returns {HTMLElement} .kc-condtree-group 要素
    */
-  function buildConditionGroupBlock(group) {
+  function buildConditionTreeGroupNode(groupData, isRoot) {
     var groupEl = document.createElement('div');
-    groupEl.className = 'kc-condition-group';
+    groupEl.className = 'kc-condtree-group' + (isRoot ? ' kc-condtree-group-root' : '');
+    groupEl.dataset.nodeType = 'group';
 
     var header = document.createElement('div');
-    header.className = 'kc-condition-group-header';
+    header.className = 'kc-condtree-group-header';
 
     var headerLeft = document.createElement('div');
-    headerLeft.className = 'kc-condition-group-header-left';
+    headerLeft.className = 'kc-condtree-group-header-left';
+
+    if (!isRoot) {
+      var handle = buildDragHandle();
+      attachRowDragEvents(groupEl, handle);
+      headerLeft.appendChild(handle);
+    }
 
     var label = document.createElement('span');
-    label.className = 'kc-condition-group-label';
+    label.className = 'kc-condtree-group-label';
     label.textContent = 'グループ内の条件:';
+    headerLeft.appendChild(label);
 
     var opSelect = document.createElement('select');
-    opSelect.className = 'kc-config-select kc-condition-group-op-select';
+    opSelect.className = 'kc-config-select kc-condtree-op-select';
     [
       { value: 'and', label: 'すべて満たす（AND）' },
       { value: 'or',  label: 'いずれかを満たす（OR）' }
@@ -2176,101 +2363,167 @@
       opt.textContent = o.label;
       opSelect.appendChild(opt);
     });
-    opSelect.value = (group && !Array.isArray(group) && group.op === 'or') ? 'or' : 'and';
-
-    headerLeft.appendChild(label);
+    opSelect.value = (groupData && groupData.op === 'or') ? 'or' : 'and';
     headerLeft.appendChild(opSelect);
 
-    var delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'kc-config-btn kc-config-btn-secondary kc-condition-group-del-btn';
-    delBtn.textContent = 'グループを削除';
-    delBtn.addEventListener('click', function () {
-      groupEl.parentNode && groupEl.parentNode.removeChild(groupEl);
+    var headerRight = document.createElement('div');
+    headerRight.className = 'kc-condtree-group-header-right';
+
+    var childrenEl = document.createElement('div');
+    childrenEl.className = 'kc-condtree-children';
+
+    var addCondBtn = document.createElement('button');
+    addCondBtn.type = 'button';
+    addCondBtn.className = 'kc-config-btn kc-config-btn-secondary';
+    addCondBtn.textContent = '+ 条件';
+    addCondBtn.addEventListener('click', function () {
+      childrenEl.appendChild(buildConditionTreeRow(null));
+      refreshConditionTreeDepthUI(elWfConditionTree);
     });
+    headerRight.appendChild(addCondBtn);
+
+    var addGroupBtn = document.createElement('button');
+    addGroupBtn.type = 'button';
+    addGroupBtn.className = 'kc-config-btn kc-config-btn-secondary';
+    addGroupBtn.textContent = '+ グループ';
+    addGroupBtn.addEventListener('click', function () {
+      childrenEl.appendChild(buildConditionTreeGroupNode({ op: 'and', children: [] }, false));
+      refreshConditionTreeDepthUI(elWfConditionTree);
+    });
+    headerRight.appendChild(addGroupBtn);
+
+    var outwardBtn = null;
+    var groupifyBtn = null;
+
+    if (!isRoot) {
+      outwardBtn = document.createElement('button');
+      outwardBtn.type = 'button';
+      outwardBtn.className = 'kc-config-btn kc-config-btn-secondary kc-condtree-outward-btn';
+      outwardBtn.textContent = '↰ 外へ';
+      outwardBtn.addEventListener('click', function () { moveConditionTreeNodeOutward(groupEl); });
+      headerRight.appendChild(outwardBtn);
+
+      groupifyBtn = document.createElement('button');
+      groupifyBtn.type = 'button';
+      groupifyBtn.className = 'kc-config-btn kc-config-btn-secondary kc-condtree-groupify-btn';
+      groupifyBtn.textContent = '⊕ グループ化';
+      groupifyBtn.addEventListener('click', function () { groupifyConditionTreeNode(groupEl); });
+      headerRight.appendChild(groupifyBtn);
+
+      var ungroupBtn = document.createElement('button');
+      ungroupBtn.type = 'button';
+      ungroupBtn.className = 'kc-config-btn kc-config-btn-secondary kc-condtree-ungroup-btn';
+      ungroupBtn.textContent = 'グループを解除';
+      ungroupBtn.addEventListener('click', function () {
+        var parentContainer = groupEl.parentNode;
+        if (!parentContainer) return;
+        var movedChildren = Array.prototype.slice.call(childrenEl.children);
+        movedChildren.forEach(function (child) {
+          parentContainer.insertBefore(child, groupEl);
+        });
+        parentContainer.removeChild(groupEl);
+        refreshConditionTreeDepthUI(elWfConditionTree);
+      });
+      headerRight.appendChild(ungroupBtn);
+
+      // §11.6.2 バグ修正の方針を継続: 円形1文字アイコン（.kc-fieldvalue-del-btn）ではなく
+      // ラベル付きセカンダリボタンを使う（グループ全体削除という影響の大きい操作のため）
+      var groupDelBtn = document.createElement('button');
+      groupDelBtn.type = 'button';
+      groupDelBtn.className = 'kc-config-btn kc-config-btn-secondary kc-condtree-groupdel-btn';
+      groupDelBtn.textContent = 'グループを削除';
+      groupDelBtn.addEventListener('click', function () {
+        if (!window.confirm('このグループを削除しますか？（内側の条件・グループもすべて削除されます）')) return;
+        groupEl.parentNode && groupEl.parentNode.removeChild(groupEl);
+        refreshConditionTreeDepthUI(elWfConditionTree);
+      });
+      headerRight.appendChild(groupDelBtn);
+    }
+
     header.appendChild(headerLeft);
-    header.appendChild(delBtn);
+    header.appendChild(headerRight);
 
-    var rowsEl = document.createElement('div');
-    rowsEl.className = 'kc-condition-group-rows';
-    // 防御的フォールバック: 旧「配列そのもの」形式（グループ内条件の配列自体が group）にも対応
-    var conditions = Array.isArray(group) ? group
-      : (group && Array.isArray(group.conditions)) ? group.conditions : [];
-    conditions.forEach(function (cond) {
-      rowsEl.appendChild(buildWorkflowConditionRow(cond));
+    (groupData && Array.isArray(groupData.children) ? groupData.children : []).forEach(function (child) {
+      if (child && child.type === 'group') {
+        childrenEl.appendChild(buildConditionTreeGroupNode(child, false));
+      } else {
+        childrenEl.appendChild(buildConditionTreeRow(child));
+      }
     });
-
-    var addRow = document.createElement('div');
-    addRow.className = 'kc-condition-group-add-row';
-    var addBtn = document.createElement('button');
-    addBtn.type = 'button';
-    addBtn.className = 'kc-config-btn kc-config-btn-secondary';
-    addBtn.textContent = '+ 条件を追加';
-    addBtn.addEventListener('click', function () {
-      rowsEl.appendChild(buildWorkflowConditionRow(null));
-    });
-    addRow.appendChild(addBtn);
 
     groupEl.appendChild(header);
-    groupEl.appendChild(rowsEl);
-    groupEl.appendChild(addRow);
+    groupEl.appendChild(childrenEl);
+
+    groupEl._childrenEl = childrenEl;
+    groupEl._addGroupBtn = addGroupBtn;
+    groupEl._outwardBtn = outwardBtn;
+    groupEl._groupifyBtn = groupifyBtn;
+
     return groupEl;
   }
 
   /**
-   * conditionGroups 配列の内容でコンテナ DOM を再構築する（§11.6.1）。
-   * 受け入れる形式（優先順に判定・防御的に正規化）:
-   *   1. 最古形式: フラットな条件オブジェクト配列（グループ概念なし）→ 1グループ（op='and'）として解釈
-   *   2. §10.13.3 形式: [[{fieldCode,...}, ...], ...]（配列の配列）→ 各グループ op='and' として解釈
-   *   3. §11.6.1 形式: [{ op: 'and'|'or', conditions: [...] }, ...]
-   * @param {HTMLElement} containerEl
-   * @param {Array} groups
+   * conditionTree の内容でコンテナ DOM を再構築する（§12.3 apply／復元）。
+   * @param {HTMLElement} containerEl - #kc-wf-condition-tree
+   * @param {Object} treeData - normalizeConditionTree で正規化済みの { op, children } 形式
    */
-  function renderConditionGroups(containerEl, groups) {
+  function renderConditionTree(containerEl, treeData) {
     if (!containerEl) return;
     containerEl.innerHTML = '';
-    var arr = Array.isArray(groups) ? groups : [];
-    var first = arr[0];
-    // 最古形式判定: 先頭要素が配列でも {conditions:...} でもなく、条件オブジェクトそのものである
-    var isFlatConditionsFormat = arr.length > 0 && first && typeof first === 'object' &&
-      !Array.isArray(first) && first.conditions === undefined && first.fieldCode !== undefined;
-    var normalized = isFlatConditionsFormat ? [arr] : arr;
-    normalized.forEach(function (group) {
-      containerEl.appendChild(buildConditionGroupBlock(group));
-    });
+    var tree = (treeData && Array.isArray(treeData.children)) ? treeData : { op: 'and', children: [] };
+    containerEl.appendChild(buildConditionTreeGroupNode(tree, true));
+    refreshConditionTreeDepthUI(containerEl);
   }
 
   /**
-   * コンテナ DOM から conditionGroups 配列を収集する（§11.6.1: { op, conditions } 形式で収集）。
-   * @param {HTMLElement} containerEl
-   * @returns {Array<{op: string, conditions: Array<Object>}>}
+   * 条件ツリー1ノード（.kc-condtree-row または .kc-condtree-group）を再帰的に収集する。
+   * @param {HTMLElement} nodeEl
+   * @returns {Object|null} { type:'condition', ... } | { type:'group', op, children } | null（値未入力等）
    */
-  function collectConditionGroups(containerEl) {
-    if (!containerEl) return [];
-    var groups = [];
-    containerEl.querySelectorAll('.kc-condition-group').forEach(function (groupEl) {
-      var opSelect = groupEl.querySelector('.kc-condition-group-op-select');
+  function collectConditionTreeNode(nodeEl) {
+    if (!nodeEl) return null;
+    if (nodeEl.dataset.nodeType === 'condition') {
+      var fieldSel = nodeEl.querySelector('.kc-wf-cond-field-select');
+      if (!fieldSel || !fieldSel.value) return null;
+      var selOpt = fieldSel.options[fieldSel.selectedIndex];
+      var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
+      if (fieldSel.value === '$status') { fieldType = 'STATUS'; }
+
+      var valueSel = nodeEl.querySelector('.kc-wf-cond-value-select');
+      var valueInput = nodeEl.querySelector('.kc-wf-cond-value-input');
+      var value = valueSel ? valueSel.value : (valueInput ? valueInput.value.trim() : '');
+      if (!value) return null;
+
+      return { type: 'condition', fieldCode: fieldSel.value, fieldType: fieldType, value: value };
+    }
+    if (nodeEl.dataset.nodeType === 'group') {
+      var opSelect = nodeEl.querySelector(':scope > .kc-condtree-group-header .kc-condtree-op-select');
       var op = (opSelect && opSelect.value === 'or') ? 'or' : 'and';
+      var childrenEl = nodeEl.querySelector(':scope > .kc-condtree-children');
+      var children = [];
+      if (childrenEl) {
+        Array.prototype.forEach.call(childrenEl.children, function (childEl) {
+          var childNode = collectConditionTreeNode(childEl);
+          if (childNode) { children.push(childNode); }
+        });
+      }
+      return { type: 'group', op: op, children: children };
+    }
+    return null;
+  }
 
-      var rows = groupEl.querySelectorAll('.kc-wf-condition-row');
-      var conds = [];
-      rows.forEach(function (row) {
-        var fieldSel = row.querySelector('.kc-wf-cond-field-select');
-        if (!fieldSel || !fieldSel.value) return;
-        var selOpt = fieldSel.options[fieldSel.selectedIndex];
-        var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
-        if (fieldSel.value === '$status') { fieldType = 'STATUS'; }
-
-        var valueSel = row.querySelector('.kc-wf-cond-value-select');
-        var valueInput = row.querySelector('.kc-wf-cond-value-input');
-        var value = valueSel ? valueSel.value : (valueInput ? valueInput.value.trim() : '');
-        if (!value) return;
-
-        conds.push({ fieldCode: fieldSel.value, fieldType: fieldType, value: value });
-      });
-      groups.push({ op: op, conditions: conds });
-    });
-    return groups;
+  /**
+   * 発火条件ツリーのルートを収集する（§12.3 collect）。ルートは type フィールドを持たない
+   * グループノードとして返す（データモデル §12.1 準拠）。
+   * @param {HTMLElement} containerEl - #kc-wf-condition-tree
+   * @returns {{op: string, children: Array}}
+   */
+  function collectConditionTree(containerEl) {
+    if (!containerEl) return { op: 'and', children: [] };
+    var rootGroupEl = containerEl.querySelector(':scope > .kc-condtree-group');
+    var rootNode = collectConditionTreeNode(rootGroupEl);
+    if (!rootNode) return { op: 'and', children: [] };
+    return { op: rootNode.op, children: rootNode.children };
   }
 
   /**
@@ -2790,7 +3043,8 @@
     if (!elWorkflowModal) return;
     workflowDraft = existingWf
       ? JSON.parse(JSON.stringify(existingWf))
-      : { id: generateWorkflowId(), name: '', enabled: true, trigger: { type: 'recordCreate' }, conditionGroups: [], actions: [] };
+      : { id: generateWorkflowId(), name: '', enabled: true, trigger: { type: 'recordCreate' },
+          conditionTree: { op: 'and', children: [] }, actions: [] };
 
     var triggerType = (workflowDraft.trigger && workflowDraft.trigger.type) || 'recordCreate';
 
@@ -2799,13 +3053,12 @@
     if (elWfEnabled) { elWfEnabled.checked = workflowDraft.enabled !== false; }
     if (elWfTrigger) { elWfTrigger.value = triggerType; }
 
-    // §10.13.3: conditionGroups 優先。旧形式 conditions のみ保持している既存データへの防御的耐性
-    // （トリガー種別によらず共通の1エディタを使う。§11.1）
-    renderConditionGroups(elWfConditionGroups, workflowDraft.conditionGroups || workflowDraft.conditions || []);
-    // §11.6.1: グループ間結合（AND/OR）。既定値 'or'（旧固定論理と同じ挙動）
-    if (elWfConditionGroupsJoin) {
-      elWfConditionGroupsJoin.value = (workflowDraft.conditionGroupsJoin === 'and') ? 'and' : 'or';
-    }
+    // §12 改訂5: 旧3形式（conditionGroups+conditionGroupsJoin 等）が残っている既存データへの
+    // 防御的耐性として、表示直前に conditionTree へ正規化する（トリガー種別によらず共通の1エディタ。§11.1）
+    workflowDraft.conditionTree = normalizeConditionTree(
+      workflowDraft.conditionTree, workflowDraft.conditionGroups || workflowDraft.conditions, workflowDraft.conditionGroupsJoin
+    );
+    renderConditionTree(elWfConditionTree, workflowDraft.conditionTree);
 
     // 監視フィールド選択（fieldChange のみ意味を持つが、常に描画し表示/非表示で出し分ける）
     if (elFlrWatchField) {
@@ -2914,9 +3167,8 @@
       name: name,
       enabled: elWfEnabled ? elWfEnabled.checked : true,
       trigger: trigger,
-      conditionGroups: collectConditionGroups(elWfConditionGroups),
-      // §11.6.1: グループ間結合（AND/OR）。既定値 'or'
-      conditionGroupsJoin: (elWfConditionGroupsJoin && elWfConditionGroupsJoin.value === 'and') ? 'and' : 'or',
+      // §12 改訂5: conditionGroups/conditionGroupsJoin を廃止し conditionTree（再帰ツリー）に一本化
+      conditionTree: collectConditionTree(elWfConditionTree),
       actions: actions
     };
 
@@ -4704,7 +4956,11 @@
             type: 'fieldChange',
             watchFieldCode: rule.watchField && rule.watchField.fieldCode
           },
+          // §12 改訂5: この時点では正規化しない（旧キーをそのまま持ち回し、openWorkflowModal /
+          // KC.Config._applyWorkflowsConfig 側の normalizeConditionTree 呼び出しに正規化を集約する）
+          conditionTree: rule.conditionTree,
           conditionGroups: rule.conditionGroups || rule.conditions || [],
+          conditionGroupsJoin: rule.conditionGroupsJoin,
           actions: (rule.setActions || []).map(function (a) {
             return Object.assign({ type: 'setField' }, a);
           })
@@ -4712,6 +4968,20 @@
       });
     }
     delete parsed.fieldLinkRules;
+
+    // §12 改訂5 レビュー修正（Major）: 一度もワークフロー編集モーダルで開かれなかったワークフローは
+    // openWorkflowModal 側の正規化（表示直前に conditionTree へ変換）を経由しないため、collectWorkflows
+    // が currentConfig 内の既存オブジェクトをそのまま返すと旧キー（conditionGroups/
+    // conditionGroupsJoin/最古の conditions）が保存データに残存してしまう。desktop.js の
+    // KC.Config._applyWorkflowsConfig と同じ「読込時1箇所で正規化」を徹底するため、ここで
+    // parsed.workflows の全要素を conditionTree のみへ正規化し、旧キーは delete する。
+    parsed.workflows.forEach(function (wf) {
+      if (!wf) return;
+      wf.conditionTree = normalizeConditionTree(wf.conditionTree, wf.conditionGroups || wf.conditions, wf.conditionGroupsJoin);
+      delete wf.conditionGroups;
+      delete wf.conditionGroupsJoin;
+      delete wf.conditions;
+    });
 
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
@@ -5818,13 +6088,8 @@
     if (elWorkflowModalApply) {
       elWorkflowModalApply.addEventListener('click', handleWorkflowModalApply);
     }
-    // ワークフロー編集モーダル − 発火条件「+ グループを追加（OR）」ボタン（§10.13.3）
-    // トリガー種別によらず共通の1エディタを使う（§11.1）
-    if (elWfConditionGroupAdd) {
-      elWfConditionGroupAdd.addEventListener('click', function () {
-        if (elWfConditionGroups) { elWfConditionGroups.appendChild(buildConditionGroupBlock(null)); }
-      });
-    }
+    // §12 改訂5: 発火条件の「+ グループを追加」トップレベルボタンは廃止。ルートグループ自身の
+    // ヘッダにある「+ グループ」「+ 条件」ボタン（buildConditionTreeGroupNode 内で都度生成）が代替する。
     // ワークフロー編集モーダル − トリガーセレクト変更（§11.2, AC-25, AC-26）
     if (elWfTrigger) {
       elWfTrigger.addEventListener('change', handleWorkflowTriggerChange);

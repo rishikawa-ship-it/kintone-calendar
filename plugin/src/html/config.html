@@ -569,8 +569,9 @@
       ワークフロー編集モーダル (初期は hidden) REQ_workflow-actions §3.10 第2階層。
       §11 改訂4: 旧セクション7「フィールド連動ルール編集モーダル」の部品（監視フィールド選択・
       setField エディタ）をここへ移設・流用し、トリガー種別に応じて表示を切り替える単一モーダルに統合した。
-      流用する部品の id（kc-flr-watchfield / kc-flr-condition-groups(廃止・kc-wf-condition-groups に統合)
-      / kc-flr-setaction-rows / kc-flr-setaction-add 等）は変更していない。
+      流用する部品の id（kc-flr-watchfield / kc-flr-setaction-rows / kc-flr-setaction-add 等）は
+      変更していない。発火条件エリアは §12 改訂5 で kc-wf-condition-groups から
+      kc-wf-condition-tree（条件ツリー・ルートグループを1つだけ内包）へ置き換えた。
     -->
     <div class="kc-modal-overlay" id="kc-workflow-modal" hidden aria-modal="true" role="dialog" aria-labelledby="kc-workflow-modal-title">
       <div class="kc-modal-content kc-modal-content--wide">
@@ -635,24 +636,16 @@
 
           <h4 class="kc-workflow-modal-subtitle">発火条件（0件の場合は常に実行）</h4>
           <p class="kc-config-hint">
-            各グループ内の条件は「すべて満たす（AND）」「いずれかを満たす（OR）」をグループごとに選べます。
-            グループ間の結合は下のセレクトで AND/OR を選べます（既定: いずれかのグループが満たされれば実行＝OR）。
+            条件はグループの入れ子（ツリー）で構成します。各グループには「すべて満たす（AND）」
+            「いずれかを満たす（OR）」を個別に設定できます。各行（条件・グループ）の
+            「↰ 外へ」で親グループへ移動、「⊕ グループ化」でその行を新しいグループにまとめられます。
+            グループの「グループを解除」で子要素を親へ展開、「グループを削除」でグループごと削除できます。
+            新しいグループの入れ子は3階層まで作成できます。同一グループ内の並び替えはドラッグ&ドロップで
+            行えます（グループをまたいだドラッグ移動はできません。「外へ」「グループ化」ボタンを使ってください）。
             この発火条件はトリガー種別によらず共通です。
           </p>
-          <div class="kc-config-field-group kc-wf-condition-groups-join-row">
-            <label for="kc-wf-condition-groups-join" class="kc-config-label">グループ間の結合</label>
-            <select id="kc-wf-condition-groups-join" class="kc-config-select">
-              <option value="or">いずれかのグループを満たす（OR）</option>
-              <option value="and">すべてのグループを満たす（AND）</option>
-            </select>
-          </div>
-          <div id="kc-wf-condition-groups" class="kc-condition-groups">
-            <!-- 条件グループを JavaScript で動的追加 -->
-          </div>
-          <div class="kc-wf-condition-group-add-row">
-            <button type="button" id="kc-wf-condition-group-add" class="kc-config-btn kc-config-btn-secondary">
-              + グループを追加
-            </button>
+          <div id="kc-wf-condition-tree" class="kc-condtree-root">
+            <!-- 条件ツリー（ルートグループ）を JavaScript で動的構築 -->
           </div>
 
           <div id="kc-wf-appaction-area">

@@ -470,7 +470,9 @@
    * trigger.type が recordCreate/recordUpdate のものだけが loadWorkflowAndFieldLinkConfigEarly に
    * よってここへ振り分けられる。KC.Workflow._getEnabledWorkflows が参照する）
    * loadFromPluginConfig / loadWorkflowAndFieldLinkConfigEarly で上書きされる。初期値は空配列。
-   * @type {Array<{id, name, enabled, trigger, conditionGroups, actions}>}
+   * §12 改訂5: conditionGroups/conditionGroupsJoin は廃止し、各エントリは
+   * KC.Config._applyWorkflowsConfig 内で正規化済みの conditionTree（再帰ツリー）を持つ。
+   * @type {Array<{id, name, enabled, trigger, conditionTree, actions}>}
    */
   KC.Config.WORKFLOWS = [];
 
@@ -478,10 +480,11 @@
    * フィールド連動ルール配列（保存前・自レコードフィールド連動用の内部形式。§10 改訂3 準拠）。
    * §11 改訂4でトップレベルキー fieldLinkRules は廃止され、統合後の workflows のうち
    * trigger.type === 'fieldChange' のものを loadWorkflowAndFieldLinkConfigEarly が
-   * この内部形式（改訂3当時と同じ { id, name, enabled, watchField, conditionGroups, setActions }）
+   * この内部形式（改訂3当時と同じ { id, name, enabled, watchField, conditionTree, setActions }。
+   * §12 改訂5で conditionGroups/conditionGroupsJoin から conditionTree に置換）
    * へマップし直して供給する。KC.FieldLink の実行ロジック本体はこのマッピングだけで
    * 変更なしに動作する（§11.3）。初期値は空配列 = 機能なし。
-   * @type {Array<{id, name, enabled, watchField, conditionGroups, setActions}>}
+   * @type {Array<{id, name, enabled, watchField, conditionTree, setActions}>}
    */
   KC.Config.FIELD_LINK_RULES = [];
 
@@ -518,7 +521,11 @@
             type: 'fieldChange',
             watchFieldCode: rule.watchField && rule.watchField.fieldCode
           },
+          // §12 改訂5: この時点では正規化しない（旧キーをそのまま持ち回し、下の
+          // normalizeConditionTree 呼び出し1箇所に正規化を集約する）
+          conditionTree: rule.conditionTree,
           conditionGroups: rule.conditionGroups || rule.conditions || [],
+          conditionGroupsJoin: rule.conditionGroupsJoin,
           actions: (rule.setActions || []).map(function (a) {
             return Object.assign({ type: 'setField' }, a);
           })
@@ -527,10 +534,19 @@
     }
 
     // recordCreate/recordUpdate → KC.Workflow（保存後）用。§11.3 の設計ガードを維持するため、
-    // ここで trigger.type を明示的に絞り込む（fieldChange が保存後エンジンに混入しないようにする）
+    // ここで trigger.type を明示的に絞り込む（fieldChange が保存後エンジンに混入しないようにする）。
+    // §12 改訂5: conditionGroups/conditionGroupsJoin（旧2階層モデル）を含む旧3形式を、読込時に
+    // ここで一度だけ conditionTree（再帰ツリー）へ正規化する（§12.1）。normalizeConditionTree の
+    // 変換規則は config.js の openWorkflowModal 内の同名ロジックと完全に同一（相互参照コメント）。
     KC.Config.WORKFLOWS = workflows.filter(function (wf) {
       return wf && wf.trigger &&
         (wf.trigger.type === 'recordCreate' || wf.trigger.type === 'recordUpdate');
+    }).map(function (wf) {
+      return Object.assign({}, wf, {
+        conditionTree: KC.Workflow.Core.normalizeConditionTree(
+          wf.conditionTree, wf.conditionGroups || wf.conditions, wf.conditionGroupsJoin
+        )
+      });
     });
 
     // fieldChange → KC.FieldLink（保存前）用の内部形式へマップ（§10 改訂3の FIELD_LINK_RULES
@@ -543,9 +559,10 @@
           name: wf.name,
           enabled: wf.enabled,
           watchField: { fieldCode: wf.trigger.watchFieldCode },
-          conditionGroups: wf.conditionGroups || wf.conditions || [],
-          // §11.6.1: グループ間結合（AND/OR）。matchesConditions の groupsJoin 引数として使う
-          conditionGroupsJoin: wf.conditionGroupsJoin,
+          // §12 改訂5: conditionGroups/conditionGroupsJoin を廃止し conditionTree に一本化
+          conditionTree: KC.Workflow.Core.normalizeConditionTree(
+            wf.conditionTree, wf.conditionGroups || wf.conditions, wf.conditionGroupsJoin
+          ),
           // §11.1 防御的分岐: action.type 未定義は appAction とみなすため、setField 以外は除外する
           setActions: (wf.actions || []).filter(function (a) {
             return a && (a.type || 'appAction') === 'setField';
@@ -7345,11 +7362,9 @@
      */
     _runOne: async function (workflow, record) {
       try {
-        // §10.13.3 / §11.6.1: 条件モデルを AND/OR 自由選択の複合（conditionGroups + conditionGroupsJoin）
-        // へ拡張。旧形式 conditions が残っている場合は matchesConditions 側で防御的に解釈する
-        if (!KC.Workflow.Core.matchesConditions(
-          record, workflow.conditionGroups || workflow.conditions || [], workflow.conditionGroupsJoin
-        )) {
+        // §12 改訂5: 条件モデルをグループの入れ子を許す再帰ツリー（conditionTree）に統一。
+        // workflow.conditionTree は KC.Config._applyWorkflowsConfig が読込時に正規化済み（§12.1）
+        if (!KC.Workflow.Core.matchesConditions(record, workflow.conditionTree)) {
           _log('[KC.Workflow] 発火条件に一致しないためスキップ:', workflow.name);
           return;
         }
@@ -7419,67 +7434,87 @@
       CHOICE_TYPES: ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'STATUS'],
 
       /**
-       * conditionGroups の入力形式を正規化する（§11.6.1）。
-       * 受け入れる形式（優先順に判定）:
-       *   1. 最古形式: フラットな条件オブジェクト配列（グループ概念なし）→ 1グループ（op='and'）
+       * 旧3形式の発火条件を再帰ツリー（conditionTree）へ正規化する（§12.1 改訂5）。
+       * ★★★ 相互参照: このロジックは config.js の同名関数（normalizeConditionTree）と
+       * 完全に同一の変換規則にすること。片方だけ直しても他方が旧仕様のままだと、UI 表示
+       * （config.js）と実行時評価（本関数）で結果がズレる（AC-33）。修正時は両方に反映する。 ★★★
+       * 受け入れる入力（優先順に判定）:
+       *   0. conditionTree が既にツリー形式（{op, children:[...]}）ならそのまま返す
+       *   1. 最古形式: フラットな条件オブジェクト配列（グループ概念なし）
+       *      → { op: 'and', children: [条件ノード, ...] }
        *   2. §10.13.3 形式: [[{fieldCode,...}, ...], ...]（配列の配列。グループ内は常に AND）
-       *      → 各グループ op='and' として解釈（isLegacyFormat=true）
-       *   3. §11.6.1 形式: [{ op: 'and'|'or', conditions: [...] }, ...]
-       * @param {Array} conditionGroups
-       * @returns {{ groups: Array<{op: string, conditions: Array}>, isLegacyFormat: boolean }}
+       *      → { op: 'or', children: [{type:'group', op:'and', children:[...]}, ...] }
+       *   3. §11.6.1 形式: [{ op: 'and'|'or', conditions: [...] }, ...] + conditionGroupsJoin
+       *      → { op: join, children: [{type:'group', op:g.op, children:[...]}, ...] }
+       * @param {Object|null} conditionTree - 既に新形式ツリーであればそのまま優先する
+       * @param {Array|null} conditionGroups - 旧形式（配列の配列 / {op,conditions}[] / フラット条件配列）
+       * @param {string} [groupsJoin] - 旧§11.6.1形式のグループ間結合（'and'|'or'）。既定 'or'
+       * @returns {{op: string, children: Array}} 条件ツリー（ルートは常にグループノード）
        */
-      _normalizeConditionGroups: function (conditionGroups) {
-        if (!Array.isArray(conditionGroups) || conditionGroups.length === 0) {
-          return { groups: [], isLegacyFormat: false };
+      normalizeConditionTree: function (conditionTree, conditionGroups, groupsJoin) {
+        if (conditionTree && typeof conditionTree === 'object' && Array.isArray(conditionTree.children)) {
+          return conditionTree;
         }
-        var first = conditionGroups[0];
+        var arr = Array.isArray(conditionGroups) ? conditionGroups : [];
+        if (arr.length === 0) return { op: 'and', children: [] };
+
+        var toConditionNode = function (c) {
+          return { type: 'condition', fieldCode: c.fieldCode, fieldType: c.fieldType, value: c.value };
+        };
+
+        var first = arr[0];
         // 最古形式: 先頭要素が条件オブジェクトそのもの（グループでも {op,conditions} でもない）
         if (first && typeof first === 'object' && !Array.isArray(first) &&
             first.conditions === undefined && first.fieldCode !== undefined) {
-          return { groups: [{ op: 'and', conditions: conditionGroups }], isLegacyFormat: true };
+          return { op: 'and', children: arr.map(toConditionNode) };
         }
-        var isLegacyFormat = false;
-        var groups = conditionGroups.map(function (g) {
+
+        var groupNodes = arr.map(function (g) {
           if (Array.isArray(g)) {
-            isLegacyFormat = true;
-            return { op: 'and', conditions: g };
+            return { type: 'group', op: 'and', children: g.map(toConditionNode) };
           }
           return {
+            type: 'group',
             op: (g && g.op === 'or') ? 'or' : 'and',
-            conditions: (g && Array.isArray(g.conditions)) ? g.conditions : []
+            children: (g && Array.isArray(g.conditions)) ? g.conditions.map(toConditionNode) : []
           };
         });
-        return { groups: groups, isLegacyFormat: isLegacyFormat };
+        // §10.13.3（配列の配列）形式は常にグループ間 OR。§11.6.1 形式は groupsJoin に従う（既定 'or'）
+        var isArrayOfArraysFormat = Array.isArray(first);
+        var rootOp = isArrayOfArraysFormat ? 'or' : ((groupsJoin === 'and') ? 'and' : 'or');
+        return { op: rootOp, children: groupNodes };
       },
 
       /**
-       * 発火条件を判定する（§11.6.1 改訂4追加指示: グループ内・グループ間の AND/OR をそれぞれ
-       * ユーザーが選択可能にした。旧固定論理「グループ内 AND・グループ間 OR」は既定値として維持）。
-       * 空配列 or 未定義 = 無条件で発火。
-       * 後方互換: 旧形式（§10.13.3 の配列の配列、または最古のフラット条件配列）が渡された場合は
-       * 各グループ op='and'・グループ間 join='or' として防御的に解釈する（groupsJoin 引数は無視する）。
-       * この改修は workflows（recordCreate/recordUpdate/fieldChange 全トリガー）から共通で
-       * 呼び出される（§11.1, §11.6.1 ユーザー指示）。
+       * 発火条件ツリーを再帰評価する（§12.2 改訂5）。group ノードは op に従い children を
+       * every/some、condition ノードは _matchesOneCondition で判定する。空 children / tree 未定義は
+       * 無条件で発火（true）。呼び出し元（_runOne / KC.FieldLink.onChange / resolveForDnd）は
+       * 正規化済みの conditionTree を渡すだけでよい（正規化は読込時に1箇所へ集約済み。§12.1）。
        * @param {Object} record - kintone REST 形式のレコード
-       * @param {Array} conditionGroups - [{ op: 'and'|'or', conditions: [...] }, ...] または旧形式配列
-       * @param {string} [groupsJoin] - グループ間の結合（'and'|'or'）。省略/不正値時は 'or'
+       * @param {Object} tree - { op: 'and'|'or', children: [...] } 形式の条件ツリー
        * @returns {boolean}
        */
-      matchesConditions: function (record, conditionGroups, groupsJoin) {
-        var normalized = KC.Workflow.Core._normalizeConditionGroups(conditionGroups);
-        if (normalized.groups.length === 0) return true;
+      matchesConditions: function (record, tree) {
+        return KC.Workflow.Core._evalConditionNode(record, tree);
+      },
 
-        var join = normalized.isLegacyFormat ? 'or' : ((groupsJoin === 'and') ? 'and' : 'or');
-
-        var evalGroup = function (group) {
-          if (!group.conditions || group.conditions.length === 0) return true;
-          var method = (group.op === 'or') ? 'some' : 'every';
-          return group.conditions[method](function (cond) {
-            return KC.Workflow.Core._matchesOneCondition(record, cond);
-          });
-        };
-
-        return (join === 'and') ? normalized.groups.every(evalGroup) : normalized.groups.some(evalGroup);
+      /**
+       * 条件ツリー1ノードを再帰評価する（matchesConditions の内部実装）。
+       * @param {Object} record
+       * @param {Object} node - {type:'condition',...} | {type:'group',op,children:[...]}（ルートは type 省略可）
+       * @returns {boolean}
+       */
+      _evalConditionNode: function (record, node) {
+        if (!node) return true; // tree 未定義 = 無条件で発火
+        if (node.type === 'condition') {
+          return KC.Workflow.Core._matchesOneCondition(record, node);
+        }
+        var children = Array.isArray(node.children) ? node.children : [];
+        if (children.length === 0) return true;
+        var method = (node.op === 'or') ? 'some' : 'every';
+        return children[method](function (child) {
+          return KC.Workflow.Core._evalConditionNode(record, child);
+        });
       },
 
       _matchesOneCondition: function (record, cond) {
@@ -7693,10 +7728,11 @@
    * §11 改訂4（フィールド連動のワークフロー統合）: config 上の保存形式は、旧トップレベルキー
    * fieldLinkRules を廃止し workflows 配列（trigger.type === 'fieldChange'）へ一本化されたが、
    * KC.FieldLink 自身が参照する KC.Config.FIELD_LINK_RULES は改訂3当時と同じ内部形式
-   * （{ id, name, enabled, watchField: { fieldCode }, conditionGroups, setActions }）のまま
+   * （{ id, name, enabled, watchField: { fieldCode }, conditionTree, setActions }。
+   * §12 改訂5で conditionGroups/conditionGroupsJoin から conditionTree に置換）のまま
    * 変わらない。統合後 workflows からこの内部形式へのマッピングは
-   * KC.Config.loadWorkflowAndFieldLinkConfigEarly が担うため、本モジュール以下の実行ロジックは
-   * 一切変更していない（§11.3, AC-27）。
+   * KC.Config.loadWorkflowAndFieldLinkConfigEarly（実体は KC.Config._applyWorkflowsConfig）が
+   * 担うため、本モジュール以下の実行ロジックは一切変更していない（§11.3, AC-27）。
    *
    * ループ対策（§10.13.2 必須要件）:
    *   kintone.app.record.set() は change イベントを発火させることが実機確認済み（§10.13.1(c)）。
@@ -7748,9 +7784,8 @@
         var rules = KC.FieldLink._getRulesFor(fieldCode);
         for (var i = 0; i < rules.length; i++) {
           var rule = rules[i];
-          if (!KC.Workflow.Core.matchesConditions(
-            event.record, rule.conditionGroups || rule.conditions || [], rule.conditionGroupsJoin
-          )) {
+          // §12 改訂5: rule.conditionTree は KC.Config._applyWorkflowsConfig が読込時に正規化済み
+          if (!KC.Workflow.Core.matchesConditions(event.record, rule.conditionTree)) {
             continue;
           }
           KC.FieldLink._applySyncActions(rule, event.record);
@@ -7958,10 +7993,13 @@
       var extraFields = {};
       for (var i = 0; i < rules.length; i++) {
         var rule = rules[i];
-        var conditionGroups = rule.conditionGroups || rule.conditions || [];
-        if (conditionGroups.length > 0) {
+        // §12 改訂5: rule.conditionTree は正規化済み（§12.1）。空 children のツリーは matchesConditions が
+        // true を返すため、GET が必要かどうかは children の有無で判定する（無用な追加 GET の抑止）
+        var hasConditions = rule.conditionTree && Array.isArray(rule.conditionTree.children) &&
+          rule.conditionTree.children.length > 0;
+        if (hasConditions) {
           var recForCond = await getFullRecord();
-          if (!KC.Workflow.Core.matchesConditions(recForCond, conditionGroups, rule.conditionGroupsJoin)) continue;
+          if (!KC.Workflow.Core.matchesConditions(recForCond, rule.conditionTree)) continue;
         }
 
         var setActions = rule.setActions || [];

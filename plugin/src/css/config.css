@@ -26,8 +26,10 @@ body {
  * コンテナ
  * ==================================================================== */
 
+/* kintone プラグイン設定ページの実測許容幅（2083px）に対し従来 800px は過度な自主制限だった。
+   1100px に拡大しつつ、狭幅環境（@media (max-width: 600px) 参照）は従来同様に安全に収まる。 */
 .kc-config-container {
-  max-width: 800px;
+  max-width: 1100px;
   margin: 0 auto;
   padding: 24px 16px 40px;
 }
@@ -1442,9 +1444,15 @@ body {
   transition: background 0.1s;
 }
 
+/* 列構成（DOM 追加順）: [1]ハンドル24px [2]種別select140px [3]グループ名表示(自動採用ラベル)
+   [4].kc-filter-group-field-wrap（対象フィールド select。"ラベル (フィールドコード)" 形式で
+   長くなりがちで見切れの原因だった列） [5]削除ボタン70px。
+   [3][4] は minmax の下限で最低限の可読幅を確保しつつ、[4] に大きい fr 比重(1.6)を与えて
+   対象フィールド select を優先的に広げる（2026-07 実機フィードバック: 対象フィールドの幅不足）。
+   下限値は @media (max-width: 600px) の実測幅でも合計が収まるよう算出済み（後述コメント参照）。 */
 .kc-filter-group-row-header {
   display: grid;
-  grid-template-columns: 24px 140px 1fr 1fr 70px;
+  grid-template-columns: 24px 140px minmax(80px, 1fr) minmax(140px, 1.6fr) 70px;
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
@@ -1687,9 +1695,11 @@ body {
 
 /* --- 第2階層: ワークフロー編集モーダル --- */
 
-/* 通常の .kc-modal-content（480px 固定）より情報量が多いため横幅・高さを拡張する（U-7） */
+/* 通常の .kc-modal-content（480px 固定）より情報量が多いため横幅・高さを拡張する（U-7）。
+   コンテナ拡大（800px→1100px）に追従し、幅も 800px→min(1000px, 92vw) に拡大する。
+   max-width: calc(100vw - 32px) は極狭幅ビューポートでの上端安全マージンとして維持する。 */
 .kc-modal-content--wide {
-  width: 800px;
+  width: min(1000px, 92vw);
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
   display: flex;
@@ -1724,69 +1734,87 @@ body {
 }
 
 /* ====================================================================
- * 発火条件グループ UI（§11.6.1 改訂4追加指示: AND/OR 自由化。workflows 共通。§11.1）
- * グループ内の結合（.kc-condition-group-op-select）・グループ間の結合
- * （.kc-wf-condition-groups-join-row 内のセレクト）はいずれもユーザーが選択可能。
+ * 発火条件ツリー UI（§12 改訂5: 条件ツリー化・グループの入れ子）
+ * §11.6.1 の2階層モデル（.kc-condition-group 等）を置き換え。ルートは常に1グループノードで、
+ * ネストしたグループは .kc-condtree-children の左ボーダー＋インデントで階層を表現する。
  * ==================================================================== */
-.kc-condition-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+.kc-condtree-root {
   margin-bottom: 8px;
 }
 
-.kc-wf-condition-groups-join-row {
-  margin-bottom: 10px;
-}
-
-.kc-condition-group {
+.kc-condtree-group {
   border: 1px solid #d8dce4;
   border-radius: 6px;
   background: #f8f9fb;
   padding: 10px 12px;
+  margin-bottom: 8px;
 }
 
-.kc-condition-group-header {
+.kc-condtree-group-root {
+  margin-bottom: 0;
+}
+
+.kc-condtree-group-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 8px;
 }
 
-/* §11.6.1: グループ内ラベル + AND/OR セレクトをまとめる左側ブロック
-   （右側の削除ボタンと justify-content: space-between で分離する） */
-.kc-condition-group-header-left {
+/* グループ内ラベル + AND/OR セレクト（+ ネストしたグループの場合はドラッグハンドル）をまとめる
+   左側ブロック（右側の操作ボタン群と justify-content: space-between で分離する） */
+.kc-condtree-group-header-left {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
-.kc-condition-group-label {
+/* 「+ 条件」「+ グループ」「外へ」「グループ化」「グループを解除」「グループを削除」を
+   まとめる右側ブロック。ボタン数が多いグループヘッダでも折り返して収まるようにする */
+.kc-condtree-group-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.kc-condtree-group-label {
   font-size: 12px;
   font-weight: bold;
   color: #555;
   white-space: nowrap;
 }
 
-/* §11.6.2 バグ修正: グループ削除ボタンは円形1文字アイコン（.kc-fieldvalue-del-btn）ではなく
-   ラベル付きセカンダリボタン（.kc-config-btn-secondary）を使うため、専用の追加スタイルは不要。
-   .kc-condition-group-del-btn クラス自体はイベントフック用に維持する。 */
-
-.kc-condition-group-rows {
+/* ネストしたグループの子要素コンテナ。左ボーダー＋インデントで入れ子の深さを視覚化する */
+.kc-condtree-children {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 8px;
+  padding-left: 14px;
+  border-left: 2px solid #d0d5df;
+  margin-left: 4px;
 }
 
-/* 発火条件 1 行（フィールド選択 / 値 / 削除） */
-.kc-wf-condition-row {
-  display: grid;
-  grid-template-columns: 1.2fr 1.2fr 40px;
-  gap: 8px;
+/* 発火条件 1 行（ドラッグハンドル / フィールド選択 / 値 / 外へ / グループ化 / 削除） */
+.kc-condtree-row {
+  display: flex;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kc-condtree-row .kc-wf-cond-field-select {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+.kc-condtree-row .kc-wf-cond-value-wrapper {
+  flex: 1 1 160px;
+  min-width: 140px;
 }
 
 .kc-wf-cond-value-wrapper select,
@@ -1794,8 +1822,13 @@ body {
   width: 100%;
 }
 
-.kc-wf-condition-group-add-row {
-  margin-top: 0;
+/* 「外へ」「グループ化」ボタンは条件行・グループヘッダの両方で使うため文字サイズを揃える */
+.kc-condtree-outward-btn,
+.kc-condtree-groupify-btn,
+.kc-condtree-ungroup-btn,
+.kc-condtree-groupdel-btn {
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* アクションブロック（対象アプリ・動作モード・キー・マッピング・失敗時継続を内包するカード） */
@@ -1951,8 +1984,9 @@ body {
     font-size: 12px;
   }
 
-  .kc-wf-condition-row,
   .kc-workflow-mapping-row {
     grid-template-columns: 1fr;
   }
+
+  /* §12 改訂5: .kc-condtree-row は flex + flex-wrap のため、狭幅では自然に折り返る（追加指定不要） */
 }
