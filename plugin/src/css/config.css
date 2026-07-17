@@ -1799,7 +1799,7 @@ body {
   margin-left: 4px;
 }
 
-/* 発火条件 1 行（ドラッグハンドル / フィールド選択 / 値 / 外へ / グループ化 / 削除） */
+/* 発火条件 1 行（ドラッグハンドル / 条件の種類 / 入力部（body） / 外へ / グループ化 / 削除） */
 .kc-condtree-row {
   display: flex;
   align-items: center;
@@ -1807,12 +1807,28 @@ body {
   flex-wrap: wrap;
 }
 
-.kc-condtree-row .kc-wf-cond-field-select {
+/* 条件の種類（kind）セレクト（§13.2 改訂6） */
+.kc-condtree-row .kc-wf-cond-kind-select {
+  flex: 0 1 170px;
+  min-width: 150px;
+}
+
+/* kind に応じて内容が入れ替わる入力部（フィールド値 / 時刻範囲 / 日時フィールド比較）（§13.2 改訂6） */
+.kc-condtree-row .kc-wf-cond-body-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1 1 260px;
+  min-width: 200px;
+}
+
+.kc-wf-cond-body-wrapper .kc-wf-cond-field-select {
   flex: 1 1 160px;
   min-width: 140px;
 }
 
-.kc-condtree-row .kc-wf-cond-value-wrapper {
+.kc-wf-cond-body-wrapper .kc-wf-cond-value-wrapper {
   flex: 1 1 160px;
   min-width: 140px;
 }
@@ -1820,6 +1836,32 @@ body {
 .kc-wf-cond-value-wrapper select,
 .kc-wf-cond-value-wrapper input {
   width: 100%;
+}
+
+/* 「現在時刻が範囲内」入力部（time input ×2 + 区切り記号）（§13.2 改訂6） */
+.kc-wf-cond-timerange-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.kc-wf-cond-timerange-sep {
+  font-size: 12px;
+  color: #666;
+}
+
+/* 「日時フィールドと現在の比較」入力部（フィールド select + 過去/未来 select）（§13.2 改訂6） */
+.kc-wf-cond-timecompare-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.kc-wf-cond-timecompare-wrapper .kc-wf-cond-timecompare-field-select {
+  flex: 1 1 180px;
+  min-width: 160px;
 }
 
 /* 「外へ」「グループ化」ボタンは条件行・グループヘッダの両方で使うため文字サイズを揃える */

@@ -7446,6 +7446,9 @@
        *      → { op: 'or', children: [{type:'group', op:'and', children:[...]}, ...] }
        *   3. §11.6.1 形式: [{ op: 'and'|'or', conditions: [...] }, ...] + conditionGroupsJoin
        *      → { op: join, children: [{type:'group', op:g.op, children:[...]}, ...] }
+       * §13.1 改訂6: 条件ノードは kind（'fieldValue'|'timeRange'|'fieldTimeCompare'）を持つ。
+       * 入力0（既にツリー形式）はオブジェクトをそのまま返すため既存の kind も自動的に保持される。
+       * 旧形式からの変換（入力1〜3）は kind: 'fieldValue' を明示して付与する。
        * @param {Object|null} conditionTree - 既に新形式ツリーであればそのまま優先する
        * @param {Array|null} conditionGroups - 旧形式（配列の配列 / {op,conditions}[] / フラット条件配列）
        * @param {string} [groupsJoin] - 旧§11.6.1形式のグループ間結合（'and'|'or'）。既定 'or'
@@ -7459,7 +7462,10 @@
         if (arr.length === 0) return { op: 'and', children: [] };
 
         var toConditionNode = function (c) {
-          return { type: 'condition', fieldCode: c.fieldCode, fieldType: c.fieldType, value: c.value };
+          // §13.1 改訂6: 旧形式からの変換分は kind: 'fieldValue' を明示する（省略しても
+          // _matchesOneCondition 側の「kind 未定義は fieldValue」防御で同じ結果になるが、
+          // データ上も明示しておいたほうが以後の読解・デバッグがしやすいため付与する）
+          return { type: 'condition', kind: 'fieldValue', fieldCode: c.fieldCode, fieldType: c.fieldType, value: c.value };
         };
 
         var first = arr[0];
@@ -7517,7 +7523,98 @@
         });
       },
 
+      /**
+       * 現在時刻を取得する（§13 改訂6）。KC.Workflow.Core 内の「現在時刻の取得」を本関数1箇所に
+       * 集約し、Node ハーネス等での純ロジック検証時にモックへ差し替えやすくする
+       * （テスト容易性。委譲プロンプト「テスト容易性」項）。
+       * @returns {Date}
+       */
+      _now: function () {
+        return new Date();
+      },
+
+      /**
+       * 'HH:MM' 形式の文字列を「0時からの分数」に変換する。不正な形式は null を返す。
+       * @param {string} hhmm
+       * @returns {number|null}
+       */
+      _hhmmToMinutes: function (hhmm) {
+        if (typeof hhmm !== 'string') return null;
+        var m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
+        if (!m) return null;
+        var h = Number(m[1]);
+        var min = Number(m[2]);
+        if (isNaN(h) || isNaN(min) || h < 0 || h > 23 || min < 0 || min > 59) return null;
+        return h * 60 + min;
+      },
+
+      /**
+       * timeRange 条件ノードを評価する（§13.1 改訂6）。現在時刻（評価するブラウザのローカル時刻）が
+       * from〜to の範囲内かどうかを判定する。from > to の場合は日跨ぎ範囲として解釈する
+       * （例: from:'22:00', to:'06:00' → 「22時以降 または 6時以前」）。
+       * @param {Object} cond - { from: 'HH:MM', to: 'HH:MM' }
+       * @returns {boolean}
+       */
+      _matchesTimeRange: function (cond) {
+        var fromMinutes = KC.Workflow.Core._hhmmToMinutes(cond.from);
+        var toMinutes = KC.Workflow.Core._hhmmToMinutes(cond.to);
+        if (fromMinutes === null || toMinutes === null) return false;
+        var now = KC.Workflow.Core._now();
+        var nowMinutes = now.getHours() * 60 + now.getMinutes();
+        if (fromMinutes <= toMinutes) {
+          // 通常の範囲（日をまたがない）
+          return nowMinutes >= fromMinutes && nowMinutes <= toMinutes;
+        }
+        // 日跨ぎ範囲: 「from 以降」または「to 以前」のいずれかを満たせば成立
+        return nowMinutes >= fromMinutes || nowMinutes <= toMinutes;
+      },
+
+      /**
+       * fieldTimeCompare 条件ノードを評価する（§13.1 改訂6）。レコードの DATETIME/DATE フィールド
+       * 値と現在日時を比較し、comparison が 'past'（フィールド値が現在より過去）/ 'future'
+       * （現在より未来）のいずれかに一致するかを判定する。
+       * - DATETIME: kintone REST 形式は UTC ISO 文字列（例: '2026-07-16T05:00:00Z'）のため、
+       *   そのまま new Date() に渡して比較する（タイムゾーン変換は Date が内部で行う）。
+       * - DATE: kintone REST 形式は 'YYYY-MM-DD'。当日 00:00（評価するブラウザのローカル時刻）を
+       *   基準とした Date を構築して比較する（§13.1）。
+       * @param {Object} record
+       * @param {Object} cond - { fieldCode, fieldType, comparison: 'past'|'future' }
+       * @returns {boolean}
+       */
+      _matchesFieldTimeCompare: function (record, cond) {
+        var fieldCode = cond.fieldCode;
+        if (!fieldCode || !record[fieldCode] || !record[fieldCode].value) return false;
+        var rawValue = record[fieldCode].value;
+        var fieldDate;
+        if (cond.fieldType === 'DATE') {
+          var parts = String(rawValue).split('-');
+          if (parts.length !== 3) return false;
+          fieldDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 0, 0, 0, 0);
+        } else {
+          fieldDate = new Date(rawValue);
+        }
+        if (isNaN(fieldDate.getTime())) return false;
+        var now = KC.Workflow.Core._now();
+        return (cond.comparison === 'future')
+          ? (fieldDate.getTime() > now.getTime())
+          : (fieldDate.getTime() < now.getTime());
+      },
+
       _matchesOneCondition: function (record, cond) {
+        // §13.1 改訂6: kind 未定義は fieldValue とみなす（既存データの後方互換）
+        var kind = cond.kind || 'fieldValue';
+        if (kind === 'timeRange') {
+          return KC.Workflow.Core._matchesTimeRange(cond);
+        }
+        if (kind === 'fieldTimeCompare') {
+          return KC.Workflow.Core._matchesFieldTimeCompare(record, cond);
+        }
+        if (kind !== 'fieldValue') {
+          // 未知の kind は不成立扱い（安全側。未知 sourceType のスキップ方針と整合。§13.1）
+          console.warn('[KC.Workflow.Core._matchesOneCondition] 未知の条件種別(kind)のため不成立として扱います:', kind);
+          return false;
+        }
+
         var fieldCode = cond.fieldCode;
         if (!fieldCode || !record[fieldCode]) return false;
         var actual = record[fieldCode].value;

@@ -23,9 +23,12 @@
  *     workflows: [ { id, name, enabled, trigger: { type, watchFieldCode? },
  *                    conditionTree: { op, children: [...] }, actions: [...] }, ... ]
  *       conditionTree（§12 改訂5）: ルートは常に1グループノード（op: 'and'|'or', children: [...]）。
- *       children の各要素は { type:'condition', fieldCode, fieldType, value } または
+ *       children の各要素は { type:'condition', kind, ... } または
  *       { type:'group', op, children: [...] }（再帰・深さ無制限。旧 conditionGroups/
  *       conditionGroupsJoin は廃止し、読込時に normalizeConditionTree で本形式へ変換する）
+ *       条件ノードの kind（§13 改訂6）: 'fieldValue'（既定・未定義もこれとみなす）
+ *       { fieldCode, fieldType, value } / 'timeRange' { from:'HH:MM', to:'HH:MM'（日跨ぎ対応） } /
+ *       'fieldTimeCompare' { fieldCode, fieldType, comparison:'past'|'future' }
  *       trigger.type: 'recordCreate' | 'recordUpdate' | 'fieldChange'（§8 改訂1: 操作別トリガー。
  *       §11 改訂4で fieldChange を追加し旧 fieldLinkRules を統合。watchFieldCode は fieldChange のみ必須）。
  *       経路（カレンダー DnD/モーダル or kintone 標準画面）は区別しない。
@@ -62,6 +65,11 @@
  *     conditionGroups の配列の配列 / conditionGroups+conditionGroupsJoin）を読込時にツリーへ
  *     変換する。desktop.js 側 KC.Workflow.Core.normalizeConditionTree と完全に同一の変換規則
  *     （別スクリプトコンテキストのため実装は重複するが、ロジックは相互参照して同一に保つこと）
+ *   - §13 改訂6（2026-07-16）: 条件ノードに kind（'fieldValue'|'timeRange'|'fieldTimeCompare'）を
+ *     追加。timeRange は現在時刻（評価するブラウザのローカル時刻）が HH:MM〜HH:MM の範囲内か
+ *     （日跨ぎ対応）、fieldTimeCompare は DATETIME/DATE フィールド値と現在日時の過去/未来を判定する。
+ *     kind 未定義は fieldValue とみなす（既存データの後方互換）。version 13 は未リリースのため
+ *     マイグレーション不要
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -175,6 +183,15 @@
   var WORKFLOW_CONDITION_FIELD_TYPES = ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'SINGLE_LINE_TEXT', 'NUMBER'];
   /** 選択肢型（値の選択 UI に select を使う型。STATUS は $status として別途追加） */
   var WORKFLOW_CHOICE_TYPES = ['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'STATUS'];
+  /**
+   * 発火条件の条件種別（kind）セレクトの選択肢（§13.2 改訂6）。
+   * 'fieldValue' が既定（既存データで kind 未定義の場合もこれとみなす。§13.1）。
+   */
+  var WORKFLOW_CONDITION_KIND_OPTIONS = [
+    { value: 'fieldValue', label: 'フィールドの値' },
+    { value: 'timeRange', label: '現在時刻が範囲内' },
+    { value: 'fieldTimeCompare', label: '日時フィールドと現在の比較' }
+  ];
   /** 自アプリ側フィールド選択（発火条件/マッピング元/キー）で除外する型（値を単純に読み取れない型） */
   var WORKFLOW_EXCLUDED_SOURCE_TYPES = ['SUBTABLE', 'GROUP', 'REFERENCE_TABLE'];
   /** 対象アプリ側フィールド選択（マッピング先/キー）で除外する型（システム項目・書込不可・複合型） */
@@ -2142,6 +2159,123 @@
     return wrapper;
   }
 
+  /**
+   * fieldTimeCompare 条件の対象フィールド一覧を返す（DATETIME/DATE 限定・§13.1 改訂6）。
+   * @returns {Array<{code, label, type}>}
+   */
+  function getWorkflowTimeCompareFieldOptions() {
+    return ownAppFieldOptions.filter(function (f) {
+      return DATE_FIELD_TYPES.indexOf(f.type) !== -1;
+    });
+  }
+
+  /**
+   * 発火条件 1 行の「条件の種類」セレクトを生成する（§13.2 改訂6）。
+   * @param {Object|null} cond - { kind, ... }
+   * @returns {HTMLSelectElement}
+   */
+  function buildWorkflowConditionKindSelect(cond) {
+    var kindSel = document.createElement('select');
+    kindSel.className = 'kc-config-select kc-wf-cond-kind-select';
+    WORKFLOW_CONDITION_KIND_OPTIONS.forEach(function (o) {
+      var opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      kindSel.appendChild(opt);
+    });
+    // §13.1: kind 未定義は fieldValue とみなす（既存データの後方互換）
+    kindSel.value = (cond && cond.kind) || 'fieldValue';
+    return kindSel;
+  }
+
+  /**
+   * 発火条件 1 行の「現在時刻が範囲内」入力部を生成する（§13.2 改訂6）。
+   * from > to の入力も許容する（日跨ぎ範囲として KC.Workflow.Core._matchesTimeRange 側で解釈する）。
+   * @param {Object|null} cond - { from: 'HH:MM', to: 'HH:MM' }
+   * @returns {HTMLElement} ラッパー要素
+   */
+  function buildWorkflowConditionTimeRangeControl(cond) {
+    var wrapper = document.createElement('span');
+    wrapper.className = 'kc-wf-cond-timerange-wrapper';
+
+    var fromInput = document.createElement('input');
+    fromInput.type = 'time';
+    fromInput.className = 'kc-config-input kc-wf-cond-timerange-from';
+    fromInput.value = (cond && cond.from) || '';
+
+    var sep = document.createElement('span');
+    sep.className = 'kc-wf-cond-timerange-sep';
+    sep.textContent = '〜';
+
+    var toInput = document.createElement('input');
+    toInput.type = 'time';
+    toInput.className = 'kc-config-input kc-wf-cond-timerange-to';
+    toInput.title = '開始より終了が早い場合、日をまたぐ範囲として判定します（例: 22:00〜06:00）';
+    toInput.value = (cond && cond.to) || '';
+
+    wrapper.appendChild(fromInput);
+    wrapper.appendChild(sep);
+    wrapper.appendChild(toInput);
+    return wrapper;
+  }
+
+  /**
+   * 発火条件 1 行の「日時フィールドと現在の比較」入力部を生成する（§13.2 改訂6）。
+   * DATETIME/DATE 限定のフィールド select ＋「より過去／より未来」select。
+   * @param {Object|null} cond - { fieldCode, fieldType, comparison }
+   * @returns {HTMLElement} ラッパー要素
+   */
+  function buildWorkflowConditionFieldTimeCompareControl(cond) {
+    var wrapper = document.createElement('span');
+    wrapper.className = 'kc-wf-cond-timecompare-wrapper';
+
+    var fieldSel = document.createElement('select');
+    fieldSel.className = 'kc-config-select kc-wf-cond-timecompare-field-select';
+
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- 日時/日付フィールドを選択 --';
+    fieldSel.appendChild(emptyOpt);
+
+    getWorkflowTimeCompareFieldOptions().forEach(function (f) {
+      var opt = document.createElement('option');
+      opt.value = f.code;
+      opt.dataset.fieldtype = f.type;
+      opt.textContent = f.label + ' (' + f.code + ')';
+      fieldSel.appendChild(opt);
+    });
+
+    if (cond && cond.fieldCode) {
+      fieldSel.value = cond.fieldCode;
+      if (fieldSel.value !== cond.fieldCode) {
+        var missingOpt = document.createElement('option');
+        missingOpt.value = cond.fieldCode;
+        missingOpt.textContent = cond.fieldCode + ' (フィールドが見つかりません)';
+        missingOpt.className = 'kc-option-missing';
+        fieldSel.appendChild(missingOpt);
+        fieldSel.value = cond.fieldCode;
+      }
+    }
+    attachSelectEmptyClassSync(fieldSel);
+
+    var compSel = document.createElement('select');
+    compSel.className = 'kc-config-select kc-wf-cond-timecompare-comparison-select';
+    [
+      { value: 'past', label: 'より過去' },
+      { value: 'future', label: 'より未来' }
+    ].forEach(function (o) {
+      var opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      compSel.appendChild(opt);
+    });
+    compSel.value = (cond && cond.comparison === 'future') ? 'future' : 'past';
+
+    wrapper.appendChild(fieldSel);
+    wrapper.appendChild(compSel);
+    return wrapper;
+  }
+
   /* ====================================================================
    * 発火条件ツリー UI（§12 改訂5: 条件ツリー化・グループの入れ子）
    * workflows（全トリガー種別で共通利用。§11.1）。
@@ -2168,6 +2302,9 @@
    *      → { op: 'or', children: [{type:'group', op:'and', children:[...]}, ...] }
    *   3. §11.6.1 形式: [{ op: 'and'|'or', conditions: [...] }, ...] + conditionGroupsJoin
    *      → { op: join, children: [{type:'group', op:g.op, children:[...]}, ...] }
+   * §13.1 改訂6: 条件ノードは kind（'fieldValue'|'timeRange'|'fieldTimeCompare'）を持つ。
+   * 入力0（既にツリー形式）はオブジェクトをそのまま返すため既存の kind も自動的に保持される。
+   * 旧形式からの変換（入力1〜3）は kind: 'fieldValue' を明示して付与する。
    * @param {Object|null} conditionTree - 既に新形式ツリーであればそのまま優先する
    * @param {Array|null} conditionGroups - 旧形式（配列の配列 / {op,conditions}[] / フラット条件配列）
    * @param {string} [groupsJoin] - 旧§11.6.1形式のグループ間結合（'and'|'or'）。既定 'or'
@@ -2181,7 +2318,8 @@
     if (arr.length === 0) return { op: 'and', children: [] };
 
     var toConditionNode = function (c) {
-      return { type: 'condition', fieldCode: c.fieldCode, fieldType: c.fieldType, value: c.value };
+      // §13.1 改訂6: 旧形式からの変換分は kind: 'fieldValue' を明示する
+      return { type: 'condition', kind: 'fieldValue', fieldCode: c.fieldCode, fieldType: c.fieldType, value: c.value };
     };
 
     var first = arr[0];
@@ -2274,8 +2412,10 @@
   }
 
   /**
-   * 発火条件 1 行（条件ノード）を生成する（§12.3）。
-   * @param {Object|null} cond - { fieldCode, fieldType, value } 形式
+   * 発火条件 1 行（条件ノード）を生成する（§12.3, §13.2 改訂6）。
+   * 先頭に「条件の種類」（kind）セレクトを持ち、切替に応じて入力部（body）を差し替える。
+   * @param {Object|null} cond - { kind, fieldCode, fieldType, value } | { kind:'timeRange', from, to } |
+   *                             { kind:'fieldTimeCompare', fieldCode, fieldType, comparison }
    * @returns {HTMLElement} .kc-condtree-row 要素
    */
   function buildConditionTreeRow(cond) {
@@ -2286,8 +2426,31 @@
     var handle = buildDragHandle();
     attachRowDragEvents(row, handle);
 
-    var fieldSel = buildWorkflowConditionFieldSelect(cond);
-    var valueWrap = buildWorkflowConditionValueControl(cond, fieldSel);
+    var kindSel = buildWorkflowConditionKindSelect(cond);
+
+    var bodyWrap = document.createElement('span');
+    bodyWrap.className = 'kc-wf-cond-body-wrapper';
+
+    function renderBody(kind, condData) {
+      bodyWrap.innerHTML = '';
+      if (kind === 'timeRange') {
+        bodyWrap.appendChild(buildWorkflowConditionTimeRangeControl(condData));
+      } else if (kind === 'fieldTimeCompare') {
+        bodyWrap.appendChild(buildWorkflowConditionFieldTimeCompareControl(condData));
+      } else {
+        var fieldSel = buildWorkflowConditionFieldSelect(condData);
+        var valueWrap = buildWorkflowConditionValueControl(condData, fieldSel);
+        bodyWrap.appendChild(fieldSel);
+        bodyWrap.appendChild(valueWrap);
+      }
+    }
+
+    renderBody((cond && cond.kind) || 'fieldValue', cond);
+
+    kindSel.addEventListener('change', function () {
+      // 種別切替時は入力途中の値を持ち越さない（型の食い違いを避けるため空の状態から組み立て直す）
+      renderBody(kindSel.value, null);
+    });
 
     var outwardBtn = document.createElement('button');
     outwardBtn.type = 'button';
@@ -2311,8 +2474,8 @@
     });
 
     row.appendChild(handle);
-    row.appendChild(fieldSel);
-    row.appendChild(valueWrap);
+    row.appendChild(kindSel);
+    row.appendChild(bodyWrap);
     row.appendChild(outwardBtn);
     row.appendChild(groupifyBtn);
     row.appendChild(delBtn);
@@ -2483,6 +2646,34 @@
   function collectConditionTreeNode(nodeEl) {
     if (!nodeEl) return null;
     if (nodeEl.dataset.nodeType === 'condition') {
+      var kindSel = nodeEl.querySelector('.kc-wf-cond-kind-select');
+      var kind = kindSel ? kindSel.value : 'fieldValue';
+
+      // §13.2 改訂6: timeRange は from/to 必須
+      if (kind === 'timeRange') {
+        var fromInput = nodeEl.querySelector('.kc-wf-cond-timerange-from');
+        var toInput = nodeEl.querySelector('.kc-wf-cond-timerange-to');
+        var from = fromInput ? fromInput.value : '';
+        var to = toInput ? toInput.value : '';
+        if (!from || !to) return null; // 未入力行は保存対象に含めない（既存 fieldValue と同じ扱い）
+        return { type: 'condition', kind: 'timeRange', from: from, to: to };
+      }
+
+      // §13.2 改訂6: fieldTimeCompare はフィールド必須
+      if (kind === 'fieldTimeCompare') {
+        var tcFieldSel = nodeEl.querySelector('.kc-wf-cond-timecompare-field-select');
+        if (!tcFieldSel || !tcFieldSel.value) return null;
+        var tcOpt = tcFieldSel.options[tcFieldSel.selectedIndex];
+        var tcFieldType = tcOpt ? (tcOpt.dataset.fieldtype || '') : '';
+        var tcCompSel = nodeEl.querySelector('.kc-wf-cond-timecompare-comparison-select');
+        var comparison = (tcCompSel && tcCompSel.value === 'future') ? 'future' : 'past';
+        return {
+          type: 'condition', kind: 'fieldTimeCompare',
+          fieldCode: tcFieldSel.value, fieldType: tcFieldType, comparison: comparison
+        };
+      }
+
+      // fieldValue（既定）
       var fieldSel = nodeEl.querySelector('.kc-wf-cond-field-select');
       if (!fieldSel || !fieldSel.value) return null;
       var selOpt = fieldSel.options[fieldSel.selectedIndex];
@@ -2494,7 +2685,7 @@
       var value = valueSel ? valueSel.value : (valueInput ? valueInput.value.trim() : '');
       if (!value) return null;
 
-      return { type: 'condition', fieldCode: fieldSel.value, fieldType: fieldType, value: value };
+      return { type: 'condition', kind: 'fieldValue', fieldCode: fieldSel.value, fieldType: fieldType, value: value };
     }
     if (nodeEl.dataset.nodeType === 'group') {
       var opSelect = nodeEl.querySelector(':scope > .kc-condtree-group-header .kc-condtree-op-select');
