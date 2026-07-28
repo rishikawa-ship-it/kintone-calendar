@@ -1450,6 +1450,16 @@ body {
    [3][4] は minmax の下限で最低限の可読幅を確保しつつ、[4] に大きい fr 比重(1.6)を与えて
    対象フィールド select を優先的に広げる（2026-07 実機フィードバック: 対象フィールドの幅不足）。
    下限値は @media (max-width: 600px) の実測幅でも合計が収まるよう算出済み（後述コメント参照）。 */
+/* 2026-07 実機フィードバック: 削除ボタンが 2 行に折り返し、行の高さが崩れていた。
+   原因は共通クラス .kc-config-btn の横 padding 24px×2 が、この列幅 70px に対して
+   過大だったこと（内容領域 22px < 「削除」の 28px）。列幅は狭幅時の合計計算
+   （下記コメント）に影響するため変更せず、この列のボタン側の padding を詰めて解決する。 */
+.kc-filter-group-del-btn {
+  padding-left: 12px;
+  padding-right: 12px;
+  white-space: nowrap;
+}
+
 .kc-filter-group-row-header {
   display: grid;
   grid-template-columns: 24px 140px minmax(80px, 1fr) minmax(140px, 1.6fr) 70px;
