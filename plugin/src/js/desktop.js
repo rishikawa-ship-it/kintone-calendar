@@ -320,21 +320,6 @@
         ? config.filterConfig
         : { groups: [] };
 
-      // 保存後モーダルクローズ動作 (REQ_workflow-actions §14 改訂7)
-      // キーなし/不正値は防御的に immediate 扱い（マイグレーション不要）。
-      // KC.Popup はカレンダービュー（親。#kc-root がある画面）でのみ動作するため、
-      // ここ（init() から呼ばれる loadFromPluginConfig）への追加で読み込みは足りる。
-      (function () {
-        var mcb = config.modalCloseBehavior;
-        var mode = (mcb && ['immediate', 'delay', 'manual'].indexOf(mcb.mode) !== -1)
-          ? mcb.mode : 'immediate';
-        var secs = Number(mcb && mcb.delaySeconds);
-        if (!(secs >= 1 && secs <= 60)) { secs = 5; }
-        if (KC.Popup) {
-          KC.Popup._modalCloseBehavior = { mode: mode, delaySeconds: secs };
-        }
-      })();
-
       // ワークフロー設定 (version 13 以降) を適用 (REQ_workflow-actions §3.9・§11 改訂4)
       // v12 以前の設定では workflows が存在しないため KC.Config._applyWorkflowsConfig が空配列で初期化する。
       // 【レビュー修正1】trigger.type 未フィルタの生配列を直接代入すると、
@@ -1713,23 +1698,6 @@
     _loadCount: 0,
 
     /**
-     * REQ_workflow-actions §14（改訂7）: 保存成功後のモーダルクローズ挙動設定。
-     * KC.Config.loadFromPluginConfig で config.modalCloseBehavior から上書きされる。
-     * キーなし/不正値は防御的に immediate 扱い（マイグレーション不要・従来互換）。
-     * mode: 'immediate'（既定・即クローズ） | 'delay'（delaySeconds 秒待ってクローズ） |
-     *       'manual'（自動クローズしない。ユーザー操作クローズのみ）
-     * @type {{ mode: string, delaySeconds: number }}
-     */
-    _modalCloseBehavior: { mode: 'immediate', delaySeconds: 5 },
-
-    /**
-     * delay モードで保存成功検知後にセットする setTimeout の ID。
-     * null = 待機タイマーなし。ユーザーが手動クローズ（×/ESC/背景クリック）した場合、
-     * _close() の先頭でこのタイマーをクリアし、二重クローズを防ぐ。
-     */
-    _closeTimer: null,
-
-    /**
      * sandbox 化した iframe 内の kintone「キャンセル」ボタンを検知してモーダルを閉じる。
      *
      * sandbox の allow-top-navigation 除外により kintone のキャンセル（history.back() 等）が
@@ -1995,10 +1963,6 @@
       // モーダルを開くときに保存待ちフラグ・ロードカウンタをリセット（前回の状態が残らないようにする）
       this._savePending = false;
       this._loadCount = 0;
-      // レビュー指摘（改訂7）: delay モードの待機タイマーも同種のセッション状態のためここで防御的にクリアする
-      // （通常は前段の _close() でクリア済みだが、将来の再オープン経路追加で古いタイマーが
-      //   新しいモーダルを閉じる事故を防ぐ不変条件として明示する）
-      if (this._closeTimer) { clearTimeout(this._closeTimer); this._closeTimer = null; }
 
       // 既に iframe が残っている場合は削除してからやり直す（連続クリック対応）
       if (this._iframe && this._iframe.parentNode) {
@@ -2089,9 +2053,9 @@
                 KC.Workflow.notifyRecordSave(wfTriggerLoad, wfRecMatchLoad[1]);
               }
             }
-            // REQ_workflow-actions §14（改訂7）: モーダルクローズは modalCloseBehavior に従う
-            // （immediate/delay/manual）。カレンダー再描画・ワークフロー起動は上記の通り検知直後に実施済み。
-            KC.Popup._scheduleClose();
+            // REQ_workflow-actions §15（改訂8・固定仕様）: iframe はユーザー操作で閉じるまで維持する
+            // （改訂8 固定仕様。Customine 等の保存直後処理を破棄しないため）。
+            // カレンダー再描画・ワークフロー起動は上記の通り検知直後に実施済み。
             return;
           }
 
@@ -2169,9 +2133,9 @@
                 KC.Workflow.notifyRecordSave(wfTriggerPoll, wfRecMatchPoll[1]);
               }
             }
-            // REQ_workflow-actions §14（改訂7）: モーダルクローズは modalCloseBehavior に従う
-            // （immediate/delay/manual）。カレンダー再描画・ワークフロー起動は上記の通り検知直後に実施済み。
-            KC.Popup._scheduleClose();
+            // REQ_workflow-actions §15（改訂8・固定仕様）: iframe はユーザー操作で閉じるまで維持する
+            // （改訂8 固定仕様。Customine 等の保存直後処理を破棄しないため）。
+            // カレンダー再描画・ワークフロー起動は上記の通り検知直後に実施済み。
             return;
           }
 
@@ -2214,61 +2178,13 @@
     },
 
     /**
-     * REQ_workflow-actions §14（改訂7）: 保存成功検知直後に呼ばれる、モード別クローズ振り分け。
-     * カレンダー再描画・ワークフロー起動（notifyRecordSave）は呼び出し元で既に実施済みの前提で、
-     * ここでは「iframe を閉じるかどうか／いつ閉じるか」のみを扱う。
-     * - immediate: 従来通り即 _close()
-     * - delay: _modalCloseBehavior.delaySeconds 秒後に _close()。タイマー ID を _closeTimer に保持し、
-     *   待機中にユーザーが手動クローズ（_close() 直接呼び出し）した場合は _close() 側でクリアされる。
-     * - manual: 何もしない（iframe を維持。ユーザーが×/ESC/背景クリックで _close() するまで残る）
-     * 保存成功検知以外のクローズ経路（キャンセル・許可外URL遷移・×/ESC/backdrop）は
-     * 引き続き _close() を直接呼び、本メソッドを経由しない。
-     */
-    _scheduleClose: function () {
-      var behavior = KC.Popup._modalCloseBehavior || { mode: 'immediate', delaySeconds: 5 };
-      var mode = behavior.mode;
-
-      if (mode === 'manual') {
-        _log('[KC.Popup] modalCloseBehavior=manual のため自動クローズしません');
-        return;
-      }
-
-      if (mode === 'delay') {
-        var seconds = Number(behavior.delaySeconds);
-        if (!(seconds >= 1 && seconds <= 60)) { seconds = 5; }
-        _log('[KC.Popup] modalCloseBehavior=delay のため ' + seconds + ' 秒後にクローズします');
-        // 前回分のタイマーが万一残っていた場合に備えクリアしてから再設定する
-        if (KC.Popup._closeTimer) {
-          clearTimeout(KC.Popup._closeTimer);
-          KC.Popup._closeTimer = null;
-        }
-        KC.Popup._closeTimer = setTimeout(function () {
-          KC.Popup._closeTimer = null;
-          KC.Popup._close();
-        }, seconds * 1000);
-        return;
-      }
-
-      // immediate（既定・不正値のフォールバックも含む）
-      KC.Popup._close();
-    },
-
-    /**
      * モーダルを閉じ、カレンダーを再描画する。
      * iframe を DOM から削除することで about:blank の load イベントが発火しなくなり、
      * 遷移監視ハンドラが再帰的に呼ばれる無限ループを原理的に防ぐ。
      * ×ボタン・ESC・backdrop クリック・許可外 URL 遷移の共通クローズ処理。
-     * REQ_workflow-actions §14（改訂7）: delay 待機中にユーザーが手動クローズ（×/ESC/背景クリック）
-     * した場合はここで _closeTimer をクリアし、待機後の二重クローズを防ぐ（_close は冪等）。
      */
     _close: function () {
       if (!this._backdrop) return;
-
-      // delay モードの待機タイマーが残っていればクリアする（手動クローズによる待機キャンセル）
-      if (KC.Popup._closeTimer) {
-        clearTimeout(KC.Popup._closeTimer);
-        KC.Popup._closeTimer = null;
-      }
 
       // FR-4/FR-5: モーダルクローズ時に record/new パラメータを URL から除去する（replaceState）
       // ×ボタン / backdrop / ESC / 保存後自動クローズ / 許可外URL遷移 すべての経路でここを通る

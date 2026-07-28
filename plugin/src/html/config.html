@@ -136,65 +136,6 @@
             </select>
             <p class="kc-config-hint">MULTI_LINE_TEXT 型のフィールドが表示されます。</p>
           </div>
-
-          <!-- モーダル動作 (REQ_workflow-actions §14 改訂7) -->
-          <h3 class="kc-config-subsection-title">モーダル動作</h3>
-
-          <div class="kc-config-field-group">
-            <label class="kc-config-label">保存後のモーダルクローズ</label>
-            <div class="kc-config-radio-group">
-              <label class="kc-config-radio-label">
-                <input
-                  type="radio"
-                  id="kc-modal-close-immediate"
-                  name="kc-modal-close-mode"
-                  value="immediate"
-                  checked
-                />
-                即時クローズ（従来通り）
-              </label>
-              <label class="kc-config-radio-label">
-                <input
-                  type="radio"
-                  id="kc-modal-close-delay"
-                  name="kc-modal-close-mode"
-                  value="delay"
-                />
-                指定秒数待ってからクローズ
-              </label>
-              <label class="kc-config-radio-label">
-                <input
-                  type="radio"
-                  id="kc-modal-close-manual"
-                  name="kc-modal-close-mode"
-                  value="manual"
-                />
-                自動クローズしない（手動で閉じる）
-              </label>
-            </div>
-
-            <div id="kc-modal-close-delay-area" class="kc-config-field-group" style="display:none;">
-              <label for="kc-modal-close-delay-seconds" class="kc-config-label">
-                待機秒数（1〜60）
-              </label>
-              <input
-                type="number"
-                id="kc-modal-close-delay-seconds"
-                name="modalCloseDelaySeconds"
-                class="kc-config-input"
-                min="1"
-                max="60"
-                value="5"
-              />
-            </div>
-
-            <p class="kc-config-hint">
-              保存直後に動くカスタマイズ（Customine 等）がある場合、モーダルの iframe が
-              即座に破棄されるとその処理が途中で強制終了することがあります。該当する場合は
-              「待ってからクローズ」または「自動クローズしない」の設定を推奨します。
-            </p>
-          </div>
-
         </section>
 
         <!-- ====================================================

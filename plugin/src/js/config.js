@@ -75,6 +75,10 @@
  *     保存成功を検知した際の自動クローズ挙動を制御する（保存直後に動く Customine 等の後続処理が
  *     iframe 破棄で強制終了される実害への対処）。キーなし/不正値は防御的に immediate 扱いとし、
  *     専用のマイグレーション処理は行わない。
+ *   - §15 改訂8（2026-07-17・確定）: 上記 modalCloseBehavior（3モード設定）を廃止し、「保存成功後は
+ *     自動クローズしない」を固定仕様とした。設定 UI・データキー・_scheduleClose/_closeTimer 機構は
+ *     すべて削除。旧データに modalCloseBehavior キーが残っていても読込時に防御的に無視する（削除のみ、
+ *     専用マイグレーションは不要）。
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -298,7 +302,7 @@
    * setConfig で保存する全体設定オブジェクト (version 13)
    * §11 改訂4: fieldLinkRules トップレベルキーは廃止。workflows 配列に統合済み
    * （trigger.type: recordCreate/recordUpdate/fieldChange）。
-   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, filterConfig: Object, views: Object, workflows: Array, modalCloseBehavior: Object }}
+   * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, filterConfig: Object, views: Object, workflows: Array }}
    */
   var currentConfig = {
     version: 13,
@@ -326,9 +330,7 @@
       ]
     },
     views: {},
-    workflows: [],
-    // REQ_workflow-actions §14（改訂7）: 保存後モーダルクローズ動作。既定は従来互換の即時クローズ
-    modalCloseBehavior: { mode: 'immediate', delaySeconds: 5 }
+    workflows: []
   };
 
   /**
@@ -417,13 +419,6 @@
   var elFieldUserMail = document.getElementById('kc-field-usermail');
   var elFieldMemo = document.getElementById('kc-field-memo');
   var elAlldayLabel = document.getElementById('kc-allday-label');
-
-  /* --- モーダル動作 (REQ_workflow-actions §14 改訂7) --- */
-  var elModalCloseImmediate    = document.getElementById('kc-modal-close-immediate');
-  var elModalCloseDelay        = document.getElementById('kc-modal-close-delay');
-  var elModalCloseManual       = document.getElementById('kc-modal-close-manual');
-  var elModalCloseDelayArea    = document.getElementById('kc-modal-close-delay-area');
-  var elModalCloseDelaySeconds = document.getElementById('kc-modal-close-delay-seconds');
 
   /* --- 重複チェック設定 (v8/v9) --- */
   var elFieldOverlapKey         = document.getElementById('kc-field-overlap-key');
@@ -4729,49 +4724,6 @@
   }
 
   /**
-   * 保存済み modalCloseBehavior を「モーダル動作」サブセクションの DOM に反映する
-   * （REQ_workflow-actions §14 改訂7）。
-   * @param {{ mode: string, delaySeconds: number }} [obj]
-   */
-  function applyModalCloseBehavior(obj) {
-    var mode = (obj && ['immediate', 'delay', 'manual'].indexOf(obj.mode) !== -1) ? obj.mode : 'immediate';
-    var secs = Number(obj && obj.delaySeconds);
-    if (!(secs >= 1 && secs <= 60)) { secs = 5; }
-
-    if (elModalCloseImmediate) { elModalCloseImmediate.checked = (mode === 'immediate'); }
-    if (elModalCloseDelay)     { elModalCloseDelay.checked     = (mode === 'delay'); }
-    if (elModalCloseManual)    { elModalCloseManual.checked    = (mode === 'manual'); }
-    if (elModalCloseDelaySeconds) { elModalCloseDelaySeconds.value = String(secs); }
-    _applyModalCloseModeUI(mode);
-  }
-
-  /**
-   * モード選択に応じて待機秒数入力エリアの表示を切り替える（delay 選択時のみ表示）
-   * @param {string} mode - 'immediate' / 'delay' / 'manual'
-   */
-  function _applyModalCloseModeUI(mode) {
-    if (elModalCloseDelayArea) {
-      elModalCloseDelayArea.style.display = (mode === 'delay') ? '' : 'none';
-    }
-  }
-
-  /**
-   * 「モーダル動作」サブセクションの DOM から modalCloseBehavior を収集する。
-   * 待機秒数は 1〜60 の範囲外・非数値の場合は既定値 5 にフォールバックする。
-   * @returns {{ mode: string, delaySeconds: number }}
-   */
-  function collectModalCloseBehavior() {
-    var mode = 'immediate';
-    if (elModalCloseDelay && elModalCloseDelay.checked) { mode = 'delay'; }
-    else if (elModalCloseManual && elModalCloseManual.checked) { mode = 'manual'; }
-
-    var secs = elModalCloseDelaySeconds ? Number(elModalCloseDelaySeconds.value) : 5;
-    if (!(secs >= 1 && secs <= 60)) { secs = 5; }
-
-    return { mode: mode, delaySeconds: secs };
-  }
-
-  /**
    * 判定モードに応じてモード A / B 設定エリアの表示を切り替える
    * @param {string} mode - 'none' / 'fieldKey' / 'refTable'
    */
@@ -5082,8 +5034,7 @@
         },
         filterConfig: _buildDefaultFilterConfig(),
         views: {},
-        workflows: [],
-        modalCloseBehavior: _buildDefaultModalCloseBehavior()
+        workflows: []
       };
       return;
     }
@@ -5261,10 +5212,11 @@
         ? parsed.filterConfig
         : _buildDefaultFilterConfig(),
       views:             parsed.views || {},
-      workflows:         Array.isArray(parsed.workflows) ? parsed.workflows : [],
-      // REQ_workflow-actions §14（改訂7）: キーなし/不正値は防御的に immediate 扱い（マイグレーション不要）
-      modalCloseBehavior: _normalizeModalCloseBehavior(parsed.modalCloseBehavior)
+      workflows:         Array.isArray(parsed.workflows) ? parsed.workflows : []
     };
+    // REQ_workflow-actions §15（改訂8）: modalCloseBehavior は廃止済み。旧データに残っていても
+    // 保存データへ持ち越さないよう防御的に無視する（delete のみ・専用マイグレーション不要）。
+    delete parsed.modalCloseBehavior;
     console.log('[KC Config] 設定を読み込みました:', currentConfig);
   }
 
@@ -5286,27 +5238,6 @@
         }
       ]
     };
-  }
-
-  /**
-   * 既定の modalCloseBehavior（保存後モーダルクローズ動作）を生成する（REQ_workflow-actions §14 改訂7）
-   * @returns {{ mode: string, delaySeconds: number }}
-   */
-  function _buildDefaultModalCloseBehavior() {
-    return { mode: 'immediate', delaySeconds: 5 };
-  }
-
-  /**
-   * modalCloseBehavior を防御的に正規化する。キーなし/不正な mode/delaySeconds は既定値へフォールバックする
-   * （REQ_workflow-actions §14 改訂7: マイグレーション不要・防御的既定値）。
-   * @param {Object} [obj] - 保存済み modalCloseBehavior
-   * @returns {{ mode: string, delaySeconds: number }}
-   */
-  function _normalizeModalCloseBehavior(obj) {
-    var mode = (obj && ['immediate', 'delay', 'manual'].indexOf(obj.mode) !== -1) ? obj.mode : 'immediate';
-    var secs = Math.round(Number(obj && obj.delaySeconds));
-    if (!(secs >= 1 && secs <= 60)) { secs = 5; }
-    return { mode: mode, delaySeconds: secs };
   }
 
   /* ====================================================================
@@ -5862,9 +5793,6 @@
     // デフォルト権限設定を収集して currentConfig.defaultPermission を更新 (REQ_default-permission)
     currentConfig.defaultPermission = collectDefaultPermission();
 
-    // モーダル動作設定を収集して currentConfig.modalCloseBehavior を更新（REQ_workflow-actions §14 改訂7）
-    currentConfig.modalCloseBehavior = collectModalCloseBehavior();
-
     // 検索対象フィールド設定を収集して currentConfig.searchTargets を更新
     currentConfig.searchTargets = collectSearchTargets();
 
@@ -5994,11 +5922,10 @@
       });
 
       // 最終的な保存オブジェクト (version 13 形式: permissionRules + fieldValueRules + searchTargets
-      // + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig + workflows
-      // + modalCloseBehavior を含む。
+      // + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig + workflows を含む。
       // §11 改訂4: fieldLinkRules キーは廃止済み。workflows 配列（trigger.type に
       // recordCreate/recordUpdate/fieldChange を含む）のみで全定義を永続化する（AC-28）)
-      // §14 改訂7: modalCloseBehavior（保存後モーダルクローズ動作）を追加（AC-38〜41）
+      // §15 改訂8: modalCloseBehavior（保存後モーダルクローズ動作の3モード設定）は廃止済み（AC-44）
       var finalConfig = {
         version: 13,
         fieldMapping:       updatedFieldMapping,
@@ -6010,8 +5937,7 @@
         },
         filterConfig:       currentConfig.filterConfig || _buildDefaultFilterConfig(),
         views:              mergedViews,
-        workflows:          currentConfig.workflows || [],
-        modalCloseBehavior: currentConfig.modalCloseBehavior || _buildDefaultModalCloseBehavior()
+        workflows:          currentConfig.workflows || []
       };
 
       // kintone の required_params チェックは setConfig 第1引数の最上位キーと照合する仕様。
@@ -6190,9 +6116,6 @@
 
     // 3. 共通設定 (fieldMapping) をフォームに反映
     applyFieldMapping(currentConfig.fieldMapping);
-
-    // 3.05. モーダル動作設定 (modalCloseBehavior) をフォームに反映（REQ_workflow-actions §14 改訂7）
-    applyModalCloseBehavior(currentConfig.modalCloseBehavior || _buildDefaultModalCloseBehavior());
 
     // 3.5. 権限ユーザー設定 (permissionRules) をフォームに反映
     // loadFields が完了した後に呼ぶこと（permissionFieldOptions が確定している必要があるため）
@@ -6389,17 +6312,6 @@
         if (elFlrSetActionRows) { elFlrSetActionRows.appendChild(buildSetActionBlock(null)); }
       });
     }
-
-    // モーダル動作: ラジオボタン切り替えで待機秒数入力エリアの表示を切替（REQ_workflow-actions §14 改訂7）
-    [elModalCloseImmediate, elModalCloseDelay, elModalCloseManual].forEach(function (radio) {
-      if (!radio) { return; }
-      radio.addEventListener('change', function () {
-        var mode = 'immediate';
-        if (elModalCloseDelay && elModalCloseDelay.checked) { mode = 'delay'; }
-        else if (elModalCloseManual && elModalCloseManual.checked) { mode = 'manual'; }
-        _applyModalCloseModeUI(mode);
-      });
-    });
 
     // 重複チェック: ラジオボタン切り替えでモード A / B エリアを表示切替 (v9)
     [elOverlapModeNone, elOverlapModeFieldKey, elOverlapModeRefTable].forEach(function (radio) {
