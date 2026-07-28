@@ -37,6 +37,9 @@
  *       actions[].type: 'appAction'（対象アプリへの作成・更新。recordCreate/recordUpdate 専用）|
  *       'setField'（自レコードフィールドへのセット。fieldChange 専用）。type 未定義は
  *       後方互換のため appAction とみなす（§11.1）
+ *       'setField' の targetLookup（§16 改訂9・任意）: { relatedAppId, relatedKeyFieldCode }。
+ *       セット先フィールドが kintone のルックアップフィールドの場合のみ保存される。未定義（旧データ）
+ *       は非ルックアップとして扱う（後方互換。AC-50）
  *   }
  * v13 変更点 (REQ_workflow-actions):
  *   - workflows 配列を追加（レコードの作成/更新を起点に
@@ -79,6 +82,14 @@
  *     自動クローズしない」を固定仕様とした。設定 UI・データキー・_scheduleClose/_closeTimer 機構は
  *     すべて削除。旧データに modalCloseBehavior キーが残っていても読込時に防御的に無視する（削除のみ、
  *     専用マイグレーションは不要）。
+ *   - §16 改訂9（2026-07-28・確定）: ルックアップフィールドの正式対応。kintone の fields API は
+ *     ルックアップを独立した型として返さない（参照キー元の型 + lookup 属性）ため、型名 LOOKUP による
+ *     除外（FIELDLINK_EXCLUDED_TARGET_TYPES）は空振りのデッドコードだった。これを削除し、セット先候補から
+ *     ルックアップを除外しない（選択肢ラベルに「（ルックアップ）」を付記）。setActions[] にセット先が
+ *     ルックアップの場合のメタ情報 targetLookup: { relatedAppId, relatedKeyFieldCode } を保存する
+ *     （実行時に fields API を再取得しないため。desktop.js 側で値セットと同時に lookup:true を指定し
+ *     取得・コピー先更新まで1操作で行う。未定義の旧データは非ルックアップとして扱う＝後方互換）。
+ *     version 13 のまま・マイグレーション不要（setActions の任意プロパティ追加のみ）。
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -176,8 +187,11 @@
   /**
    * 重複判定キーフィールドとして選択可能な型（REQ_dnd-overlap-block v2 §8）
    * CHECK_BOX は in 演算子の kintone 実機動作が未確認のため除外（安全側）
+   * §16 改訂9 FR-14: kintone fields API は型名 LOOKUP を返さない（参照キー元の型 + lookup 属性で返る）
+   * ため、LOOKUP（文字列）はここでは常に一致しないデッドコードだった。ルックアップは参照キー元の実際の型
+   * （SINGLE_LINE_TEXT/NUMBER 等）で既にこの一覧に含まれ得るため、デッドコードのみ削除する。
    */
-  var OVERLAP_KEY_FIELD_TYPES = ['SINGLE_LINE_TEXT', 'NUMBER', 'DROP_DOWN', 'RADIO_BUTTON', 'USER_SELECT', 'LOOKUP'];
+  var OVERLAP_KEY_FIELD_TYPES = ['SINGLE_LINE_TEXT', 'NUMBER', 'DROP_DOWN', 'RADIO_BUTTON', 'USER_SELECT'];
 
   /**
    * フィルタ設定（fieldValue 型グループ）の対象フィールドとして選択可能な型（REQ_checkbox-filter §6.3）
@@ -240,23 +254,29 @@
   /**
    * 監視フィールドとして選択可能な型（§10.4.1: change イベントが発火し得る型のみ。
    * 公式仕様で対応が確認できている型から、本改訂のスコープ外である SUBTABLE を除外した集合）
+   * §16 改訂9 FR-14: kintone fields API は型名 LOOKUP を返さない（参照キー元の型 + lookup 属性で
+   * 返る）ため、LOOKUP（文字列）はここでは常に一致しないデッドコードだった。ルックアップフィールドは
+   * 参照キー元の実際の型（SINGLE_LINE_TEXT/NUMBER 等）で既にこの一覧に含まれ得るため削除する。
    */
   var FIELDLINK_WATCH_FIELD_TYPES = [
     'RADIO_BUTTON', 'DROP_DOWN', 'CHECK_BOX', 'MULTI_SELECT', 'USER_SELECT',
     'ORGANIZATION_SELECT', 'GROUP_SELECT', 'DATE', 'TIME', 'DATETIME',
-    'SINGLE_LINE_TEXT', 'NUMBER', 'LOOKUP'
+    'SINGLE_LINE_TEXT', 'NUMBER'
   ];
   /**
-   * セット先フィールド候補から除外する型（§10.4.4）。
+   * セット先フィールド候補から除外する型（§10.4.4、§16 改訂9 FR-14 で LOOKUP 除外を撤回）。
    * FILE（添付ファイル）は kintone.app.record.set() で書き換え不可と公式に明記されているため確定除外。
-   * CALC/LOOKUP/STATUS/CATEGORY/REFERENCE_TABLE は公式ページで断定記載はないが保守的に除外する提案
+   * CALC/STATUS/CATEGORY/REFERENCE_TABLE は公式ページで断定記載はないが保守的に除外する提案
    * （§10.10 U-12: 実機検証で範囲を確定する前提）。加えて GROUP（レイアウト要素）と、既存
    * WORKFLOW_EXCLUDED_TARGET_TYPES で書込不可のシステム項目として扱われている
    * RECORD_NUMBER/CREATOR/MODIFIER/CREATED_TIME/UPDATED_TIME/STATUS_ASSIGNEE も、
    * セット対象として意味を持たないため builder 判断で同様に除外する（要件書に明記のない拡張分）。
+   * §16 改訂9: LOOKUP（型名の文字列）はそもそも fields API が返さない値であり除外として空振りしていた
+   * デッドコードだった（§16.1 A）。ルックアップは値セット＋取得を1操作で行う正式対応に切り替えたため
+   * （FR-16, FR-17）、除外リストからは削除しセット先候補に含める（isLookupFieldProp で別途判定する）。
    */
   var FIELDLINK_EXCLUDED_TARGET_TYPES = [
-    'FILE', 'CALC', 'LOOKUP', 'STATUS', 'STATUS_ASSIGNEE', 'CATEGORY',
+    'FILE', 'CALC', 'STATUS', 'STATUS_ASSIGNEE', 'CATEGORY',
     'REFERENCE_TABLE', 'SUBTABLE', 'GROUP',
     'RECORD_NUMBER', 'CREATOR', 'MODIFIER', 'CREATED_TIME', 'UPDATED_TIME'
   ];
@@ -266,6 +286,18 @@
     selfField: '自レコードの他フィールド',
     lookup:    '他レコードを参照（別アプリ含む）'
   };
+
+  /**
+   * ルックアップフィールドかどうかを判定する（§16 改訂9 FR-14）。
+   * kintone の fields API はルックアップを独立した型として返さない。参照キー元の型
+   * （NUMBER / SINGLE_LINE_TEXT 等）+ lookup 属性（{ relatedApp, relatedKeyField, fieldMappings,
+   * filterCond, ... }）として返るため、型名ではなく lookup 属性の有無で判定する。
+   * @param {Object} field - properties[code]（/k/v1/app/form/fields.json の properties の1件）
+   * @returns {boolean}
+   */
+  function isLookupFieldProp(field) {
+    return !!(field && field.lookup);
+  }
 
   /* ====================================================================
    * ユーティリティ
@@ -372,10 +404,19 @@
   /**
    * フィールド連動設定 UI（セット先フィールド選択・自レコードキー選択）で使用する
    * フィールド一覧（REQ_workflow-actions §10.4.4）。loadFields 後に設定される。
-   * FIELDLINK_EXCLUDED_TARGET_TYPES を除外。
+   * FIELDLINK_EXCLUDED_TARGET_TYPES を除外。ルックアップは除外せずラベルに
+   * 「（ルックアップ）」を付記する（§16 改訂9 FR-14）。
    * @type {Array<{code: string, label: string, type: string}>}
    */
   var fieldLinkTargetFieldOptions = [];
+
+  /**
+   * fieldLinkTargetFieldOptions のうちルックアップフィールドのメタ情報
+   * （実行時に fields API を再取得しないための保存用。§16 改訂9 FR-15）。
+   * loadFields 後に設定される。キー: フィールドコード, 値: { relatedAppId, relatedKeyFieldCode }
+   * @type {Object<string, {relatedAppId: string, relatedKeyFieldCode: string}>}
+   */
+  var fieldLinkTargetFieldLookupMeta = {};
 
   /**
    * 権限フィールド設定で使用するプロセス管理ステータス一覧
@@ -2058,7 +2099,11 @@
     Object.keys(props).forEach(function (code) {
       var field = props[code];
       if (WORKFLOW_EXCLUDED_TARGET_TYPES.indexOf(field.type) !== -1) return;
-      result.push({ code: code, label: field.label || code, type: field.type });
+      // §16 改訂9 FR-18: 対象アプリ側のルックアップフィールドも選択肢から除外しない。
+      // ラベルに付記するのみ（WORKFLOW_EXCLUDED_TARGET_TYPES は現状のまま・ルックアップは許可済み）。
+      var label = field.label || code;
+      if (isLookupFieldProp(field)) { label += '（ルックアップ）'; }
+      result.push({ code: code, label: label, type: field.type });
     });
     result.sort(function (a, b) {
       if (a.label < b.label) return -1;
@@ -3053,6 +3098,14 @@
     mappingTitle.textContent = 'フィールドマッピング（対象アプリのフィールド ← 自アプリの値）';
     body.appendChild(mappingTitle);
 
+    // §16 改訂9 FR-18: 対象アプリ側のルックアップフィールドへ書き込む場合の注意（REST 書き込みは
+    // サーバー側でルックアップが解決されるため追加対応は不要だが、渡す値には注意が必要）
+    var mappingLookupHint = document.createElement('p');
+    mappingLookupHint.className = 'kc-config-hint';
+    mappingLookupHint.textContent =
+      'ルックアップには参照キーの値を渡してください。参照先に無い値・絞込条件から外れる値は失敗します。';
+    body.appendChild(mappingLookupHint);
+
     var mappingRows = document.createElement('div');
     mappingRows.className = 'kc-workflow-mapping-rows';
     block._mappingRowsEl = mappingRows;
@@ -3641,6 +3694,13 @@
     var targetSel = buildFieldLinkTargetFieldSelect(setAction ? setAction.targetFieldCode : '');
     targetGroup.appendChild(targetLabel);
     targetGroup.appendChild(targetSel);
+    // §16 改訂9: ルックアップをセット先にした場合の挙動をヘルプ文で明示する
+    var targetLookupHint = document.createElement('p');
+    targetLookupHint.className = 'kc-config-hint';
+    targetLookupHint.textContent =
+      'ルックアップをセット先にすると、値のセットと取得（コピー先フィールドの更新）まで自動で行われます。' +
+      '参照先に見つからない値・複数件一致する値はセットされません。';
+    targetGroup.appendChild(targetLookupHint);
     body.appendChild(targetGroup);
 
     // 値ソース種別（§10.4.2）
@@ -3831,6 +3891,17 @@
       var sourceType = sourceTypeSel ? sourceTypeSel.value : 'fixed';
 
       var entry = { id: block._actionId, targetFieldCode: targetFieldCode, sourceType: sourceType };
+
+      // §16 改訂9 FR-15: セット先がルックアップの場合、実行時に fields API を再取得しないため
+      // メタ情報（参照先アプリ・参照キー）を config に保存しておく。未該当（非ルックアップ）の場合は
+      // targetLookup を持たせない（旧データと同じ形になり後方互換を保つ。AC-50）
+      var lookupMeta = fieldLinkTargetFieldLookupMeta[targetFieldCode];
+      if (lookupMeta) {
+        entry.targetLookup = {
+          relatedAppId: lookupMeta.relatedAppId,
+          relatedKeyFieldCode: lookupMeta.relatedKeyFieldCode
+        };
+      }
 
       if (sourceType === 'fixed') {
         var fixedInput = block.querySelector('.kc-workflow-mapping-fixed-value');
@@ -5360,11 +5431,22 @@
         flrFm.fieldStatus, flrFm.fieldUserMail, flrFm.fieldAccount, flrFm.fieldPlace, flrFm.fieldMemo
       ].filter(Boolean);
       fieldLinkTargetFieldOptions = [];
+      // §16 改訂9 FR-15: ルックアップのメタ情報（参照先アプリ・参照キー）は実行時に fields API を
+      // 再取得しないため、選択肢構築と同時にここで抽出して保持する（collectSetActions が参照する）
+      fieldLinkTargetFieldLookupMeta = {};
       Object.keys(props).forEach(function (code) {
         var field = props[code];
         if (FIELDLINK_EXCLUDED_TARGET_TYPES.indexOf(field.type) !== -1) return;
         if (reservedFieldMappingCodes.indexOf(code) !== -1) return;
-        fieldLinkTargetFieldOptions.push({ code: code, label: field.label || code, type: field.type });
+        var label = field.label || code;
+        if (isLookupFieldProp(field)) {
+          label += '（ルックアップ）';
+          fieldLinkTargetFieldLookupMeta[code] = {
+            relatedAppId: String((field.lookup.relatedApp && field.lookup.relatedApp.app) || ''),
+            relatedKeyFieldCode: field.lookup.relatedKeyField || ''
+          };
+        }
+        fieldLinkTargetFieldOptions.push({ code: code, label: label, type: field.type });
       });
       fieldLinkTargetFieldOptions.sort(function (a, b) {
         if (a.label < b.label) return -1;

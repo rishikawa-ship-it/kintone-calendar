@@ -7746,6 +7746,29 @@
         return field ? field.value : undefined;
       },
 
+      /**
+       * キー一致検索で対象アプリのレコード件数を確認する（§16 改訂9 FR-17: ルックアップセット先の
+       * 事前検証用）。kintone のルックアップ【取得】は検索結果が1件のときのみ自動反映される仕様
+       * （§16.1 B）のため、事前に件数を確認し 0件/複数件のときはセット自体をスキップする用途で使う。
+       * lookupValueByKey と同じクエリ構築パターン（limit 2）を流用するが、こちらは値を読み取らず
+       * 件数のみを返す（0/1/2 のいずれか。2件以上ヒットしても limit 2 のため 2 を返す）。
+       * @param {string|number} appId
+       * @param {string} keyFieldCode - 参照先アプリ側のキーフィールドコード
+       * @param {*} keyValue - 検証したい値
+       * @returns {Promise<number>} ヒット件数（0/1/2）
+       */
+      countByKey: async function (appId, keyFieldCode, keyValue) {
+        var query = '(' + keyFieldCode + ' = "' +
+          String(keyValue).replace(/"/g, '\\"') + '") limit 2';
+        var url = kintone.api.url('/k/v1/records.json', true);
+        var resp = await kintone.api(url, 'GET', {
+          app: appId,
+          query: query,
+          fields: ['$id']
+        });
+        return (resp.records || []).length;
+      },
+
       /** 対象アプリへレコードを新規作成する */
       _createRecord: async function (targetAppId, targetRecord) {
         var url = kintone.api.url('/k/v1/record.json', true);
@@ -7840,6 +7863,16 @@
    *   ルール実行によるセット中は _applying フラグを立て、フラグ中の change 発火ではルール評価を
    *   スキップする。同期パス（event.record 書き換え）が change を再発火させるかは未検証のため、
    *   同期・非同期の両パスに一律でこのガードを適用する（挙動差に依存しない設計）。
+   *
+   * §16 改訂9（ルックアップフィールドの正式対応）:
+   *   セット先フィールドが kintone のルックアップフィールド（config 上 action.targetLookup に
+   *   { relatedAppId, relatedKeyFieldCode } を保持）の場合、値と同時に record[code].lookup = true
+   *   （空値時は 'CLEAR'）を指定することで、値のセットとコピー先フィールドの更新を1操作で行う
+   *   （一撃セット。FR-16）。事前検証（KC.Workflow.Core.countByKey で件数確認、FR-17）が非同期処理
+   *   のため、targetLookup を持つセットアクションは sourceType（fixed/selfField/lookup）を問わず
+   *   同期パス（_applySyncActions）では扱わず、常に非同期パス（_resolveLookupActionsAsync →
+   *   _resolveTargetLookupValue → _applyResolvedValues）へ回す。DnD 経路（resolveForDnd → REST PUT）
+   *   はサーバー側でルックアップが解決されるため変更していない（FR-16 末尾）。
    * ==================================================================== */
   KC.FieldLink = {
     /** 再入ガード（§10.13.2）。true の間は onChange 内でルール評価そのものをスキップする */
@@ -7923,6 +7956,9 @@
 
     /**
      * fixed/selfField（同期ソース）のセットアクションを event.record 上で直接書き換える。
+     * §16 改訂9 FR-16/17: セット先がルックアップ（action.targetLookup あり）の場合は、事前検証
+     * （対象アプリへの GET）が非同期になるため、change ハンドラの同期処理では扱えない。
+     * ここではスキップし、_resolveLookupActionsAsync 側（非同期パス）に一律で回す。
      * @param {Object} rule
      * @param {Object} record - change イベントの event.record
      */
@@ -7932,6 +7968,7 @@
       for (var i = 0; i < setActions.length; i++) {
         var action = setActions[i];
         if (!action || !action.targetFieldCode || action.sourceType === 'lookup') continue;
+        if (action.targetLookup) continue; // §16 改訂9: ルックアップセット先は非同期パスへ回す
         var field = record[action.targetFieldCode];
         if (!field) continue; // フォーム上に存在しないフィールドはスキップ（安全側）
 
@@ -7954,38 +7991,63 @@
     },
 
     /**
-     * lookup（非同期ソース）のセットアクションを解決し、フォームへ反映する（§10.9.2）。
+     * lookup（非同期ソース）のセットアクション、および §16 改訂9 で追加した「セット先自体が
+     * kintone のルックアップフィールドであるセットアクション（action.targetLookup あり。
+     * sourceType は fixed/selfField/lookup のいずれでもよい）」を解決し、フォームへ反映する（§10.9.2）。
      * change ハンドラの return 後に非同期で実行される（fire-and-forget。呼び出し元は await しない）。
      * @param {Object} rule
      */
     _resolveLookupActionsAsync: async function (rule) {
-      var lookupActions = (rule.setActions || []).filter(function (a) {
-        return a && a.sourceType === 'lookup' && a.targetFieldCode;
+      // §16 改訂9: 対象は「値ソースが lookup（他レコード参照）」または「セット先がルックアップ
+      // フィールド（targetLookup）」のいずれか。後者は fixed/selfField ソースでも非同期パスへ回す
+      // 必要がある（事前検証クエリが非同期のため、同期の change ハンドラでは扱えない。§16.2 FR-17）。
+      var targetActions = (rule.setActions || []).filter(function (a) {
+        return a && a.targetFieldCode && (a.sourceType === 'lookup' || a.targetLookup);
       });
-      if (lookupActions.length === 0) return;
+      if (targetActions.length === 0) return;
 
       try {
-        var resolvedValues = {}; // targetFieldCode -> value
-        // キー値の読み取りは、解決処理を開始した時点のフォーム最新値を使う
+        var resolvedValues = {}; // targetFieldCode -> { value, lookup? }
+        // キー値・selfField 値の読み取りは、解決処理を開始した時点のフォーム最新値を使う
         var baseline = kintone.app.record.get();
 
-        for (var i = 0; i < lookupActions.length; i++) {
-          var action = lookupActions[i];
-          var lk = action.lookup;
-          if (!lk || !lk.appId || !lk.selfKeyFieldCode || !lk.targetKeyFieldCode || !lk.valueFieldCode) {
-            console.warn('[KC.FieldLink] lookup 設定が不足しているためスキップ:', rule.name, action);
-            continue;
-          }
-          var keyField = baseline.record[lk.selfKeyFieldCode];
-          var keyValue = keyField && keyField.value != null ? keyField.value : '';
-          if (keyValue === '') continue; // キー値なし → 何もしない（§10.4.2 確定）
+        for (var i = 0; i < targetActions.length; i++) {
+          var action = targetActions[i];
+          var rawValue;
 
-          try {
-            var value = await KC.Workflow.Core.lookupValueByKey(lk.appId, lk.targetKeyFieldCode, keyValue, lk.valueFieldCode);
-            if (value === undefined) continue; // 0件/複数件（Core 側で console.warn 済み）→ 何もしない
-            resolvedValues[action.targetFieldCode] = value;
-          } catch (lookupErr) {
-            console.error('[KC.FieldLink] lookup 解決エラー:', rule.name, action, lookupErr);
+          if (action.sourceType === 'fixed') {
+            rawValue = action.fixedValue !== undefined ? action.fixedValue : '';
+          } else if (action.sourceType === 'selfField') {
+            var srcField = baseline.record[action.selfFieldCode];
+            rawValue = srcField ? KC.FieldLink._extractSelfFieldValue(srcField, action) : '';
+          } else if (action.sourceType === 'lookup') {
+            var lk = action.lookup;
+            if (!lk || !lk.appId || !lk.selfKeyFieldCode || !lk.targetKeyFieldCode || !lk.valueFieldCode) {
+              console.warn('[KC.FieldLink] lookup 設定が不足しているためスキップ:', rule.name, action);
+              continue;
+            }
+            var keyField = baseline.record[lk.selfKeyFieldCode];
+            var keyValue = keyField && keyField.value != null ? keyField.value : '';
+            if (keyValue === '') continue; // キー値なし → 何もしない（§10.4.2 確定）
+
+            try {
+              rawValue = await KC.Workflow.Core.lookupValueByKey(lk.appId, lk.targetKeyFieldCode, keyValue, lk.valueFieldCode);
+            } catch (lookupErr) {
+              console.error('[KC.FieldLink] lookup 解決エラー:', rule.name, action, lookupErr);
+              continue;
+            }
+            if (rawValue === undefined) continue; // 0件/複数件（Core 側で console.warn 済み）→ 何もしない
+          } else {
+            continue; // targetLookup は付いているが未知の sourceType → 安全側でスキップ
+          }
+
+          if (action.targetLookup) {
+            // §16 改訂9 FR-16/17: セット先がルックアップの場合は値と同時に lookup:true を指定する
+            // （一撃セット）。ただし事前検証（参照先アプリでの件数確認）を経てからのみ適用する。
+            var resolved = await KC.FieldLink._resolveTargetLookupValue(rule, action, rawValue);
+            if (resolved) { resolvedValues[action.targetFieldCode] = resolved; }
+          } else {
+            resolvedValues[action.targetFieldCode] = { value: rawValue };
           }
         }
 
@@ -8008,16 +8070,65 @@
     },
 
     /**
-     * get() → value 書き換え → set(全体) の一連の処理を実行する（_setQueue によって直列化される区間）。
+     * セット先がルックアップフィールドの場合の事前検証を行い、適用可能なら
+     * { value, lookup: true|'CLEAR' } を返す（§16 改訂9 FR-17）。
+     * - 値が空文字/undefined/null → 事前検証はスキップし { value: '', lookup: 'CLEAR' } を返す
+     *   （値とコピー先をまとめてクリア。AC-48）
+     * - 値あり → targetLookup.relatedAppId を relatedKeyFieldCode = 値 で検索（limit 2、既存
+     *   KC.Workflow.Core.lookupValueByKey と同じクエリ構築パターンを流用）
+     *   - 1件 → { value, lookup: true }（一撃セット。AC-46）
+     *   - 0件/2件以上/クエリ失敗 → console.warn のみでスキップ（null を返す。AC-47。
+     *     コピー先に古い値が残ったままの不整合を作らない）
      * @param {Object} rule
-     * @param {Object} resolvedValues - { targetFieldCode: 値 }
+     * @param {Object} action - setActions の1件（action.targetLookup が必須）
+     * @param {*} rawValue - セットしようとしている値（sourceType 解決済み）
+     * @returns {Promise<Object|null>}
+     */
+    _resolveTargetLookupValue: async function (rule, action, rawValue) {
+      var isEmpty = rawValue === '' || rawValue === undefined || rawValue === null;
+      if (isEmpty) {
+        return { value: '', lookup: 'CLEAR' };
+      }
+
+      var tl = action.targetLookup;
+      try {
+        var count = await KC.Workflow.Core.countByKey(tl.relatedAppId, tl.relatedKeyFieldCode, rawValue);
+        if (count === 1) {
+          return { value: rawValue, lookup: true };
+        }
+        console.warn(
+          '[KC.FieldLink] ルックアップ事前検証: 参照先が0件または複数件のためセットをスキップします:',
+          rule.name, action.targetFieldCode, 'value=' + rawValue, 'count=' + count
+        );
+        return null;
+      } catch (e) {
+        console.warn(
+          '[KC.FieldLink] ルックアップ事前検証でエラーが発生したためセットをスキップします:',
+          rule.name, action.targetFieldCode, e
+        );
+        return null;
+      }
+    },
+
+    /**
+     * get() → value（＋必要に応じて lookup フラグ）書き換え → set(全体) の一連の処理を実行する
+     * （_setQueue によって直列化される区間）。
+     * §16 改訂9 FR-16: resolvedValues[code].lookup が 'true'/'CLEAR' の場合、value と同時に
+     * record[code].lookup を指定することで、取得・コピー先フィールドの更新まで1操作で行う（一撃セット）。
+     * @param {Object} rule
+     * @param {Object} resolvedValues - { targetFieldCode: { value, lookup? } }
      */
     _applyResolvedValues: function (rule, resolvedValues) {
       KC.FieldLink._applying = true;
       try {
         var current = kintone.app.record.get();
         Object.keys(resolvedValues).forEach(function (code) {
-          if (current.record[code]) { current.record[code].value = resolvedValues[code]; }
+          if (!current.record[code]) return;
+          var resolved = resolvedValues[code];
+          current.record[code].value = resolved.value;
+          if (resolved.lookup !== undefined) {
+            current.record[code].lookup = resolved.lookup;
+          }
         });
         kintone.app.record.set(current);
       } catch (e) {
