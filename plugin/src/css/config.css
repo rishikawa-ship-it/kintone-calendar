@@ -1504,6 +1504,39 @@ body {
 /* 1 チェック項目行（ハンドル / 値表示 / ラベル入力 / 初期ON / 削除） */
 /* 初期ON・削除列は minmax() で最小幅を保証し、値/ラベル列の内容量に押し潰されないようにする
    （2026-07 実機フィードバック: 初期ONトグルが最終行で見切れる不具合の再発防止） */
+/* 2026-07 実機フィードバック: 項目行の削除「−」が右にはみ出していた。
+   原因は専用スタイルが無く共通クラス .kc-config-btn（padding 10px 24px）のままで
+   実幅 60px となり、アクション列 40px を 20px 超過してカード枠の外へ出ていたこと。
+   他テーブルの行削除（.kc-search-target-delete / 権限テーブル）と同じ 28px 丸ボタンに
+   統一し、列内へ収める（行単位の削除という意味も他と揃う）。 */
+.kc-filter-item-del-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin: 0 auto;
+  font-size: 18px;
+  font-weight: bold;
+  line-height: 1;
+  color: #fff;
+  background-color: #d93025;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+
+.kc-filter-item-del-btn:hover {
+  background-color: #b3261e;
+  box-shadow: 0 2px 6px rgba(211, 48, 37, 0.4);
+}
+
+.kc-filter-item-del-btn:active {
+  background-color: #8c1c16;
+}
+
 .kc-filter-item-row {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) minmax(0, 1fr) minmax(80px, 90px) minmax(36px, 40px);
