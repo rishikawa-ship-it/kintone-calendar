@@ -523,6 +523,37 @@
         </section>
 
         <!-- ====================================================
+          セクション 7: 設定の書き出し・取り込み (REQ_config-export-import)
+        ==================================================== -->
+        <section class="kc-config-section" id="kc-config-io-section">
+          <h2 class="kc-config-section-title">設定の書き出し・取り込み</h2>
+          <p class="kc-config-section-desc">
+            プラグイン設定を JSON ファイルとして書き出し・取り込みできます。<br>
+            書き出しは画面の現在の入力内容を JSON にします（保存前でも書き出せます。
+            入力内容にエラーがある場合は書き出しを中止します）。<br>
+            取り込みは画面に反映するだけで、保存（画面下部の「保存」「保存して更新」）は別途必要です。<br>
+            別アプリの設定を取り込む場合は、フィールドコードやビューIDなどの読み替えが必要になることがあります。
+            書き出したファイルにはフィールドコードやアプリIDが含まれるため、共有範囲にご注意ください。
+          </p>
+
+          <div class="kc-config-io-actions">
+            <button type="button" id="kc-config-export-btn" class="kc-config-btn kc-config-btn-secondary">
+              設定を書き出す
+            </button>
+
+            <div class="kc-config-io-import">
+              <label for="kc-config-import-file" class="kc-config-label">設定ファイルを選択</label>
+              <input
+                type="file"
+                id="kc-config-import-file"
+                accept="application/json"
+                class="kc-config-io-file-input"
+              />
+            </div>
+          </div>
+        </section>
+
+        <!-- ====================================================
           操作ボタン (ページ最下部)
         ==================================================== -->
         <div class="kc-config-actions">
@@ -682,6 +713,58 @@
         <div class="kc-modal-footer">
           <button type="button" id="kc-workflow-modal-apply" class="kc-config-btn kc-config-btn-primary">適用</button>
           <button type="button" id="kc-workflow-modal-cancel" class="kc-config-btn kc-config-btn-secondary">キャンセル</button>
+        </div>
+      </div>
+    </div>
+
+    <!--
+      設定取り込み確認モーダル (REQ_config-export-import §2.3, 初期は hidden)
+      パース済みファイルの概要・取り込み対象キーのチェックボックス・警告一覧を表示する。
+      「取り込む」押下時はメモリ上の currentConfig のみ更新し setConfig は呼ばない（AC-6）。
+    -->
+    <div
+      class="kc-modal-overlay"
+      id="kc-config-import-modal"
+      hidden
+      aria-modal="true"
+      role="dialog"
+      aria-labelledby="kc-config-import-modal-title"
+    >
+      <div class="kc-modal-content kc-modal-content--wide">
+        <div class="kc-modal-header">
+          <h3 class="kc-modal-title" id="kc-config-import-modal-title">設定ファイルの取り込み確認</h3>
+          <button type="button" class="kc-modal-close" id="kc-config-import-modal-close" aria-label="閉じる">×</button>
+        </div>
+        <div class="kc-modal-body kc-modal-body--scroll">
+          <div id="kc-config-import-summary" class="kc-config-import-summary">
+            <!-- ファイル概要 (sourceApp / exportedAt / version) を JavaScript で動的追加 -->
+          </div>
+
+          <h4 class="kc-workflow-modal-subtitle">取り込む項目</h4>
+          <p class="kc-config-hint">
+            ファイルに含まれる項目のみ表示されます（既定は全チェック）。
+          </p>
+          <div id="kc-config-import-keys" class="kc-config-import-keys">
+            <!-- 取り込み対象キーのチェックボックス行を JavaScript で動的追加 -->
+          </div>
+
+          <h4 class="kc-workflow-modal-subtitle">警告</h4>
+          <ul id="kc-config-import-warnings" class="kc-config-import-warnings">
+            <!-- 検証結果の警告一覧を JavaScript で動的追加 -->
+          </ul>
+
+          <p class="kc-config-hint kc-config-import-caution">
+            チェックした項目は現在の設定を上書きします。取り込み後は画面下部の「保存」または
+            「保存して更新」を押すまで保存されません。
+          </p>
+        </div>
+        <div class="kc-modal-footer">
+          <button type="button" id="kc-config-import-execute" class="kc-config-btn kc-config-btn-primary">
+            取り込む
+          </button>
+          <button type="button" id="kc-config-import-cancel" class="kc-config-btn kc-config-btn-secondary">
+            キャンセル
+          </button>
         </div>
       </div>
     </div>

@@ -2074,4 +2074,77 @@ body {
   }
 
   /* §12 改訂5: .kc-condtree-row は flex + flex-wrap のため、狭幅では自然に折り返る（追加指定不要） */
+
+  .kc-config-io-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* ====================================================================
+ * 設定の書き出し・取り込み (REQ_config-export-import)
+ * ==================================================================== */
+
+/* セクション内: 「設定を書き出す」ボタンとファイル選択を横並びにする */
+.kc-config-io-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.kc-config-io-import {
+  display: flex;
+  flex-direction: column;
+}
+
+.kc-config-io-import .kc-config-label {
+  margin-bottom: 6px;
+}
+
+.kc-config-io-file-input {
+  font-size: 13px;
+  color: #333;
+}
+
+/* 取り込み確認モーダル: ファイル概要 */
+.kc-config-import-summary {
+  margin-bottom: 16px;
+}
+
+.kc-config-import-summary-line {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: #333;
+}
+
+/* 取り込み確認モーダル: 取り込む項目チェックボックス一覧 */
+.kc-config-import-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.kc-config-import-key-label {
+  margin-top: 0;
+}
+
+/* 取り込み確認モーダル: 警告一覧 */
+.kc-config-import-warnings {
+  margin: 0 0 8px;
+  padding-left: 20px;
+  font-size: 13px;
+  color: #a15c00;
+  line-height: 1.6;
+}
+
+.kc-config-import-warnings li {
+  margin-bottom: 4px;
+}
+
+/* 「チェックした項目は上書きします」の注意文を強調する */
+.kc-config-import-caution {
+  color: #c53030;
+  font-weight: bold;
 }

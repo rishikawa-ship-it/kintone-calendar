@@ -90,6 +90,12 @@
  *     （実行時に fields API を再取得しないため。desktop.js 側で値セットと同時に lookup:true を指定し
  *     取得・コピー先更新まで1操作で行う。未定義の旧データは非ルックアップとして扱う＝後方互換）。
  *     version 13 のまま・マイグレーション不要（setActions の任意プロパティ追加のみ）。
+ *   - REQ_config-export-import（2026-07-28）: 設定の書き出し／取り込み機能を追加。保存形式は変更しない
+ *     （version 13 のまま）。書き出しは画面の現在値を { kcConfigExport, exportedAt, sourceApp, config }
+ *     形式の JSON としてローカルダウンロードする。取り込みはラッパー形式・素の設定オブジェクト・
+ *     一部キーのみの部分オブジェクトのいずれも受け付け（人手／AI が書いた設定を取り込めるようにするため）、
+ *     キー単位で選択して currentConfig とDOMへ反映する（setConfig は行わず、保存はユーザー操作に委ねる）。
+ *     旧バージョンのファイルは runConfigMigrationChain（loadInitialConfig と共通）を通して取り込む。
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -411,6 +417,14 @@
   var fieldLinkTargetFieldOptions = [];
 
   /**
+   * このアプリに存在する全フィールドコードの集合（REQ_config-export-import §2.4）。
+   * loadFields 後に設定される。取り込みファイルが参照するフィールドコードの存在確認（警告表示）
+   * にのみ使用する（型フィルタは一切かけない）。
+   * @type {Object<string, boolean>}
+   */
+  var allAppFieldCodes = {};
+
+  /**
    * fieldLinkTargetFieldOptions のうちルックアップフィールドのメタ情報
    * （実行時に fields API を再取得しないための保存用。§16 改訂9 FR-15）。
    * loadFields 後に設定される。キー: フィールドコード, 値: { relatedAppId, relatedKeyFieldCode }
@@ -444,6 +458,13 @@
    * @type {Object}
    */
   var availableViews = {};
+
+  /**
+   * 設定インポート機能（REQ_config-export-import §2.3）で、取り込み確認モーダル表示中に
+   * parseImportFile() の結果を保持する変数。モーダルを閉じる／取り込み実行後は null に戻す。
+   * @type {{ warnings: string[], meta: Object, presentKeys: string[], configObj: Object }|null}
+   */
+  var pendingImportResult = null;
 
   /* ====================================================================
    * DOM 要素参照
@@ -551,6 +572,18 @@
   var elSubmits = document.querySelectorAll('.kc-config-submit');
   var elSubmitDeploys = document.querySelectorAll('.kc-config-submit-deploy');
   var elCancels = document.querySelectorAll('.kc-config-cancel');
+
+  /* --- セクション 7: 設定の書き出し・取り込み (REQ_config-export-import) --- */
+  var elConfigExportBtn    = document.getElementById('kc-config-export-btn');
+  var elConfigImportFile   = document.getElementById('kc-config-import-file');
+  /* 取り込み確認モーダル */
+  var elConfigImportModal        = document.getElementById('kc-config-import-modal');
+  var elConfigImportModalClose   = document.getElementById('kc-config-import-modal-close');
+  var elConfigImportCancel       = document.getElementById('kc-config-import-cancel');
+  var elConfigImportExecute      = document.getElementById('kc-config-import-execute');
+  var elConfigImportSummary      = document.getElementById('kc-config-import-summary');
+  var elConfigImportKeys         = document.getElementById('kc-config-import-keys');
+  var elConfigImportWarnings     = document.getElementById('kc-config-import-warnings');
 
   /* ====================================================================
    * ユーティリティ関数
@@ -5064,52 +5097,16 @@
   }
 
   /**
-   * kintone.plugin.app.getConfig で設定を取得し currentConfig を初期化する。
-   * - 旧フラット設定 (version 2 未満) は破棄して再初期化 (Q11 確定)
-   * - version 2 / 3 / 4 は v5 マイグレーション → v6 マイグレーションをチェーン実行
-   * - version 5 は v6 マイグレーションを実行
-   * - getConfig の返り値は { config: "<JSON文字列>" } 形式を前提とする
-   * @returns {void}
+   * パース済み設定オブジェクトに、version に応じたマイグレーションを連鎖実行する
+   * （REQ_config-export-import §2.4, AC-8: マイグレーション処理は既存コードを再利用し重複実装しない）。
+   * loadInitialConfig()（起動時の読込）と設定インポート機能（parseImportFile）の両方から
+   * 共通で呼び出す。version が未定義（部分的な手書き/AI 生成ファイル等）の場合は各
+   * `Number(parsed.version) < N` 判定がすべて false になるため実質的に何も変換しない
+   * （後半の防御的補完・正規化処理のみ働く）。
+   * @param {Object} parsed - パース済み設定オブジェクト（version 2 以上、または未定義でも可）
+   * @returns {Object} マイグレーション適用後のオブジェクト
    */
-  function loadInitialConfig() {
-    var rawConfig = kintone.plugin.app.getConfig(PLUGIN_ID);
-    var parsed = null;
-
-    try {
-      // setConfig({ config: JSON.stringify(obj) }) 形式で保存されている場合
-      if (rawConfig && rawConfig.config) {
-        parsed = JSON.parse(rawConfig.config);
-      } else if (rawConfig && Object.keys(rawConfig).length > 0) {
-        // 互換: rawConfig 全体が JSON.stringify されている可能性を試みる
-        parsed = rawConfig;
-      }
-    } catch (e) {
-      console.warn('[KC Config] 設定のパース失敗、再初期化します:', e);
-      parsed = null;
-    }
-
-    // version 2 未満は破棄 (Q11 確定: 旧フラット設定は再初期化)
-    if (!parsed || !parsed.version || Number(parsed.version) < 2) {
-      console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
-      currentConfig = {
-        version: 13,
-        fieldMapping: {},
-        permissionRules: [],
-        fieldValueRules: [],
-        searchTargets: [],
-        defaultPermission: {
-          enabled:    false,
-          permission: 'view',
-          bgColor:    '#bdbdbd',
-          textColor:  '#000000'
-        },
-        filterConfig: _buildDefaultFilterConfig(),
-        views: {},
-        workflows: []
-      };
-      return;
-    }
-
+  function runConfigMigrationChain(parsed) {
     var ver = Number(parsed.version);
 
     // version 2 / 3 / 4 → 5 マイグレーション（§8.1, §8.2, §8.7）
@@ -5260,17 +5257,70 @@
       if (!rule.bgColor) { rule.bgColor = '#1976d2'; }
       if (!rule.textColor) { rule.textColor = pickTextColorByBg(rule.bgColor); }
     });
+    parsed.permissionRules = rules;
 
     // fieldMapping.mailLoginUserDefault の後方互換デフォルト処理 (存在しない場合は false)
     var fm = parsed.fieldMapping || {};
     if (typeof fm.mailLoginUserDefault !== 'boolean') {
       fm.mailLoginUserDefault = false;
     }
+    parsed.fieldMapping = fm;
+
+    return parsed;
+  }
+
+  /**
+   * kintone.plugin.app.getConfig で設定を取得し currentConfig を初期化する。
+   * - 旧フラット設定 (version 2 未満) は破棄して再初期化 (Q11 確定)
+   * - version 2 以上は runConfigMigrationChain() でマイグレーションをチェーン実行
+   * - getConfig の返り値は { config: "<JSON文字列>" } 形式を前提とする
+   * @returns {void}
+   */
+  function loadInitialConfig() {
+    var rawConfig = kintone.plugin.app.getConfig(PLUGIN_ID);
+    var parsed = null;
+
+    try {
+      // setConfig({ config: JSON.stringify(obj) }) 形式で保存されている場合
+      if (rawConfig && rawConfig.config) {
+        parsed = JSON.parse(rawConfig.config);
+      } else if (rawConfig && Object.keys(rawConfig).length > 0) {
+        // 互換: rawConfig 全体が JSON.stringify されている可能性を試みる
+        parsed = rawConfig;
+      }
+    } catch (e) {
+      console.warn('[KC Config] 設定のパース失敗、再初期化します:', e);
+      parsed = null;
+    }
+
+    // version 2 未満は破棄 (Q11 確定: 旧フラット設定は再初期化)
+    if (!parsed || !parsed.version || Number(parsed.version) < 2) {
+      console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
+      currentConfig = {
+        version: 13,
+        fieldMapping: {},
+        permissionRules: [],
+        fieldValueRules: [],
+        searchTargets: [],
+        defaultPermission: {
+          enabled:    false,
+          permission: 'view',
+          bgColor:    '#bdbdbd',
+          textColor:  '#000000'
+        },
+        filterConfig: _buildDefaultFilterConfig(),
+        views: {},
+        workflows: []
+      };
+      return;
+    }
+
+    parsed = runConfigMigrationChain(parsed);
 
     currentConfig = {
       version:           13,
-      fieldMapping:      fm,
-      permissionRules:   rules,
+      fieldMapping:      parsed.fieldMapping || {},
+      permissionRules:   Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [],
       fieldValueRules:   Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
       searchTargets:     Array.isArray(parsed.searchTargets) ? parsed.searchTargets : [],
       defaultPermission: parsed.defaultPermission || {
@@ -5326,6 +5376,11 @@
       { app: getAppIdFromUrl() }
     ).then(function (resp) {
       var props = resp.properties;
+
+      // このアプリの全フィールドコードをキャッシュする（型フィルタなし。REQ_config-export-import §2.4:
+      // インポートファイルが参照するフィールドコードの存在確認に使用する）
+      allAppFieldCodes = {};
+      Object.keys(props).forEach(function (code) { allAppFieldCodes[code] = true; });
 
       populateSelect(elFieldTitle,    filterFields(props, TITLE_FIELD_TYPES),   false);
       populateSelect(elFieldStart,    filterFields(props, DATE_FIELD_TYPES),    false);
@@ -5830,39 +5885,26 @@
    * ==================================================================== */
 
   /**
-   * 設定値を保存する共通ロジック。
-   * - collectFieldMapping() で共通設定を currentConfig.fieldMapping に反映
-   * - 現在の編集中ビューの個別設定を currentConfig.views に反映
-   * - options.updateViews が true の場合: PUT views.json でビューを作成/上書き
-   *   - 新規作成モード (currentViewId === null): 新規ビューを追加して currentViewId を更新
-   *   - 既存ビュー更新: html を強制上書き (確認ダイアログなし)
-   * - orphan 削除 (メモリ内 + mergedViews)
-   * - getConfig 先読みでタブ間競合を回避して mergedViews を構築
-   * - kintone.plugin.app.setConfig で保存
-   * @param {{ updateViews?: boolean }} [options] - updateViews: PUT views.json を実行するか
-   * @returns {Promise<boolean>} 保存成功なら true、バリデーション失敗や例外で false
+   * 最新の CUSTOM ビュー一覧 (availableViews) に存在する viewId の一覧を返す。
+   * saveConfig() の orphan 削除・collectAndValidateCurrentConfig() で共通利用する。
+   * @returns {string[]} viewId（文字列）の配列
    */
-  async function saveConfig(options) {
-    clearError();
-    var doUpdateViews = options && options.updateViews === true;
+  function getValidViewIds() {
+    return Object.keys(availableViews).map(function (name) {
+      return String(availableViews[name].id);
+    });
+  }
 
-    // 新規作成時のビュー名バリデーション
-    var newViewName = null;
-    if (doUpdateViews && currentViewId === null) {
-      newViewName = elNewViewName.value.trim();
-      if (!newViewName) {
-        showError('新規ビュー名を入力してください。');
-        return false;
-      }
-      var sameName = Object.keys(availableViews).some(function (name) {
-        return name === newViewName;
-      });
-      if (sameName) {
-        showError('「' + newViewName + '」は既に存在します。別の名前を入力してください。');
-        return false;
-      }
-    }
-
+  /**
+   * 画面上の現在の入力値を collectXxx() 群で収集して currentConfig の該当キーに反映し、
+   * 既存のバリデーション（フィールドマッピング・ワークフロー）を実行する共通ロジック。
+   * saveConfig()（保存）と handleExportConfig()（REQ_config-export-import §2.1: 設定の書き出し）の
+   * 両方から呼び出す（AC-2: エクスポートも保存と同じバリデーションでエラー時は中止する）。
+   * 現在の編集中ビューの個別設定も currentConfig.views に反映し、orphan（既存 CUSTOM ビューに
+   * 存在しない viewId）を削除する。
+   * @returns {{ valid: boolean, errors: string[] }} バリデーション結果
+   */
+  function collectAndValidateCurrentConfig() {
     // 共通設定を収集して currentConfig.fieldMapping を更新
     currentConfig.fieldMapping = collectFieldMapping();
 
@@ -5892,12 +5934,10 @@
     }
 
     // orphan 削除: 最新 CUSTOM ビューに存在しない ID のエントリを削除 (メモリ内)
-    var validIds = Object.keys(availableViews).map(function (name) {
-      return String(availableViews[name].id);
-    });
+    var validIds = getValidViewIds();
     Object.keys(currentConfig.views).forEach(function (viewId) {
       if (validIds.indexOf(viewId) === -1) {
-        console.log('[KC Config] 保存時 orphan 削除:', viewId);
+        console.log('[KC Config] orphan 削除:', viewId);
         delete currentConfig.views[viewId];
       }
     });
@@ -5906,17 +5946,61 @@
     var viewCfg = currentViewId ? currentConfig.views[currentViewId] : null;
     var validation = validateConfig(currentConfig.fieldMapping, viewCfg);
     if (!validation.valid) {
-      showError(validation.errors.join('\n'));
-      return false;
+      return validation;
     }
 
     // ワークフロー設定のバリデーション（AC-9: CHECK_BOX→単一値マッピング等 / §10.4.2: lookup 必須項目。
     // §11.1: トリガー種別ごとに appAction/setField いずれかのバリデーションを適用する）
     var workflowError = validateAllWorkflows(currentConfig.workflows || []);
     if (workflowError) {
-      showError(workflowError);
+      return { valid: false, errors: [workflowError] };
+    }
+
+    return { valid: true, errors: [] };
+  }
+
+  /**
+   * 設定値を保存する共通ロジック。
+   * - collectAndValidateCurrentConfig() で画面の現在値を currentConfig に反映しバリデーション
+   * - options.updateViews が true の場合: PUT views.json でビューを作成/上書き
+   *   - 新規作成モード (currentViewId === null): 新規ビューを追加して currentViewId を更新
+   *   - 既存ビュー更新: html を強制上書き (確認ダイアログなし)
+   * - orphan 削除 (mergedViews)
+   * - getConfig 先読みでタブ間競合を回避して mergedViews を構築
+   * - kintone.plugin.app.setConfig で保存
+   * @param {{ updateViews?: boolean }} [options] - updateViews: PUT views.json を実行するか
+   * @returns {Promise<boolean>} 保存成功なら true、バリデーション失敗や例外で false
+   */
+  async function saveConfig(options) {
+    clearError();
+    var doUpdateViews = options && options.updateViews === true;
+
+    // 新規作成時のビュー名バリデーション
+    var newViewName = null;
+    if (doUpdateViews && currentViewId === null) {
+      newViewName = elNewViewName.value.trim();
+      if (!newViewName) {
+        showError('新規ビュー名を入力してください。');
+        return false;
+      }
+      var sameName = Object.keys(availableViews).some(function (name) {
+        return name === newViewName;
+      });
+      if (sameName) {
+        showError('「' + newViewName + '」は既に存在します。別の名前を入力してください。');
+        return false;
+      }
+    }
+
+    var collectResult = collectAndValidateCurrentConfig();
+    if (!collectResult.valid) {
+      showError(collectResult.errors.join('\n'));
       return false;
     }
+
+    // mergedViews / 新規ビュー追加時の orphan チェックで使う validId 一覧
+    // (collectAndValidateCurrentConfig() 内の同名ローカル変数とは別スコープのため再計算する)
+    var validIds = getValidViewIds();
 
     try {
       // PUT views.json: 新規作成または既存ビュー更新
@@ -6150,6 +6234,562 @@
    */
   function handleCancel() {
     history.back();
+  }
+
+  /* ====================================================================
+   * 設定の書き出し・取り込み (REQ_config-export-import)
+   * ==================================================================== */
+
+  /**
+   * インポート機能が認識するトップレベルキーの一覧（表示順）。
+   * type は §2.4 の型バリデーション（AC-7）に使用する（'array' は Array.isArray、
+   * 'object' は配列でないオブジェクトであることを要求する）。
+   * @type {Array<{key: string, label: string, type: 'array'|'object'}>}
+   */
+  var IMPORT_CONFIG_KEYS = [
+    { key: 'fieldMapping',      label: '基本設定（フィールドマッピング）', type: 'object' },
+    { key: 'searchTargets',     label: '検索対象フィールド設定',           type: 'array'  },
+    { key: 'filterConfig',      label: 'フィルタ設定',                     type: 'object' },
+    { key: 'permissionRules',   label: '権限ユーザー設定',                 type: 'array'  },
+    { key: 'fieldValueRules',   label: '権限フィールド設定',               type: 'array'  },
+    { key: 'defaultPermission', label: 'デフォルト権限設定',               type: 'object' },
+    { key: 'views',             label: 'ビュー個別設定',                   type: 'object' },
+    { key: 'workflows',         label: 'ワークフロー',                     type: 'array'  }
+  ];
+
+  /**
+   * 値が「配列でないオブジェクト」かどうかを判定する（§2.4 の型バリデーション用）
+   * @param {*} value
+   * @returns {boolean}
+   */
+  function isPlainObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  /**
+   * 現在時刻から書き出しファイル名用の 'YYYYMMDD-HHmm' 文字列を生成する（§2.1）
+   * @param {Date} [d] - 対象日時（省略時は現在時刻）
+   * @returns {string}
+   */
+  function formatTimestampForFilename(d) {
+    var dt = d || new Date();
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return String(dt.getFullYear()) + pad(dt.getMonth() + 1) + pad(dt.getDate()) +
+      '-' + pad(dt.getHours()) + pad(dt.getMinutes());
+  }
+
+  /**
+   * 表示用にアプリ名を REST API から取得する（sourceApp.name への埋め込みのみに使用。
+   * 取得失敗時は書き出し自体は継続し、名前を空文字にする）
+   * @param {string} appId
+   * @returns {Promise<string>}
+   */
+  function fetchAppName(appId) {
+    if (!appId) { return Promise.resolve(''); }
+    return kintone.api(kintone.api.url('/k/v1/app', true), 'GET', { id: appId })
+      .then(function (resp) { return (resp && resp.name) || ''; })
+      .catch(function (err) {
+        console.warn('[KC Config] アプリ名取得失敗（書き出しは続行します）:', err);
+        return '';
+      });
+  }
+
+  /**
+   * 「設定を書き出す」ボタンのハンドラ（REQ_config-export-import §2.1, §2.2, AC-1, AC-2）。
+   * 画面の現在の入力値を collectAndValidateCurrentConfig()（saveConfig と共通）で収集・検証し、
+   * 成功時のみラッパー形式 JSON を Blob 経由でローカルダウンロードする（外部送信は一切行わない。§5）。
+   * @returns {Promise<void>}
+   */
+  async function handleExportConfig() {
+    clearError();
+
+    var collectResult = collectAndValidateCurrentConfig();
+    if (!collectResult.valid) {
+      showError('書き出しを中止しました。以下のエラーを解消してください。\n' + collectResult.errors.join('\n'));
+      return;
+    }
+
+    var appId = getAppIdFromUrl() || '';
+
+    // マッピング設定内メール初期値チェックを finalConfig と同様にマージする（saveConfig と同じ扱い）
+    var mailLoginUserDefault = elMailLoginUserDefault ? elMailLoginUserDefault.checked : false;
+    var exportFieldMapping = Object.assign({}, currentConfig.fieldMapping, {
+      mailLoginUserDefault: mailLoginUserDefault
+    });
+
+    var exportConfig = {
+      version:           13,
+      fieldMapping:       exportFieldMapping,
+      permissionRules:    currentConfig.permissionRules    || [],
+      fieldValueRules:    currentConfig.fieldValueRules    || [],
+      searchTargets:      currentConfig.searchTargets      || [],
+      defaultPermission:  currentConfig.defaultPermission  || {
+        enabled: false, permission: 'view', bgColor: '#bdbdbd', textColor: '#000000'
+      },
+      filterConfig:       currentConfig.filterConfig || _buildDefaultFilterConfig(),
+      views:              currentConfig.views || {},
+      workflows:          currentConfig.workflows || []
+    };
+
+    var appName = await fetchAppName(appId);
+
+    var wrapper = {
+      kcConfigExport: 1,
+      exportedAt: new Date().toISOString(),
+      sourceApp: { id: appId, name: appName },
+      config: exportConfig
+    };
+
+    var filename = 'kc-calendar-config_app' + (appId || 'unknown') + '_' + formatTimestampForFilename() + '.json';
+    var blob = new Blob([JSON.stringify(wrapper, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showSuccess('設定を書き出しました（' + filename + '）。');
+  }
+
+  /**
+   * 発火条件ツリー（ルート/グループ/条件ノード共通の再帰構造）を走査し、fieldCode を持つ
+   * 条件ノード（kind: 'fieldValue' / 'fieldTimeCompare'）を見つけるたびにコールバックする。
+   * ルートノードは type を持たない { op, children } 形式（§12.1）のため、type ではなく
+   * children の有無で分岐する。
+   * @param {Object} node - conditionTree のノード（ルート／グループ／条件のいずれか）
+   * @param {function(string): void} cb - fieldCode を受け取るコールバック
+   */
+  function walkConditionTreeFieldCodes(node, cb) {
+    if (!node) return;
+    if (Array.isArray(node.children)) {
+      node.children.forEach(function (child) { walkConditionTreeFieldCodes(child, cb); });
+      return;
+    }
+    if (node.fieldCode) { cb(node.fieldCode); }
+  }
+
+  /**
+   * インポートファイルが参照するフィールドコードのうち、現在のアプリに存在しないものを検出し、
+   * 警告メッセージの配列を返す（REQ_config-export-import §2.4）。
+   * 検査対象: fieldMapping の各値 / searchTargets[].fieldCode / permissionRules[].fieldCode /
+   * fieldValueRules[].fieldCode / filterConfig.groups[].fieldCode / workflows[] の
+   * 条件ノード fieldCode・actions[].targetFieldCode・selfFieldCode・trigger.watchFieldCode
+   * （$status はプロセス管理ステータスの予約コードのため対象外とする）。
+   * @param {Object} configObj - 検証対象の設定オブジェクト（マイグレーション適用後）
+   * @param {Array<string>} presentKeys - ファイルに含まれるトップレベルキー
+   * @returns {Array<string>} 警告メッセージの配列（欠落なしの場合は空配列）
+   */
+  function collectMissingFieldCodeWarnings(configObj, presentKeys) {
+    var missing = [];
+
+    function checkCode(where, code) {
+      if (!code || code === '$status') return;
+      if (!allAppFieldCodes[code]) {
+        missing.push('フィールドコード欠落: ' + where + ' = "' + code + '" が見つかりません');
+      }
+    }
+
+    if (presentKeys.indexOf('fieldMapping') !== -1 && configObj.fieldMapping) {
+      var fm = configObj.fieldMapping;
+      [
+        'fieldTitle', 'fieldStart', 'fieldEnd', 'fieldAllday', 'fieldColor', 'fieldPlace',
+        'fieldUserMail', 'fieldMemo', 'overlapKeyFieldCode', 'overlapRefTableFieldCode'
+      ].forEach(function (k) { checkCode('fieldMapping.' + k, fm[k]); });
+    }
+
+    if (presentKeys.indexOf('searchTargets') !== -1 && Array.isArray(configObj.searchTargets)) {
+      configObj.searchTargets.forEach(function (t, i) {
+        if (t) { checkCode('searchTargets[' + i + '].fieldCode', t.fieldCode); }
+      });
+    }
+
+    if (presentKeys.indexOf('permissionRules') !== -1 && Array.isArray(configObj.permissionRules)) {
+      configObj.permissionRules.forEach(function (r, i) {
+        if (r) { checkCode('permissionRules[' + i + '].fieldCode', r.fieldCode); }
+      });
+    }
+
+    if (presentKeys.indexOf('fieldValueRules') !== -1 && Array.isArray(configObj.fieldValueRules)) {
+      configObj.fieldValueRules.forEach(function (r, i) {
+        if (r) { checkCode('fieldValueRules[' + i + '].fieldCode', r.fieldCode); }
+      });
+    }
+
+    if (presentKeys.indexOf('filterConfig') !== -1 && configObj.filterConfig && Array.isArray(configObj.filterConfig.groups)) {
+      configObj.filterConfig.groups.forEach(function (g, i) {
+        if (g) { checkCode('filterConfig.groups[' + i + '].fieldCode', g.fieldCode); }
+      });
+    }
+
+    if (presentKeys.indexOf('workflows') !== -1 && Array.isArray(configObj.workflows)) {
+      configObj.workflows.forEach(function (wf, wi) {
+        if (!wf) return;
+        walkConditionTreeFieldCodes(wf.conditionTree, function (code) {
+          checkCode('workflows[' + wi + '] 条件.fieldCode', code);
+        });
+        if (wf.trigger && wf.trigger.watchFieldCode) {
+          checkCode('workflows[' + wi + '].trigger.watchFieldCode', wf.trigger.watchFieldCode);
+        }
+        (wf.actions || []).forEach(function (a, ai) {
+          if (!a) return;
+          var actionPath = 'workflows[' + wi + '].actions[' + ai + ']';
+          checkCode(actionPath + '.targetFieldCode', a.targetFieldCode);
+          checkCode(actionPath + '.selfFieldCode', a.selfFieldCode);
+          // レビュー指摘（Low）: appAction（別アプリ書き込み）側にも自アプリのフィールドコード参照が
+          // あるため検査対象に含める。matchKey.sourceFieldCode と fieldMappings[].sourceFieldCode は
+          // いずれも自アプリのフィールド。targetFieldCode は対象アプリ側のため検査しない。
+          if (a.matchKey) {
+            checkCode(actionPath + '.matchKey.sourceFieldCode', a.matchKey.sourceFieldCode);
+          }
+          (a.fieldMappings || []).forEach(function (m, mi) {
+            if (m && m.sourceType === 'field') {
+              checkCode(actionPath + '.fieldMappings[' + mi + '].sourceFieldCode', m.sourceFieldCode);
+            }
+          });
+          // lookup ソースの自アプリ側キー（改訂9 の setField lookup 設定）
+          if (a.lookup) {
+            checkCode(actionPath + '.lookup.selfKeyFieldCode', a.lookup.selfKeyFieldCode);
+          }
+        });
+      });
+    }
+
+    return missing;
+  }
+
+  /**
+   * インポートファイルのテキストを解析・検証する（REQ_config-export-import §2.2, §2.4）。
+   * 寛容なパース（AC-10）: 以下のいずれの形式も受け付ける。
+   *   1. ラッパー形式 { kcConfigExport, exportedAt, sourceApp, config }
+   *   2. config の中身だけの素の設定オブジェクト（version あり/なし両方）
+   *   3. 上記のうち一部のキーだけを含む部分オブジェクト
+   * ブロック要因（§2.4）が1つでもあれば { blocked: string[] } を返す。
+   * 問題なければ { blocked: null, warnings, meta, presentKeys, configObj } を返す
+   * （configObj は必要に応じてマイグレーション適用済み。AC-8）。
+   * @param {string} text - ファイルの生テキスト
+   * @returns {{ blocked: string[] }|{ blocked: null, warnings: string[], meta: Object, presentKeys: string[], configObj: Object }}
+   */
+  function parseImportFile(text) {
+    var raw;
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      return { blocked: ['ファイルの内容が JSON として解析できません。'] };
+    }
+
+    if (!isPlainObject(raw)) {
+      return { blocked: ['ファイルの内容がオブジェクト形式ではありません。'] };
+    }
+
+    // ラッパー形式か、config の中身そのものかを判定する（AC-10）
+    var meta = { exportedAt: null, sourceApp: null, fileVersion: null };
+    var configObj;
+    if (raw.kcConfigExport !== undefined && isPlainObject(raw.config)) {
+      configObj = raw.config;
+      meta.exportedAt = raw.exportedAt || null;
+      meta.sourceApp = isPlainObject(raw.sourceApp) ? raw.sourceApp : null;
+    } else {
+      configObj = raw;
+    }
+
+    meta.fileVersion = (configObj.version !== undefined && configObj.version !== null) ? configObj.version : null;
+
+    // ファイルに含まれるトップレベルキー（マイグレーション前の生データで判定する。
+    // マイグレーション処理が防御的に補完するキー（例: workflows: []）を「ファイルに存在した」と
+    // 誤認しないようにするため）
+    var presentKeys = IMPORT_CONFIG_KEYS.filter(function (def) {
+      return Object.prototype.hasOwnProperty.call(configObj, def.key);
+    }).map(function (def) { return def.key; });
+
+    if (presentKeys.length === 0) {
+      return { blocked: ['取り込めるキーが含まれていません（fieldMapping / permissionRules / fieldValueRules / ' +
+        'searchTargets / defaultPermission / filterConfig / views / workflows のいずれも見つかりません）。'] };
+    }
+
+    if (meta.fileVersion !== null && Number(meta.fileVersion) > 13) {
+      return { blocked: ['このファイルの version（' + meta.fileVersion + '）は、このプラグインが対応する最大バージョン' +
+        '（13）を超えています。新しいバージョンのプラグインで書き出されたファイルの可能性があります。'] };
+    }
+
+    var warnings = [];
+
+    // マイグレーション（AC-8）: version が現行 (13) より小さい場合のみ、既存の loadInitialConfig と
+    // 共通のマイグレーション連鎖（runConfigMigrationChain）を通してから取り込む。
+    // 元データを破壊しないよう複製してから渡す。
+    var workingConfigObj = configObj;
+    if (meta.fileVersion !== null && Number(meta.fileVersion) < 13) {
+      warnings.push('このファイルの version（' + meta.fileVersion + '）は現在（13）より古いため、' +
+        'マイグレーションを適用して取り込みます。');
+      workingConfigObj = runConfigMigrationChain(JSON.parse(JSON.stringify(configObj)));
+    }
+
+    // 型バリデーション（ブロック要因。AC-7）
+    var typeErrors = [];
+    presentKeys.forEach(function (key) {
+      var def = IMPORT_CONFIG_KEYS.filter(function (d) { return d.key === key; })[0];
+      var value = workingConfigObj[key];
+      var ok = def.type === 'array' ? Array.isArray(value) : isPlainObject(value);
+      if (!ok) {
+        typeErrors.push('「' + def.label + '」(' + key + ') の型が不正です（' +
+          (def.type === 'array' ? '配列' : 'オブジェクト') + 'である必要があります）。');
+      }
+    });
+    if (typeErrors.length > 0) {
+      return { blocked: typeErrors };
+    }
+
+    // 別アプリの設定に対する警告（AC-9）
+    var currentAppId = getAppIdFromUrl();
+    if (meta.sourceApp && meta.sourceApp.id !== undefined && meta.sourceApp.id !== null &&
+        String(meta.sourceApp.id) !== String(currentAppId)) {
+      warnings.push('別アプリ（アプリID: ' + meta.sourceApp.id + '）で書き出された設定です。' +
+        'フィールドコード・ビューID・対象アプリIDの読み替えが必要な場合があります。');
+    }
+
+    // フィールドコード欠落の警告（AC-9）
+    warnings = warnings.concat(collectMissingFieldCodeWarnings(workingConfigObj, presentKeys));
+
+    // views のビューID不在警告
+    if (presentKeys.indexOf('views') !== -1) {
+      var validViewIds = getValidViewIds();
+      var unknownViewIds = Object.keys(workingConfigObj.views || {}).filter(function (viewId) {
+        return validViewIds.indexOf(String(viewId)) === -1;
+      });
+      if (unknownViewIds.length > 0) {
+        warnings.push('このアプリに存在しないビューの設定が含まれます（' + unknownViewIds.join(', ') + '）。' +
+          '取り込みを避けたい場合は「ビュー個別設定」のチェックを外してください。');
+      }
+    }
+
+    // workflows の他アプリ参照（targetAppId）に対する注意喚起（存在確認は行わない。§2.4）
+    if (presentKeys.indexOf('workflows') !== -1) {
+      var hasTargetApp = (workingConfigObj.workflows || []).some(function (wf) {
+        return wf && (wf.actions || []).some(function (a) { return a && a.targetAppId; });
+      });
+      if (hasTargetApp) {
+        warnings.push('ワークフローのアクションには他アプリ（targetAppId）への参照が含まれます。' +
+          '存在確認は行われないため、取り込み後に対象アプリの設定を確認してください。');
+      }
+    }
+
+    return {
+      blocked: null,
+      warnings: warnings,
+      meta: meta,
+      presentKeys: presentKeys,
+      configObj: workingConfigObj
+    };
+  }
+
+  /**
+   * 取り込み確認モーダルのチェック状態に応じて、1 キー分の値を currentConfig に反映し、
+   * 対応する applyXxx() で画面へ再描画する（REQ_config-export-import §2.3。setConfig は行わない）。
+   * @param {string} key - IMPORT_CONFIG_KEYS のいずれかのキー
+   * @param {*} value - configObj[key] の値（型バリデーション済み）
+   */
+  function applyImportedKey(key, value) {
+    switch (key) {
+      case 'fieldMapping':
+        // 部分的な fieldMapping（AI・人手が一部キーだけ書いたファイル）でも既存必須項目を
+        // 消さないよう、置換ではなくマージする
+        currentConfig.fieldMapping = Object.assign({}, currentConfig.fieldMapping, value);
+        applyFieldMapping(currentConfig.fieldMapping);
+        if (elMailLoginUserDefault) {
+          elMailLoginUserDefault.checked = currentConfig.fieldMapping.mailLoginUserDefault === true;
+        }
+        updateMailCheckboxState();
+        break;
+      case 'permissionRules':
+        currentConfig.permissionRules = value;
+        applyPermissionRules(currentConfig.permissionRules);
+        break;
+      case 'fieldValueRules':
+        currentConfig.fieldValueRules = value;
+        applyFieldValueRules(currentConfig.fieldValueRules);
+        break;
+      case 'searchTargets':
+        currentConfig.searchTargets = value;
+        applySearchTargets(currentConfig.searchTargets);
+        break;
+      case 'defaultPermission':
+        currentConfig.defaultPermission = value;
+        applyDefaultPermission(currentConfig.defaultPermission);
+        break;
+      case 'filterConfig':
+        currentConfig.filterConfig = value;
+        applyFilterConfig(currentConfig.filterConfig);
+        break;
+      case 'views':
+        // 既存ビューの設定は保持しつつ、ファイルに含まれる viewId のみ上書きする
+        currentConfig.views = Object.assign({}, currentConfig.views, value);
+        if (currentViewId && currentConfig.views[currentViewId]) {
+          applyViewConfig(currentViewId);
+        }
+        break;
+      case 'workflows':
+        // id が無いワークフロー（手書き/AI 生成ファイル等）には新規 ID を発番する
+        currentConfig.workflows = (value || []).map(function (wf) {
+          if (wf && !wf.id) { wf.id = generateWorkflowId(); }
+          return wf;
+        });
+        renderWorkflowList();
+        break;
+      default:
+        console.warn('[KC Config] 未知のインポートキーのため無視しました:', key);
+    }
+  }
+
+  /**
+   * 取り込み確認モーダルを、parseImportFile() の結果に基づいて構築・表示する。
+   * ファイル由来の文字列（sourceApp.name 等）はすべて textContent 経由で描画する（XSS 対策）。
+   * @param {Object} result - parseImportFile() の非ブロック時の戻り値
+   */
+  function openImportModal(result) {
+    pendingImportResult = result;
+    if (!elConfigImportModal) return;
+
+    // ファイル概要
+    if (elConfigImportSummary) {
+      elConfigImportSummary.textContent = '';
+      var meta = result.meta;
+      var sourceAppText = '不明';
+      if (meta.sourceApp) {
+        var idText = (meta.sourceApp.id !== undefined && meta.sourceApp.id !== null && meta.sourceApp.id !== '')
+          ? String(meta.sourceApp.id) : '不明';
+        var nameText = meta.sourceApp.name || '(名称不明)';
+        sourceAppText = nameText + '（アプリID: ' + idText + '）';
+      }
+      [
+        ['書き出し元アプリ', sourceAppText],
+        ['書き出し日時', meta.exportedAt || '不明'],
+        ['設定バージョン', meta.fileVersion !== null ? String(meta.fileVersion) : '不明']
+      ].forEach(function (pair) {
+        var p = document.createElement('p');
+        p.className = 'kc-config-import-summary-line';
+        var strong = document.createElement('strong');
+        strong.textContent = pair[0] + ': ';
+        p.appendChild(strong);
+        p.appendChild(document.createTextNode(pair[1]));
+        elConfigImportSummary.appendChild(p);
+      });
+    }
+
+    // 取り込む項目チェックボックス（既定は全チェック。ファイルに存在しないキーは行を出さない）
+    if (elConfigImportKeys) {
+      elConfigImportKeys.textContent = '';
+      result.presentKeys.forEach(function (key) {
+        var def = IMPORT_CONFIG_KEYS.filter(function (d) { return d.key === key; })[0];
+        var label = document.createElement('label');
+        label.className = 'kc-config-checkbox-label kc-config-import-key-label';
+        var checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = true;
+        checkbox.dataset.importKey = key;
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(def.label + '（' + key + '）'));
+        elConfigImportKeys.appendChild(label);
+      });
+    }
+
+    // 警告一覧
+    if (elConfigImportWarnings) {
+      elConfigImportWarnings.textContent = '';
+      if (result.warnings.length === 0) {
+        var li = document.createElement('li');
+        li.textContent = '警告はありません。';
+        elConfigImportWarnings.appendChild(li);
+      } else {
+        result.warnings.forEach(function (w) {
+          var li2 = document.createElement('li');
+          li2.textContent = w;
+          elConfigImportWarnings.appendChild(li2);
+        });
+      }
+    }
+
+    elConfigImportModal.removeAttribute('hidden');
+    document.removeEventListener('keydown', handleImportModalEscKey);
+    document.addEventListener('keydown', handleImportModalEscKey);
+  }
+
+  /**
+   * ESC キーで取り込み確認モーダルを閉じるハンドラ
+   */
+  function handleImportModalEscKey(e) {
+    if (e.key === 'Escape') { closeImportModal(); }
+  }
+
+  /**
+   * 取り込み確認モーダルを閉じる（下書きは破棄する。実際の反映は handleImportExecute が担う）
+   */
+  function closeImportModal() {
+    if (!elConfigImportModal) return;
+    elConfigImportModal.setAttribute('hidden', '');
+    document.removeEventListener('keydown', handleImportModalEscKey);
+    pendingImportResult = null;
+  }
+
+  /**
+   * ファイル選択 (<input type="file">) の change ハンドラ。
+   * FileReader によるローカル読み込みのみ行う（外部送信なし。§5）。
+   * ブロック要因があれば画面上部にエラー表示のみ行い、モーダルは開かない。
+   * @param {Event} e
+   */
+  function handleImportFileSelected(e) {
+    var file = e.target.files && e.target.files[0];
+    // 同じファイルを連続選択しても change が発火するようにリセットする
+    e.target.value = '';
+    if (!file) return;
+
+    clearError();
+    var reader = new FileReader();
+    reader.onload = function () {
+      var result = parseImportFile(String(reader.result));
+      if (result.blocked) {
+        showError('設定ファイルを取り込めませんでした。\n' + result.blocked.join('\n'));
+        return;
+      }
+      openImportModal(result);
+    };
+    reader.onerror = function () {
+      showError('ファイルの読み込みに失敗しました。');
+    };
+    reader.readAsText(file, 'utf-8');
+  }
+
+  /**
+   * 取り込み確認モーダルの「取り込む」ボタンハンドラ（REQ_config-export-import §2.3, AC-5, AC-6）。
+   * チェックされたキーのみ currentConfig に反映して画面を再描画する（メモリ上のみ。setConfig は
+   * 呼ばない）。反映後は画面上部に案内メッセージを表示し、保存は別途ユーザー操作に委ねる。
+   */
+  function handleImportExecute() {
+    if (!pendingImportResult || !elConfigImportKeys) { closeImportModal(); return; }
+
+    var configObj = pendingImportResult.configObj;
+    var checkboxes = elConfigImportKeys.querySelectorAll('input[type="checkbox"]');
+    var appliedLabels = [];
+
+    checkboxes.forEach(function (cb) {
+      if (!cb.checked) return;
+      var key = cb.dataset.importKey;
+      var def = IMPORT_CONFIG_KEYS.filter(function (d) { return d.key === key; })[0];
+      applyImportedKey(key, configObj[key]);
+      appliedLabels.push(def ? def.label : key);
+    });
+
+    closeImportModal();
+
+    if (appliedLabels.length === 0) {
+      showError('チェックした項目がなかったため、何も取り込まれていません。');
+      return;
+    }
+
+    showSuccess('設定を取り込みました（' + appliedLabels.join(' / ') + '）。' +
+      '内容を確認して「保存」してください。');
   }
 
   /* ====================================================================
@@ -6483,6 +7123,28 @@
         closeAllColorPopovers();
       }
     });
+
+    // 設定の書き出し・取り込み（REQ_config-export-import）
+    if (elConfigExportBtn) {
+      elConfigExportBtn.addEventListener('click', handleExportConfig);
+    }
+    if (elConfigImportFile) {
+      elConfigImportFile.addEventListener('change', handleImportFileSelected);
+    }
+    if (elConfigImportModalClose) {
+      elConfigImportModalClose.addEventListener('click', closeImportModal);
+    }
+    if (elConfigImportCancel) {
+      elConfigImportCancel.addEventListener('click', closeImportModal);
+    }
+    if (elConfigImportModal) {
+      elConfigImportModal.addEventListener('click', function (e) {
+        if (e.target === elConfigImportModal) { closeImportModal(); }
+      });
+    }
+    if (elConfigImportExecute) {
+      elConfigImportExecute.addEventListener('click', handleImportExecute);
+    }
   }
 
   // kintone は manifest 経由で config.js を動的注入するため、
