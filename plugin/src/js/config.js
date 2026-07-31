@@ -96,6 +96,11 @@
  *     一部キーのみの部分オブジェクトのいずれも受け付け（人手／AI が書いた設定を取り込めるようにするため）、
  *     キー単位で選択して currentConfig とDOMへ反映する（setConfig は行わず、保存はユーザー操作に委ねる）。
  *     旧バージョンのファイルは runConfigMigrationChain（loadInitialConfig と共通）を通して取り込む。
+ *   - REQ_checkbox-filter §6.4 追補（2026-07-31）: フィルタグループ行ヘッダーの種別プルダウン
+ *     （buildFilterGroupTypeSelect）を UI から撤去。選択肢が実質1つでユーザーが操作できず、
+ *     140px 列を占有していたため。グループ種別は従来どおり row.dataset.groupType で保持し
+ *     collectFilterConfig も元から dataset のみを参照していたため、保存形式は不変（version 13 のまま）。
+ *     担当グループはグループ名の後ろの「（固定）」表示で種別固定を示す。空いた幅は対象フィールド列へ配分。
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -4224,8 +4229,17 @@
   }
 
   /**
-   * フィルタグループ種別選択ドロップダウンを生成する（§6.4 buildFilterGroupTypeSelect）
-   * 'assignee' は固定グループ用のため新規追加では選択不可（既存の assignee 行のみ保持表示）
+   * フィルタグループ種別選択ドロップダウン（§6.4 buildFilterGroupTypeSelect）
+   *
+   * ★ 2026-07-31 廃止（未使用）★
+   * 選択肢が実質1つ（新規追加＝'fieldValue' のみ、既存 assignee 行は disabled）で
+   * ユーザーが操作できる余地が無く、ヘッダー行の 140px を占有していたため
+   * buildFilterGroupRow から取り外した。グループ種別は row.dataset.groupType で保持し、
+   * assignee は「担当（固定）」のテキスト表示で判別する（collectFilterConfig は元々
+   * dataset.groupType のみを参照しており、本 select を読んでいない）。
+   * 将来 fieldValue 以外の種別（例: 期間・数値レンジ）を追加する場合に復活させる想定で
+   * 関数自体は残す。復活時は buildFilterGroupRow のヘッダー行と
+   * .kc-filter-group-row-header の grid-template-columns に列を戻すこと。
    * @param {Object|null} group
    * @returns {HTMLSelectElement}
    */
@@ -4442,17 +4456,29 @@
     var headerRow = document.createElement('div');
     headerRow.className = 'kc-filter-group-row-header';
 
-    var typeSel = buildFilterGroupTypeSelect(group);
     var fieldSelWrap = document.createElement('div');
     fieldSelWrap.className = 'kc-filter-group-field-wrap';
 
     // グループ名は手動入力させず、選択した対象フィールドのフィールド名をそのまま採用する（2026-07 フィードバック）。
     // 担当グループは固定で「担当」を表示する。表示専用のため input ではなく span。
     // 保存値は row.dataset.groupLabel に保持し、collectFilterConfig() で参照する。
+    // 2026-07-31: 種別プルダウンを廃止したため、担当グループはグループ名の後ろに
+    // 「（固定）」を添えて種別が固定であることを示す（保存されるラベルは '担当' のまま）。
+    var labelCell = document.createElement('div');
+    labelCell.className = 'kc-filter-group-label-cell';
+
     var labelDisplay = document.createElement('span');
     labelDisplay.className = 'kc-filter-group-label-display';
     labelDisplay.textContent = isAssignee ? '担当' : ((group && group.label) || '（フィールド未選択）');
     row.dataset.groupLabel = isAssignee ? '担当' : ((group && group.label) || '');
+    labelCell.appendChild(labelDisplay);
+
+    if (isAssignee) {
+      var fixedNote = document.createElement('span');
+      fixedNote.className = 'kc-filter-group-fixed-note';
+      fixedNote.textContent = '（固定）';
+      labelCell.appendChild(fixedNote);
+    }
 
     var delBtn = document.createElement('button');
     delBtn.type = 'button';
@@ -4469,8 +4495,7 @@
     }
 
     headerRow.appendChild(handle);
-    headerRow.appendChild(typeSel);
-    headerRow.appendChild(labelDisplay);
+    headerRow.appendChild(labelCell);
     headerRow.appendChild(fieldSelWrap);
     headerRow.appendChild(delBtn);
 

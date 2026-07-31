@@ -395,10 +395,21 @@ config.html に新セクション「フィルタ設定」（`#kc-filter-config-s
 
 ### 6.4 実装関数マッピング（builder 向け）
 
+> **2026-07-31 変更: グループ種別プルダウンを UI から撤去**
+> グループ行ヘッダーの種別 select（`buildFilterGroupTypeSelect`）は、選択肢が実質1つ（新規追加は
+> `fieldValue` のみ、既存 `assignee` 行は `disabled`）でユーザーが操作できる余地が無く、
+> ヘッダー行の 140px を占有していたため撤去した。
+> - グループ種別は従来どおり `row.dataset.groupType` で保持（`collectFilterConfig` は元々
+>   dataset のみを参照しており本 select を読んでいないため、保存内容・config 形式は不変）
+> - 担当グループはグループ名の後ろに「（固定）」を添えて種別が固定であることを示す
+> - 空いた幅は対象フィールド列に配分（列構成: ⠿ / グループ名 / 対象フィールド / 削除）。
+>   併せて `.kc-config-select` の共通 `max-width: 480px` をこの select だけ解除
+> - `buildFilterGroupTypeSelect` 関数自体は将来の種別追加に備えて残置（呼び出し元なし）
+
 | 新設/流用 | 関数名（案） | 参考にする既存関数 |
 |---|---|---|
 | 新設 | `buildFilterGroupRow(group)` | `buildFieldValueRow`（`config.js:1387-`）の構造踏襲 |
-| 新設 | `buildFilterGroupTypeSelect(group)` | `buildPermissionPermSelect`（`config.js:1243-1268`）のシンプルな select 生成パターン |
+| 新設 → **2026-07-31 廃止** | `buildFilterGroupTypeSelect(group)` | `buildPermissionPermSelect`（`config.js:1243-1268`）のシンプルな select 生成パターン |
 | 新設 | `buildFilterTargetFieldSelect(group)` | `buildPermissionFieldSelect`（`config.js:1206-1236`）の欠損フィールド警告パターン流用 |
 | 新設 | `buildFilterItemRow(group, item)` | `buildFieldValueRow` 内の値セル部分を抽出・簡略化（権限・色列は不要） |
 | 流用（そのまま呼び出し） | `getFieldValueOptions(fieldCode, fieldType)` | `config.js:1333-1344` |

@@ -1444,12 +1444,20 @@ body {
   transition: background 0.1s;
 }
 
-/* 列構成（DOM 追加順）: [1]ハンドル24px [2]種別select140px [3]グループ名表示(自動採用ラベル)
-   [4].kc-filter-group-field-wrap（対象フィールド select。"ラベル (フィールドコード)" 形式で
-   長くなりがちで見切れの原因だった列） [5]削除ボタン70px。
-   [3][4] は minmax の下限で最低限の可読幅を確保しつつ、[4] に大きい fr 比重(1.6)を与えて
+/* 列構成（DOM 追加順）: [1]ハンドル24px [2]グループ名表示(自動採用ラベル。担当グループは
+   「（固定）」注記を含む .kc-filter-group-label-cell) [3].kc-filter-group-field-wrap
+   （対象フィールド select。"ラベル (フィールドコード)" 形式で長くなりがちで見切れの原因だった列）
+   [4]削除ボタン70px。
+   [2][3] は minmax の下限で最低限の可読幅を確保しつつ、[3] に大きい fr 比重(2.2)を与えて
    対象フィールド select を優先的に広げる（2026-07 実機フィードバック: 対象フィールドの幅不足）。
-   下限値は @media (max-width: 600px) の実測幅でも合計が収まるよう算出済み（後述コメント参照）。 */
+   下限値の根拠（@media (max-width: 600px) 時にはみ出さないこと）:
+     viewport 600 - container padding 12×2 = 576
+       - section padding 16×2 + border 1×2 = 542
+       - .kc-filter-config-section padding 16×2 + border 1×2 = 508
+       - .kc-filter-group-row border 1×2 = 506
+       - このヘッダー行の padding 10×2 = 486 ← 利用可能な内容幅
+     列の下限合計 = 24 + 100 + 260 + 70 + gap 8×3 = 478 ≦ 486 ✔
+   → 下限値を増やすときは必ずこの 486 を超えないか再計算すること。 */
 /* 2026-07 実機フィードバック: 削除ボタンが 2 行に折り返し、行の高さが崩れていた。
    原因は共通クラス .kc-config-btn の横 padding 24px×2 が、この列幅 70px に対して
    過大だったこと（内容領域 22px < 「削除」の 28px）。列幅は狭幅時の合計計算
@@ -1460,9 +1468,11 @@ body {
   white-space: nowrap;
 }
 
+/* 2026-07-31: 種別プルダウン（140px 列）を廃止し 5列→4列に。空いた幅は対象フィールド列に回す
+   （石川さん報告の「対象フィールドの幅が足りない」対応。列は ⠿ / グループ名 / 対象フィールド / 削除） */
 .kc-filter-group-row-header {
   display: grid;
-  grid-template-columns: 24px 140px minmax(80px, 1fr) minmax(140px, 1.6fr) 70px;
+  grid-template-columns: 24px minmax(100px, 1fr) minmax(260px, 2.2fr) 70px;
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
@@ -1474,11 +1484,22 @@ body {
 .kc-filter-group-field-wrap {
   min-width: 0;
 }
+/* 対象フィールド select は列幅いっぱいまで伸ばす。
+   .kc-config-select の共通 max-width:480px が効いたままだと、種別プルダウン廃止で広げた列幅
+   （1100px コンテナで 581px）のうち 480px 以降が select に届かず、見切れが残ってしまう（2026-07-31）。 */
 .kc-filter-group-field-wrap select {
   width: 100%;
+  max-width: none;
 }
 
 /* グループ名は選択フィールドのフィールド名を自動表示する（手動入力欄は廃止。2026-07 フィードバック） */
+.kc-filter-group-label-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
 .kc-filter-group-label-display {
   font-size: 13px;
   font-weight: 600;
@@ -1487,6 +1508,15 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* 担当グループ（種別固定）であることの補足表示。種別プルダウン廃止の代替（2026-07-31） */
+.kc-filter-group-fixed-note {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: normal;
+  color: #7b8794;
+  white-space: nowrap;
 }
 
 .kc-filter-group-items-section {
