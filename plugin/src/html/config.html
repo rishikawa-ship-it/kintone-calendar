@@ -28,8 +28,38 @@
       <form id="kc-config-form" novalidate>
 
         <!-- ====================================================
+          タブバー (REQ_config-tabs FR-1/FR-4)
+          パネルは DOM から外さず CSS で非表示にする。収集・反映・書き出し/取り込みは
+          全パネルの DOM を参照するため、DOM から外すと保存内容が壊れる。
+        ==================================================== -->
+        <div class="kc-config-tabs-bar" id="kc-config-tabs-bar">
+          <div class="kc-config-tablist" role="tablist" aria-label="設定カテゴリ">
+            <button type="button" class="kc-config-tab" role="tab" data-tab="basic"
+              id="kc-tab-basic" aria-controls="kc-panel-basic" aria-selected="true">基本設定</button>
+            <button type="button" class="kc-config-tab" role="tab" data-tab="display"
+              id="kc-tab-display" aria-controls="kc-panel-display" aria-selected="false">表示・絞り込み</button>
+            <button type="button" class="kc-config-tab" role="tab" data-tab="permission"
+              id="kc-tab-permission" aria-controls="kc-panel-permission" aria-selected="false">権限・色分け</button>
+            <button type="button" class="kc-config-tab" role="tab" data-tab="overlap"
+              id="kc-tab-overlap" aria-controls="kc-panel-overlap" aria-selected="false">重複チェック</button>
+            <button type="button" class="kc-config-tab" role="tab" data-tab="view"
+              id="kc-tab-view" aria-controls="kc-panel-view" aria-selected="false">ビュー個別設定</button>
+            <button type="button" class="kc-config-tab" role="tab" data-tab="workflow"
+              id="kc-tab-workflow" aria-controls="kc-panel-workflow" aria-selected="false">ワークフロー</button>
+            <button type="button" class="kc-config-tab" role="tab" data-tab="io"
+              id="kc-tab-io" aria-controls="kc-panel-io" aria-selected="false">書き出し・取り込み</button>
+          </div>
+          <label class="kc-config-tabs-expand-label" for="kc-config-tabs-expand">
+            <input type="checkbox" id="kc-config-tabs-expand" />
+            すべて表示（Ctrl+F 用）
+          </label>
+        </div>
+
+        <!-- ====================================================
           セクション 1: 基本設定 (フィールドマッピング)
         ==================================================== -->
+        <div class="kc-config-panel kc-config-panel--basic" id="kc-panel-basic"
+          role="tabpanel" aria-labelledby="kc-tab-basic" data-tab="basic">
         <section class="kc-config-section">
           <h2 class="kc-config-section-title">基本設定（フィールドマッピング）</h2>
           <p class="kc-config-section-desc">
@@ -137,11 +167,14 @@
             <p class="kc-config-hint">MULTI_LINE_TEXT 型のフィールドが表示されます。</p>
           </div>
         </section>
+        </div><!-- /#kc-panel-basic -->
 
         <!-- ====================================================
           セクション 2: 表示・絞り込み
           (検索対象フィールド設定 REQ_search-bar v3 + フィルタ設定 REQ_checkbox-filter §6)
         ==================================================== -->
+        <div class="kc-config-panel kc-config-panel--display" id="kc-panel-display"
+          role="tabpanel" aria-labelledby="kc-tab-display" data-tab="display" hidden>
         <section class="kc-config-section">
           <h2 class="kc-config-section-title">表示・絞り込み</h2>
           <p class="kc-config-section-desc">
@@ -194,11 +227,14 @@
             </div>
           </div>
         </section>
+        </div><!-- /#kc-panel-display -->
 
         <!-- ====================================================
           セクション 3: 権限・色分け
           (権限フィールド設定 / 権限ユーザー設定 / デフォルト権限設定 の3カード並列)
         ==================================================== -->
+        <div class="kc-config-panel kc-config-panel--permission" id="kc-panel-permission"
+          role="tabpanel" aria-labelledby="kc-tab-permission" data-tab="permission" hidden>
         <section class="kc-config-section">
           <h2 class="kc-config-section-title">権限・色分け</h2>
           <p class="kc-config-section-desc">
@@ -307,10 +343,13 @@
             </div>
           </div>
         </section>
+        </div><!-- /#kc-panel-permission -->
 
         <!-- ====================================================
           セクション 4: 重複チェック設定 (REQ_dnd-overlap-block v5)
         ==================================================== -->
+        <div class="kc-config-panel kc-config-panel--overlap" id="kc-panel-overlap"
+          role="tabpanel" aria-labelledby="kc-tab-overlap" data-tab="overlap" hidden>
         <section class="kc-config-section">
           <h2 class="kc-config-section-title">重複チェック設定</h2>
           <p class="kc-config-section-desc">
@@ -382,12 +421,15 @@
           </div>
 
         </section>
+        </div><!-- /#kc-panel-overlap -->
 
         <!-- ====================================================
           セクション 5: ビュー個別設定
           (カレンダータイトル・初期ビューのみに純化。権限/フィルタ系は
            アプリ全体設定のためセクション2/3へ移動済み)
         ==================================================== -->
+        <div class="kc-config-panel kc-config-panel--view" id="kc-panel-view"
+          role="tabpanel" aria-labelledby="kc-tab-view" data-tab="view" hidden>
         <section class="kc-config-section" id="kc-per-view-section">
           <h2 class="kc-config-section-title">ビュー個別設定</h2>
           <p class="kc-config-section-desc">
@@ -485,11 +527,16 @@
             </div>
           </div>
         </section>
+        </div><!-- /#kc-panel-view -->
 
         <!-- ====================================================
           セクション 6: ワークフロー
           REQ_workflow-actions §3.10, §11 改訂4（旧セクション7「フィールド連動」を統合）
+          ワークフローは運用開始時に単体で相当の高さになる見込みのため、
+          書き出し・取り込みとはタブを分ける（2026-07-31 石川さん指示）
         ==================================================== -->
+        <div class="kc-config-panel kc-config-panel--workflow" id="kc-panel-workflow"
+          role="tabpanel" aria-labelledby="kc-tab-workflow" data-tab="workflow" hidden>
         <section class="kc-config-section">
           <h2 class="kc-config-section-title">ワークフロー</h2>
           <p class="kc-config-section-desc">
@@ -521,10 +568,13 @@
             </button>
           </div>
         </section>
+        </div><!-- /#kc-panel-workflow -->
 
         <!-- ====================================================
           セクション 7: 設定の書き出し・取り込み (REQ_config-export-import)
         ==================================================== -->
+        <div class="kc-config-panel kc-config-panel--io" id="kc-panel-io"
+          role="tabpanel" aria-labelledby="kc-tab-io" data-tab="io" hidden>
         <section class="kc-config-section" id="kc-config-io-section">
           <h2 class="kc-config-section-title">設定の書き出し・取り込み</h2>
           <p class="kc-config-section-desc">
@@ -552,6 +602,7 @@
             </div>
           </div>
         </section>
+        </div><!-- /#kc-panel-io -->
 
         <!-- ====================================================
           操作ボタン (ページ最下部)

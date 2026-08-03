@@ -101,6 +101,17 @@
  *     140px 列を占有していたため。グループ種別は従来どおり row.dataset.groupType で保持し
  *     collectFilterConfig も元から dataset のみを参照していたため、保存形式は不変（version 13 のまま）。
  *     担当グループはグループ名の後ろの「（固定）」表示で種別固定を示す。空いた幅は対象フィールド列へ配分。
+ *   - REQ_config-tabs（2026-07-31）: 設定画面を7タブ（基本設定／表示・絞り込み／権限・色分け／
+ *     重複チェック／ビュー個別設定／ワークフロー／書き出し・取り込み）に再編し、タブとセクション
+ *     見出しにカテゴリ色を付けた。ワークフローは運用開始時に単体で相当の高さになる見込みのため
+ *     書き出し・取り込みとは別タブにする。
+ *     保存形式は変更しない（version 13 のまま。UI のみの変更）。
+ *     ★ 非選択パネルは DOM から外さず hidden 属性で隠すだけにすること。collectXxx()/applyXxx()・
+ *       書き出し／取り込みは全パネルの DOM を参照するため、DOM から外すと保存内容が壊れる。
+ *     validateConfig() / collectAndValidateCurrentConfig() の戻り値に tabIds を追加（既存の
+ *     valid/errors は不変＝呼び出し元は無改修）。保存・書き出しの失敗時は markTabErrors() で
+ *     該当タブへ自動遷移しバッジを付ける（非表示タブでエラーになって原因が見えない事故の防止）。
+ *     Ctrl+F でページ内検索したい場合のために「すべて表示」トグルで全パネルを展開できる。
  * v12 変更点 (REQ_overlap-modeB-filtercond):
  *   - fieldMapping に overlapRefTableFilterCond を追加（モード B ステップ3クエリへの AND 連結用、自動取得）
  *   - v11→v12 マイグレーション: overlapRefTableFilterCond 未定義時は '' で補完
@@ -624,6 +635,173 @@
   function clearError() {
     elError.textContent = '';
     elError.classList.remove('kc-config-error-active', 'kc-config-success-active');
+    clearTabErrors();
+  }
+
+  /* ====================================================================
+   * タブ (REQ_config-tabs)
+   * 機能カテゴリごとにパネルを切り替える。
+   * ★ 重要: 非選択パネルは DOM から外さず hidden 属性で隠すだけにすること。
+   *   collectXxx() / applyXxx() / 書き出し・取り込みは全パネルの DOM を参照するため、
+   *   DOM から外すと保存内容が壊れる（REQ_config-tabs FR-3）。
+   * ==================================================================== */
+
+  /** タブ ID の並び順（HTML の data-tab と一致させる。矢印キー移動の順序もこれに従う） */
+  var TAB_IDS = ['basic', 'display', 'permission', 'overlap', 'view', 'workflow', 'io'];
+
+  /** 現在選択中のタブ ID */
+  var activeTabId = 'basic';
+
+  /** 「すべて表示」（全パネル展開）状態 */
+  var tabsExpanded = false;
+
+  /**
+   * sessionStorage のキーを返す（アプリ単位で分ける）
+   * @param {string} suffix
+   * @returns {string}
+   */
+  function _tabStorageKey(suffix) {
+    return 'kc-config-' + suffix + '-app' + (getAppIdFromUrl() || '');
+  }
+
+  /**
+   * sessionStorage への読み書き（プライベートブラウズ等での例外を無視する）
+   */
+  function _tabStorageGet(suffix) {
+    try { return window.sessionStorage.getItem(_tabStorageKey(suffix)); } catch (e) { return null; }
+  }
+  function _tabStorageSet(suffix, value) {
+    try { window.sessionStorage.setItem(_tabStorageKey(suffix), value); } catch (e) { /* 保存できなくても機能は成立する */ }
+  }
+
+  /**
+   * タブボタン要素を返す
+   * @param {string} tabId
+   * @returns {HTMLElement|null}
+   */
+  function _getTabButton(tabId) {
+    return document.querySelector('.kc-config-tab[data-tab="' + tabId + '"]');
+  }
+
+  /**
+   * タブパネル要素を返す
+   * @param {string} tabId
+   * @returns {HTMLElement|null}
+   */
+  function _getTabPanel(tabId) {
+    return document.querySelector('.kc-config-panel[data-tab="' + tabId + '"]');
+  }
+
+  /**
+   * タブを選択する。
+   * 「すべて表示」ON のときは切り替えではなく該当パネルへのスクロールとして振る舞う
+   * （全パネルが表示済みのため。REQ_config-tabs FR-4）。
+   * @param {string} tabId
+   * @param {{ scroll?: boolean }} [options] - scroll: 選択後にパネル先頭へスクロールするか
+   */
+  function activateTab(tabId, options) {
+    if (TAB_IDS.indexOf(tabId) === -1) { tabId = 'basic'; }
+    activeTabId = tabId;
+    _tabStorageSet('tab', tabId);
+
+    TAB_IDS.forEach(function (id) {
+      var btn = _getTabButton(id);
+      var panel = _getTabPanel(id);
+      var isActive = (id === tabId);
+      if (btn) { btn.setAttribute('aria-selected', isActive ? 'true' : 'false'); }
+      if (panel) {
+        // hidden 属性のみで制御する（DOM からは外さない）
+        if (isActive) { panel.removeAttribute('hidden'); }
+        else { panel.setAttribute('hidden', ''); }
+      }
+    });
+
+    var doScroll = !!(options && options.scroll);
+    if (doScroll || tabsExpanded) {
+      var target = _getTabPanel(tabId);
+      if (target) { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    }
+  }
+
+  /**
+   * 「すべて表示」の ON/OFF を適用する
+   * @param {boolean} expanded
+   */
+  function setTabsExpanded(expanded) {
+    tabsExpanded = !!expanded;
+    var container = document.querySelector('.kc-config-container');
+    if (container) { container.classList.toggle('kc-tabs-expanded', tabsExpanded); }
+    var cb = document.getElementById('kc-config-tabs-expand');
+    if (cb) { cb.checked = tabsExpanded; }
+    _tabStorageSet('tabs-expanded', tabsExpanded ? '1' : '0');
+  }
+
+  /**
+   * バリデーションエラーが出たタブに印を付け、最初のタブへ移動する（REQ_config-tabs FR-5）
+   * @param {Array<string>} tabIds
+   */
+  function markTabErrors(tabIds) {
+    clearTabErrors();
+    var ids = (tabIds || []).filter(function (id) { return TAB_IDS.indexOf(id) !== -1; });
+    if (ids.length === 0) { return; }
+    ids.forEach(function (id) {
+      var btn = _getTabButton(id);
+      if (btn) { btn.classList.add('kc-config-tab--has-error'); }
+    });
+    // 非表示タブでエラーになって原因が画面上に見えない事故を防ぐため、必ず該当タブを見せる
+    activateTab(ids[0], { scroll: tabsExpanded });
+  }
+
+  /** タブのエラー印をすべて消す */
+  function clearTabErrors() {
+    var btns = document.querySelectorAll('.kc-config-tab--has-error');
+    Array.prototype.forEach.call(btns, function (btn) {
+      btn.classList.remove('kc-config-tab--has-error');
+    });
+  }
+
+  /**
+   * タブ UI を初期化する（クリック・キーボード・「すべて表示」トグルの配線と状態復元）
+   */
+  function initTabs() {
+    var btns = document.querySelectorAll('.kc-config-tab');
+    if (btns.length === 0) { return; }
+
+    Array.prototype.forEach.call(btns, function (btn) {
+      btn.addEventListener('click', function () {
+        activateTab(btn.dataset.tab);
+      });
+      // ← / → で隣のタブへ移動する
+      btn.addEventListener('keydown', function (e) {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') { return; }
+        e.preventDefault();
+        var idx = TAB_IDS.indexOf(btn.dataset.tab);
+        if (idx === -1) { return; }
+        var nextIdx = (e.key === 'ArrowLeft')
+          ? (idx - 1 + TAB_IDS.length) % TAB_IDS.length
+          : (idx + 1) % TAB_IDS.length;
+        var nextId = TAB_IDS[nextIdx];
+        activateTab(nextId);
+        var nextBtn = _getTabButton(nextId);
+        if (nextBtn) { nextBtn.focus(); }
+      });
+    });
+
+    var cb = document.getElementById('kc-config-tabs-expand');
+    if (cb) {
+      cb.addEventListener('change', function () {
+        setTabsExpanded(cb.checked);
+        if (!cb.checked) {
+          // 展開を解除したときは選択中タブだけが残る（activateTab で hidden を再適用）
+          activateTab(activeTabId);
+        }
+      });
+    }
+
+    // 状態復元（sessionStorage）
+    setTabsExpanded(_tabStorageGet('tabs-expanded') === '1');
+    var saved = _tabStorageGet('tab');
+    activateTab(TAB_IDS.indexOf(saved) !== -1 ? saved : 'basic');
   }
 
   /**
@@ -803,34 +981,45 @@
    */
   function validateConfig(fieldMapping, viewConfig) {
     var errors = [];
+    // エラーの発生タブ（REQ_config-tabs FR-5）。既存の valid/errors は変えず追加のみ
+    var tabIds = [];
+    function _addTab(tabId) {
+      if (tabIds.indexOf(tabId) === -1) { tabIds.push(tabId); }
+    }
 
     // V1: 必須フィールドマッピングチェック
     if (!fieldMapping.fieldTitle) {
       errors.push('「タイトルフィールド」は必須項目です。');
+      _addTab('basic');
     }
     if (!fieldMapping.fieldStart) {
       errors.push('「開始日時フィールド」は必須項目です。');
+      _addTab('basic');
     }
     if (!fieldMapping.fieldEnd) {
       errors.push('「終了日時フィールド」は必須項目です。');
+      _addTab('basic');
     }
 
     // V2: 開始と終了が同一でないかチェック
     if (fieldMapping.fieldStart && fieldMapping.fieldEnd &&
         fieldMapping.fieldStart === fieldMapping.fieldEnd) {
       errors.push('「開始日時フィールド」と「終了日時フィールド」に同じフィールドを指定することはできません。');
+      _addTab('basic');
     }
 
     // V3: ビュー個別設定の defaultView バリデーション
     if (viewConfig && viewConfig.defaultView) {
       if (['month', 'week', 'day'].indexOf(viewConfig.defaultView) === -1) {
         errors.push('「初期ビュー」の値が不正です。月 / 週 / 日 のいずれかを選択してください。');
+        _addTab('view');
       }
     }
 
     return {
       valid: errors.length === 0,
-      errors: errors
+      errors: errors,
+      tabIds: tabIds
     };
   }
 
@@ -5978,10 +6167,11 @@
     // §11.1: トリガー種別ごとに appAction/setField いずれかのバリデーションを適用する）
     var workflowError = validateAllWorkflows(currentConfig.workflows || []);
     if (workflowError) {
-      return { valid: false, errors: [workflowError] };
+      // ワークフローは「ワークフロー」タブ（REQ_config-tabs FR-5）
+      return { valid: false, errors: [workflowError], tabIds: ['workflow'] };
     }
 
-    return { valid: true, errors: [] };
+    return { valid: true, errors: [], tabIds: [] };
   }
 
   /**
@@ -6006,6 +6196,7 @@
       newViewName = elNewViewName.value.trim();
       if (!newViewName) {
         showError('新規ビュー名を入力してください。');
+        markTabErrors(['view']);
         return false;
       }
       var sameName = Object.keys(availableViews).some(function (name) {
@@ -6013,6 +6204,7 @@
       });
       if (sameName) {
         showError('「' + newViewName + '」は既に存在します。別の名前を入力してください。');
+        markTabErrors(['view']);
         return false;
       }
     }
@@ -6020,6 +6212,8 @@
     var collectResult = collectAndValidateCurrentConfig();
     if (!collectResult.valid) {
       showError(collectResult.errors.join('\n'));
+      // 非表示タブでエラーになった場合に原因が見えないのを防ぐ（REQ_config-tabs FR-5）
+      markTabErrors(collectResult.tabIds || []);
       return false;
     }
 
@@ -6331,6 +6525,8 @@
     var collectResult = collectAndValidateCurrentConfig();
     if (!collectResult.valid) {
       showError('書き出しを中止しました。以下のエラーを解消してください。\n' + collectResult.errors.join('\n'));
+      // 保存時と同様に、エラーが出たタブへ誘導する（REQ_config-tabs FR-5）
+      markTabErrors(collectResult.tabIds || []);
       return;
     }
 
@@ -6833,6 +7029,11 @@
    * 5. ボタン初期状態を applyViewConfig の結果に合わせて設定
    */
   async function init() {
+    // 0. タブ UI を先に初期化する（REQ_config-tabs）。
+    // 以降の非同期処理（loadFields 等）を待たずに正しいタブが見えるようにするため最初に行う。
+    // パネルは hidden 属性だけで隠すので、この時点以降の applyXxx() は非表示タブにも問題なく効く。
+    initTabs();
+
     // 初期状態: 「保存」を disabled にしておく (refreshPerViewSelect 後に確定)
     setSubmitButtonsState(true);
 

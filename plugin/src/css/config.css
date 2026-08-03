@@ -121,6 +121,133 @@ body {
 }
 
 /* ====================================================================
+ * タブ (REQ_config-tabs)
+ * 機能カテゴリごとにパネルを切り替える。パネルは DOM から外さず hidden 属性で隠す
+ * （収集・反映・書き出し/取り込みが全パネルの DOM を参照するため）。
+ * 色は「タブの下線・文字色」「セクション見出しの左ボーダー＋淡いティント」にのみ使う。
+ * 入力欄が密集する画面で広い面積に色を敷くとコントラストと可読性が落ちるため、
+ * 背景のベタ塗りはしない（REQ_config-tabs FR-2）。
+ * ==================================================================== */
+
+.kc-config-tabs-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid #d8dce4;
+}
+
+.kc-config-tablist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kc-config-tab {
+  /* button の既定スタイルを打ち消す（.kc-config-btn は継承しない） */
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: bold;
+  font-family: inherit;
+  color: #5a6470;
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  border-radius: 4px 4px 0 0;
+  margin-bottom: -2px;   /* タブバーの下線に重ねる */
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+
+.kc-config-tab:hover {
+  color: #333;
+  background: #eef1f6;
+}
+
+.kc-config-tab:focus-visible {
+  outline: 2px solid #0078d4;
+  outline-offset: -2px;
+}
+
+.kc-config-tab[aria-selected="true"] {
+  color: var(--kc-tab-accent, #0078d4);
+  background: #fff;
+  border-bottom-color: var(--kc-tab-accent, #0078d4);
+}
+
+/* 保存時のバリデーションエラーが発生したタブに付ける印（REQ_config-tabs FR-5）。
+   非表示タブでエラーになって原因が画面上に見えない事故を防ぐための手掛かり。 */
+.kc-config-tab--has-error::after {
+  content: '●';
+  margin-left: 6px;
+  font-size: 10px;
+  color: #d93025;
+  vertical-align: 1px;
+}
+
+/* タブごとのアクセント色 */
+.kc-config-tab[data-tab="basic"]      { --kc-tab-accent: #1976d2; }
+.kc-config-tab[data-tab="display"]    { --kc-tab-accent: #2e7d32; }
+.kc-config-tab[data-tab="permission"] { --kc-tab-accent: #e65100; }
+.kc-config-tab[data-tab="overlap"]    { --kc-tab-accent: #6a1b9a; }
+.kc-config-tab[data-tab="view"]       { --kc-tab-accent: #00838f; }
+.kc-config-tab[data-tab="workflow"]   { --kc-tab-accent: #ad1457; }
+.kc-config-tab[data-tab="io"]         { --kc-tab-accent: #546e7a; }
+
+/* 「すべて表示」トグル（Ctrl+F でページ内検索したいとき用） */
+.kc-config-tabs-expand-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  font-size: 12px;
+  color: #5a6470;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kc-config-panel[hidden] {
+  display: none;
+}
+
+/* 「すべて表示」ON: 全パネルを縦積み表示する（従来の見た目に戻る）。
+   .kc-tabs-expanded（クラス2つ）＋[hidden] で上のルールより詳細度が高い。 */
+.kc-tabs-expanded .kc-config-panel[hidden] {
+  display: block;
+}
+
+/* パネルごとのアクセント色・見出しティント */
+.kc-config-panel--basic      { --kc-panel-accent: #1976d2; --kc-panel-tint: rgba(25, 118, 210, 0.07); }
+.kc-config-panel--display    { --kc-panel-accent: #2e7d32; --kc-panel-tint: rgba(46, 125, 50, 0.07); }
+.kc-config-panel--permission { --kc-panel-accent: #e65100; --kc-panel-tint: rgba(230, 81, 0, 0.07); }
+.kc-config-panel--overlap    { --kc-panel-accent: #6a1b9a; --kc-panel-tint: rgba(106, 27, 154, 0.07); }
+.kc-config-panel--view       { --kc-panel-accent: #00838f; --kc-panel-tint: rgba(0, 131, 143, 0.07); }
+.kc-config-panel--workflow   { --kc-panel-accent: #ad1457; --kc-panel-tint: rgba(173, 20, 87, 0.07); }
+.kc-config-panel--io         { --kc-panel-accent: #546e7a; --kc-panel-tint: rgba(84, 110, 122, 0.07); }
+
+.kc-config-panel .kc-config-section-title {
+  color: var(--kc-panel-accent, #0078d4);
+  padding: 8px 12px;
+  margin: 0 0 14px;
+  background: var(--kc-panel-tint, transparent);
+  border-bottom: none;
+  border-left: 4px solid var(--kc-panel-accent, #0078d4);
+  border-radius: 0 4px 4px 0;
+}
+
+/* 見出しの padding-bottom 8px を前提にした負マージンを打ち消す
+   （ティント背景に説明文が食い込むため） */
+.kc-config-panel .kc-config-section-desc {
+  margin-top: 0;
+}
+
+/* ====================================================================
  * フィールドグループ
  * ==================================================================== */
 
@@ -1253,6 +1380,13 @@ body {
   .kc-config-btn {
     width: 100%;
     text-align: center;
+  }
+
+  /* タブは狭幅でも横スクロールさせず折り返す（.kc-config-btn の width:100% は
+     .kc-config-tab には効かない＝別クラスなので、タブだけ詰める） */
+  .kc-config-tab {
+    padding: 8px 10px;
+    font-size: 13px;
   }
 }
 
