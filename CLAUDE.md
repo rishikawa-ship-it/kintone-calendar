@@ -10,7 +10,7 @@ kintone レコードを Google Calendar 風に表示するカスタマイズ JS�
 
 ## 共通ルールの読み込み
 
-@../../claude-shared-rules/CLAUDE.md
+共通ルール（ハブ）は親ディレクトリの Claude_project\CLAUDE.md から読み込まれる。
 @../../claude-shared-rules/kintone-rules.md
 
 > **管理者＋サブエージェント方式で運用する**（詳細は `agent-orchestration-rules.md`）。主スレッド Claude はオーケストレーター役に徹し、設計・実装・レビューはサブエージェントへ委譲する。
