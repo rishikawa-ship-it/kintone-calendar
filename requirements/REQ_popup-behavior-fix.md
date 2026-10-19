@@ -15,6 +15,7 @@
 | 確定版 第1版 | 2026-05-27 | 案 B（独自モーダル化）採用確定。B-1/B-2 詳細設計追加。受入基準・未確定事項更新 |
 | 確定版 第2版 | 2026-05-27 | ユーザー確定事項を反映。表示方式 B-1（iframe）採用・B-2 不採用（将来代替案）。モーダルサイズ中央レスポンシブ確定。backdrop 外クリックで閉じる確定。受入基準を具体化。未確定事項を CSP 実機確認と iframe ヘッダー処理の 2 点に絞り込み |
 | 確定版 第3版 | 2026-05-27 | iframe 遷移監視による許可外遷移でのモーダル自動クローズ要件を追加（FR-3・AC-9・AC-10）。許可 URL パターン（正規表現）・load イベント監視ロジック設計を §8.7 に追加。未確定事項 Q3 に編集 URL 差異の実機確認を追記 |
+| 改訂1 | 2026-10-19 | 保存処理中は `_close()` / `_show()` を抑止（保存クリック後に新たに現れたエラー表示で失敗を検知する baseline 方式）。末尾「改訂1」節を参照。2026-10-19 本番で実機検証済み |
 
 ---
 
@@ -734,3 +735,40 @@ KC.Popup = {
 | `plugin/src/css/desktop.css:740–749` | `.kc-root.kc-expanded` スタイル（z-index: 9999） |
 | `plugin/src/css/desktop.css:562–568` | `.kc-event--ghost` スタイル（z-index: 9999） |
 | `DESIGN.md §8` | イベント処理仕様（`KC.Popup` の記載なし） |
+
+---
+
+## 改訂1: 保存処理中のクローズ抑止（2026-10-19）
+
+- 背景: ×・backdrop・ESC・許可外 URL 検知が `_close()` を無条件に呼び、iframe 破棄で Customine の保存直前/直後処理（別アプリ更新・Slack 通知等）が途中で中断され得た。
+- 判定: 保存クリックで `_savePending=true` と `_saveStartedAt=Date.now()` を記録。`_isSaving()` = `_savePending` かつ経過 90 秒未満（`SAVE_GUARD_TIMEOUT_MS = 90000`）。保存ボタンの class/aria/disabled は処理中も不変のため、ボタン状態では判定しない。
+- ガード: `_close()` 先頭で `_isSaving()` なら閉じずに案内表示して return（許可外 URL / cross-origin 経由の `_close()` も同じガード）。90 秒経過後は従来どおり閉じられる。
+- 成功検知（load ハンドラ・ポーリングの 2 か所）: URL が詳細画面へ遷移した時点で `_savePending=false` / `_saveStartedAt=null`（kintone は保存直後ハンドラの Promise 完了後に遷移するため、URL 変化 = 後処理完了）。成功後もモーダルは自動で閉じない（改訂8 固定仕様を維持）。
+- 失敗検知（baseline 方式）: 失敗時は URL が編集画面のままなので、「保存クリック後に新たに現れたエラー表示」で判定する。実機で確認した事実は次のとおり。
+  - kintone の必須未入力等の標準エラー: `.input-error-cybozu`（「必須です。」）と `.notifier-cybozu.notifier-error-cybozu`（「以下の入力内容にエラーがあるため保存できません。…」）の両方が出る。
+  - Customine の保存直前チェックで止められた場合: `.input-error-cybozu` のみ（例「貸与可能台数を超えています。…」）。notifier は出ない。
+  - 前回試行の notifier は次に保存を押すまで DOM に残る（保存クリック時点で既に存在しうる）ため、「エラー表示の有無」では判定できない。
+  - 実装: 保存クリック時（capture）に、その時点で表示中（`getBoundingClientRect().width > 0`）の上記 2 種の要素を `_saveErrorBaseline`（Set）に記録する。`_attachSaveHandler` が iframe の `doc.body` に張る MutationObserver（`_errorObserver`。`childList: true, subtree: true, attributes: true, attributeFilter: ['class','style']`）のコールバックで、`_savePending` 中に表示中の上記 2 種の要素のうち baseline に含まれないものが 1 つでもあれば「保存失敗/キャンセル」とみなし、`_savePending=false` / `_saveStartedAt=null` / `_saveErrorBaseline=null` / `_updateSavingUi()` で解除する。コールバックは `querySelectorAll` 2 回程度に留める。ロードごとに張り直し（既存 `_errorObserver` / `_saveObserver` は disconnect してから）、`_close()` / `_show()` で解放。
+- 安全側の設計: 保存と無関係なエラー表示（baseline 外の表示中エラー要素）でも解除側（閉じられる側）に倒す。誤検知は「保存中に閉じられてしまう」方向、見逃しは最長 90 秒のタイムアウトで解消する方向に限定され、閉じられない状態が固着しない。
+- `_show()` ガード: 先頭で `_isSaving()` なら `_showSavingNotice()` のみ行い return（保存中の連続オープンで iframe を破棄しない）。
+- 後始末の共通化: `_teardownWatchers()`（`_urlWatcher` の clearInterval、`_cancelObserver` / `_saveObserver` / `_errorObserver` の disconnect と null 化、`_savingNoticeTimer` の clearTimeout と案内要素の hidden 化）を `_close()` と `_show()`（旧 iframe を外す前）の両方から呼ぶ。
+- 自動検知経由の `_close({ auto: true })`: load ハンドラと `_checkIframeUrl`（1500ms ポーリング / hashchange）の許可外 URL・cross-origin 分岐は `auto: true` で呼び、ガードで止めても案内を表示しない（案内が 1.5 秒ごとに出続けるのを防ぐ）。×・backdrop・ESC・iframe 内キャンセルボタンは引数なし（案内を表示）。
+- UI: 保存中は ×ボタンに `kc-modal-close--saving`（opacity .4・not-allowed）と `aria-disabled="true"`（`_updateSavingUi()`。1500ms ポーリングでも呼びタイムアウト経過を反映）。閉じ操作時はヘッダー内に `div.kc-modal-saving-notice`（role="status"、「保存処理中です。完了までお待ちください」）を 1 つだけ生成し 2500ms 表示。
+- リセット: `_show()` / `_close()` で `_saveStartedAt=null` とし `_updateSavingUi()` を呼ぶ。
+- 実装: `plugin/src/js/desktop.js`（KC.Popup）、`plugin/src/css/desktop.css`（`.kc-modal-close--saving` / `.kc-modal-saving-notice`）。2026-10-19 本番で実機検証済み（下記）。
+
+### 改訂1 既知の制約
+
+- 保存中に別レコードを開く操作（予定クリック等）は `_show()` のガードで案内のみ表示して無視される。呼び出し元が先に URL ハッシュ（`record` 等）を更新する経路では、表示中のモーダルとハッシュがずれる場合がある。
+- 保存中にブラウザの「戻る」で `record` ハッシュだけ消えた場合、popstate 経由の `_close()` がガードで止まり、モーダルは開いたままハッシュだけ消えた状態になる場合がある。
+- テキストが「保存」の別ボタン（kintone 標準保存以外の a / button）をクリックしても保存待ちフラグが立ち、ガードが掛かる可能性がある（最長 90 秒、または新規エラー表示の出現で解除）。
+- 再保存時に kintone が同一のエラー表示要素を再利用して表示したままにする場合、baseline に含まれるため失敗として検知されず、90 秒のタイムアウトまでガードが残り得る。
+- 保存成功の検知は URL が詳細画面へ遷移したことによる。遷移しない成功ケース（想定外）では 90 秒のタイムアウトに依存する。
+
+### 改訂1 検証状況
+
+- `node --check plugin/src/js/desktop.js` および `npm run build:plugin` は通過。
+- **実機検証（2026-10-19、本番 704 のカレンダー新規作成ポップアップ、2027-03 枠のテストレコード）**
+  - Customine 保存直前チェックで止めた場合（input-error のみ・約 9 秒後に表示）: 保存クリック直後から ×/ESC/backdrop が抑止され案内が出る。エラー表示でガードが解除され × が通常状態に戻る ✓
+  - 保存成功（約 13 秒で詳細画面へ遷移）: 遷移までは抑止、遷移後に × の見た目が戻り、× で閉じられる ✓
+  - 未実施: 必須未入力（kintone notifier）での解除、前回 notifier が残った状態での再保存、保存中の連続オープン、90 秒タイムアウト。設計上は同じ検知経路で動く見込み。

@@ -337,6 +337,9 @@
       KC.Config.MAIL_LOGIN_USER_DEFAULT =
         (config.fieldMapping && config.fieldMapping.mailLoginUserDefault === true);
 
+      // ドラッグ操作（移動・リサイズ）許可設定 (fieldMapping.dndEnabled が存在しない場合は true: 既定 ON のため !== false 判定)
+      KC.Config.DND_ENABLED = !(config.fieldMapping && config.fieldMapping.dndEnabled === false);
+
       // DnD 重複チェック設定 (REQ_dnd-overlap-block §9B, version 9 以降)
       // version 8 以前の設定には overlapMode が存在しないため後方互換デフォルトを適用（NF-3）:
       //   overlapKeyFieldCode が空文字 → 'none'、非空 → 'fieldKey'（モード A として引き継ぐ）
@@ -396,6 +399,12 @@
    * @type {boolean}
    */
   KC.Config.MAIL_LOGIN_USER_DEFAULT = false;
+  /**
+   * ドラッグ操作（移動・リサイズ）許可フラグ
+   * loadFromPluginConfig で上書きされる。初期値は true（既定 ON。fieldMapping.dndEnabled === false のときのみ無効）
+   * @type {boolean}
+   */
+  KC.Config.DND_ENABLED = true;
   /**
    * デフォルト権限設定 (REQ_default-permission)
    * loadFromPluginConfig で上書きされる。null = ハードコードフォールバックを維持
@@ -1645,6 +1654,13 @@
    *   旧実装: window.open による別ウィンドウポップアップ（背面落ち問題あり）
    *   新実装: 同一 DOM 内 iframe オーバーレイモーダル（REQ_popup-behavior-fix §3 案 B-1）
    * ==================================================================== */
+  /**
+   * 保存処理中ガードのタイムアウト（ms）。
+   * 保存クリックからこの時間が経過してもなお URL 遷移/エラー通知が検知できない場合は
+   * ガードを解除し、従来どおりモーダルを閉じられるようにする（閉じられない状態の固着防止）。
+   */
+  var SAVE_GUARD_TIMEOUT_MS = 90000;
+
   KC.Popup = {
     /**
      * モーダル静的 DOM キャッシュ（シングルトン）。
@@ -1671,6 +1687,25 @@
      * _show() でリセット、_close() でもリセット。
      */
     _savePending: false,
+    /**
+     * 保存ボタンをクリックした時刻（Date.now() の ms。null = 保存待ちでない）。
+     * _isSaving() が「保存処理中」を判定する際の起点。_show()/_close()/保存成功・失敗検知でリセット。
+     */
+    _saveStartedAt: null,
+    /**
+     * 保存失敗検知用 MutationObserver（iframe 内に kintone のエラー通知が出現したか監視。
+     * null = 未使用 or 停止済み）。_attachSaveHandler で張り直し、_close() で disconnect する。
+     */
+    _errorObserver: null,
+    /**
+     * 保存クリック時点で既に表示されていたエラー表示要素（Set）。
+     * 失敗検知は「保存クリック後に新たに現れたエラー表示」で判定するため、
+     * クリック時に表示中だった前回試行の残骸（notifier 等）を除外する基準として使う。
+     * null = 保存待ちでない。
+     */
+    _saveErrorBaseline: null,
+    /** 保存中案内の自動非表示タイマー ID（_showSavingNotice / _teardownWatchers が管理）。 */
+    _savingNoticeTimer: null,
     /**
      * REQ_workflow-actions §8.3: 現在開いているモーダルが「新規作成」か「編集」かを示す。
      * 'create' | 'edit' | null（未オープン）。
@@ -1763,8 +1798,19 @@
      * 保存成功時は iframe が詳細画面（show#record=N、mode=edit なし）へ遷移するので、
      * その遷移を load ハンドラ / URL ポーリングで検知してモーダルを閉じる。
      *
-     * バリデーションエラー時は画面遷移が発生しないため、_savePending が true のまま残るが
-     * _close() は呼ばれず、ユーザーが修正して再度保存 → 遷移 → 閉じるという正しい動作になる。
+     * 保存クリック時は _savePending=true と _saveStartedAt を記録し、保存処理中は
+     * _close()（×・backdrop・ESC・許可外 URL 検知）を抑止する（_isSaving()、上限 SAVE_GUARD_TIMEOUT_MS）。
+     * 保存失敗/キャンセル（kintone の必須チェック・REST エラー・Customine 等の保存直前ハンドラによる
+     * 中止）では URL が編集画面のままとなり、iframe 内に次のエラー表示が出る。
+     *   - kintone 標準の保存失敗: .input-error-cybozu と .notifier-cybozu.notifier-error-cybozu の両方
+     *   - 保存直前ハンドラ（Customine 等）での中止: .input-error-cybozu のみ（notifier は出ない）
+     * 前回試行の notifier は次の保存まで DOM に残るため、「エラー表示の有無」ではなく
+     * 「保存クリック後に新たに現れたエラー表示」で判定する（保存クリック時に表示中だった要素を
+     * _saveErrorBaseline に記録し、MutationObserver（_errorObserver）で baseline 外の表示中要素を検知）。
+     * 検知したら _savePending/_saveStartedAt を解除し、再保存または閉じられる状態に戻す。
+     * 設計: 保存と無関係なエラー表示が出た場合でも解除側（閉じられる側）に倒す安全側の設計とする
+     * （誤ってガードが固着し閉じられなくなる方を避ける）。
+     * 保存成功（URL が詳細画面へ遷移）時は load ハンドラ/ポーリングが解除する。
      *
      * 【実機未検証】
      * kintone の保存ボタンのテキストは「保存」で固定だが、英語ロケール等では異なる可能性がある。
@@ -1783,6 +1829,12 @@
 
       // 保存ボタン（テキストが「保存」の button/a タグ）にフラグ立てリスナーを付与する。
       // capture phase で登録するがキャンセルと違い preventDefault は行わない。
+      // 既存の保存ボタン検知 observer が残っていれば解除してから張り直す（ロードごとに再呼び出しされるため）
+      if (KC.Popup._saveObserver) {
+        KC.Popup._saveObserver.disconnect();
+        KC.Popup._saveObserver = null;
+      }
+
       var bindSaveButtons = function () {
         var allEls = doc.querySelectorAll('a, button');
         var found = false;
@@ -1794,11 +1846,47 @@
           found = true;
           el.addEventListener('click', function () {
             _log('[KC.Popup] 保存ボタンを検知、保存待ちフラグを立てます');
+            // 保存クリック時点で表示中のエラー表示を baseline に記録（前回試行の残骸を失敗判定から除外）
+            KC.Popup._saveErrorBaseline = new Set(KC.Popup._collectVisibleErrors(doc));
             KC.Popup._savePending = true;
+            KC.Popup._saveStartedAt = Date.now();
+            KC.Popup._updateSavingUi();
           }, true); // capture phase（kintone ハンドラより前に実行されるが処理は通す）
         }
         return found;
       };
+
+      // 保存失敗/キャンセル検知: 保存クリック後に新たなエラー表示（baseline 外）が出現したら保存待ちを解除する。
+      // （保存直前ハンドラでキャンセルされた場合・REST エラーの場合は URL が編集画面のまま）
+      // 保存と無関係なエラー表示でも解除側（閉じられる側）に倒す安全側の設計。
+      // ページロードのたびに本関数が呼ばれるため、既存 observer は disconnect してから張り直す。
+      if (KC.Popup._errorObserver) {
+        KC.Popup._errorObserver.disconnect();
+        KC.Popup._errorObserver = null;
+      }
+      // コールバックは軽く保つ（保存待ち中のみ querySelectorAll 2 回 + 表示判定）。
+      var errObs = new MutationObserver(function () {
+        if (!KC.Popup._savePending) return;
+        var baseline = KC.Popup._saveErrorBaseline;
+        var current = KC.Popup._collectVisibleErrors(doc);
+        for (var i = 0; i < current.length; i++) {
+          if (!baseline || !baseline.has(current[i])) {
+            _log('[KC.Popup] 保存失敗/キャンセルを検知、保存中ガードを解除します');
+            KC.Popup._savePending = false;
+            KC.Popup._saveStartedAt = null;
+            KC.Popup._saveErrorBaseline = null;
+            KC.Popup._updateSavingUi();
+            return;
+          }
+        }
+      });
+      errObs.observe(doc.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'style']
+      });
+      KC.Popup._errorObserver = errObs;
 
       // 即時試行（DOM 構築済みの場合）
       if (!bindSaveButtons()) {
@@ -1808,11 +1896,119 @@
           bindSaveButtons();
         });
         obs.observe(doc.body, { childList: true, subtree: true });
-        // MutationObserver は _cancelObserver とは別管理。_close() で disconnect は不要
-        // （iframe が DOM から削除されると自動的に無効化されるため）。
-        // ただし明示的に解放したい場合は _saveObserver として管理する。
+        // MutationObserver は _cancelObserver とは別管理（_teardownWatchers / 再呼び出し時に disconnect する）
+        // 解放は _teardownWatchers() に集約している。
         KC.Popup._saveObserver = obs;
       }
+    },
+
+    /**
+     * iframe 内で現在表示中のエラー表示要素（.notifier-cybozu.notifier-error-cybozu / .input-error-cybozu）を返す。
+     * 表示中 = getBoundingClientRect().width > 0。
+     * @param {Document} doc - iframe の contentDocument
+     * @returns {Element[]}
+     */
+    _collectVisibleErrors: function (doc) {
+      var result = [];
+      var lists = [
+        doc.querySelectorAll('.notifier-cybozu.notifier-error-cybozu'),
+        doc.querySelectorAll('.input-error-cybozu')
+      ];
+      for (var i = 0; i < lists.length; i++) {
+        for (var j = 0; j < lists[i].length; j++) {
+          if (lists[i][j].getBoundingClientRect().width > 0) result.push(lists[i][j]);
+        }
+      }
+      return result;
+    },
+
+    /**
+     * 監視系の後始末を共通化する（_close() と _show() から呼ぶ）。
+     * URL ポーリング・各 MutationObserver（cancel / save / error）・保存中案内のタイマーと表示を解放する。
+     */
+    _teardownWatchers: function () {
+      // ポーリング監視を停止（先に停止してから iframe 削除）。
+      // clearInterval を先に行うことで、削除後にポーリングが走り続けるリークを防ぐ。
+      if (KC.Popup._urlWatcher) clearInterval(KC.Popup._urlWatcher);
+      KC.Popup._urlWatcher = null;
+
+      // キャンセルボタン検知 / 保存ボタン検知 / 保存失敗検知の MutationObserver を解除
+      if (KC.Popup._cancelObserver) {
+        KC.Popup._cancelObserver.disconnect();
+        KC.Popup._cancelObserver = null;
+      }
+      if (KC.Popup._saveObserver) {
+        KC.Popup._saveObserver.disconnect();
+        KC.Popup._saveObserver = null;
+      }
+      if (KC.Popup._errorObserver) {
+        KC.Popup._errorObserver.disconnect();
+        KC.Popup._errorObserver = null;
+      }
+
+      // 保存中案内のタイマー解除と案内要素の非表示化
+      if (KC.Popup._savingNoticeTimer) {
+        clearTimeout(KC.Popup._savingNoticeTimer);
+        KC.Popup._savingNoticeTimer = null;
+      }
+      if (KC.Popup._modal) {
+        var notice = KC.Popup._modal.querySelector('.kc-modal-saving-notice');
+        if (notice) notice.setAttribute('hidden', '');
+      }
+    },
+
+    /**
+     * 保存処理中かどうか。保存ボタンクリック後、成功/失敗が未検知で、かつ
+     * SAVE_GUARD_TIMEOUT_MS 未満であれば true。true の間は _close() が抑止される。
+     * @returns {boolean}
+     */
+    _isSaving: function () {
+      return !!(
+        this._savePending &&
+        this._saveStartedAt !== null &&
+        (Date.now() - this._saveStartedAt) < SAVE_GUARD_TIMEOUT_MS
+      );
+    },
+
+    /**
+     * 保存処理中の見た目を ×ボタンへ反映する（無効風表示 + aria-disabled）。
+     * 状態が変わる箇所とポーリング（タイムアウト経過の反映）から呼ぶ。
+     */
+    _updateSavingUi: function () {
+      if (!this._modal) return;
+      var btn = this._modal.querySelector('.kc-modal-close');
+      if (!btn) return;
+      if (this._isSaving()) {
+        btn.classList.add('kc-modal-close--saving');
+        btn.setAttribute('aria-disabled', 'true');
+      } else {
+        btn.classList.remove('kc-modal-close--saving');
+        btn.removeAttribute('aria-disabled');
+      }
+    },
+
+    /**
+     * 保存処理中に閉じ操作が行われたときの案内をヘッダー内に一時表示する（2500ms）。
+     * 要素は 1 つだけ生成して使い回し、連打されても増やさない。
+     */
+    _showSavingNotice: function () {
+      if (!this._modal) return;
+      var header = this._modal.querySelector('.kc-modal-header');
+      if (!header) return;
+      var notice = header.querySelector('.kc-modal-saving-notice');
+      if (!notice) {
+        notice = document.createElement('div');
+        notice.className = 'kc-modal-saving-notice';
+        notice.setAttribute('role', 'status');
+        notice.textContent = '保存処理中です。完了までお待ちください';
+        header.insertBefore(notice, header.firstChild);
+      }
+      notice.removeAttribute('hidden');
+      if (this._savingNoticeTimer) clearTimeout(this._savingNoticeTimer);
+      this._savingNoticeTimer = setTimeout(function () {
+        notice.setAttribute('hidden', '');
+        KC.Popup._savingNoticeTimer = null;
+      }, 2500);
     },
 
     /**
@@ -1958,10 +2154,22 @@
      * @param {string} url - iframe に読み込む URL
      */
     _show: function (url) {
+      // 保存処理中は新たに開かない（連続オープンで保存中の iframe を破棄しない）。案内のみ表示する。
+      if (this._isSaving()) {
+        this._showSavingNotice();
+        return;
+      }
+
       this._init();
+
+      // 旧 iframe に紐づく監視（ポーリング・各 observer・案内タイマー）を、旧 iframe を外す前に解放する
+      this._teardownWatchers();
 
       // モーダルを開くときに保存待ちフラグ・ロードカウンタをリセット（前回の状態が残らないようにする）
       this._savePending = false;
+      this._saveStartedAt = null;
+      this._saveErrorBaseline = null;
+      this._updateSavingUi();
       this._loadCount = 0;
 
       // 既に iframe が残っている場合は削除してからやり直す（連続クリック対応）
@@ -2036,6 +2244,9 @@
           if (KC.Popup._savePending && KC.Popup._isSaveSuccessUrl(loc)) {
             _log('[KC.Popup] 保存成功を検知、カレンダー再描画してモーダルを閉じます:', loc.pathname + loc.hash);
             KC.Popup._savePending = false;
+            KC.Popup._saveStartedAt = null;
+            KC.Popup._saveErrorBaseline = null;
+            KC.Popup._updateSavingUi();
             // P-6: 保存後は関連レコードキャッシュを無効化して次回の loadRelatedRecords で強制再取得させる
             if (KC.SearchFilter && typeof KC.SearchFilter._invalidateRelatedRecordsCache === 'function') {
               KC.SearchFilter._invalidateRelatedRecordsCache();
@@ -2064,7 +2275,7 @@
             KC.Popup._loadCount++;
           } else {
             _log('[KC.Popup] 許可外 URL への遷移を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
-            KC.Popup._close();
+            KC.Popup._close({ auto: true });
           }
         } catch (e) {
           // cross-origin 例外: iframe がまだリダイレクト中（SAML/SSO 等）の可能性がある。
@@ -2075,7 +2286,7 @@
           } else {
             // 許可 URL 到達後に別ドメインへ遷移 → 閉じる
             _log('[KC.Popup] cross-origin 遷移を検知、モーダルを閉じます:', e);
-            KC.Popup._close();
+            KC.Popup._close({ auto: true });
           }
         }
       });
@@ -2116,6 +2327,9 @@
           if (KC.Popup._savePending && KC.Popup._isSaveSuccessUrl(loc)) {
             _log('[KC.Popup] ' + source + ': 保存成功を検知、カレンダー再描画してモーダルを閉じます:', loc.pathname + loc.hash);
             KC.Popup._savePending = false;
+            KC.Popup._saveStartedAt = null;
+            KC.Popup._saveErrorBaseline = null;
+            KC.Popup._updateSavingUi();
             // P-6: 保存後は関連レコードキャッシュを無効化して次回の loadRelatedRecords で強制再取得させる
             if (KC.SearchFilter && typeof KC.SearchFilter._invalidateRelatedRecordsCache === 'function') {
               KC.SearchFilter._invalidateRelatedRecordsCache();
@@ -2144,7 +2358,7 @@
             KC.Popup._loadCount++;
           } else {
             _log('[KC.Popup] ' + source + ': 許可外 URL を検知、モーダルを閉じます:', loc.pathname + loc.search + loc.hash);
-            KC.Popup._close();
+            KC.Popup._close({ auto: true });
           }
         } catch (e) {
           // cross-origin 例外: _loadCount === 0 の間は初期リダイレクト中とみなして待機。
@@ -2153,7 +2367,7 @@
           } else {
             // 許可 URL 到達後に別ドメインへ遷移 → 閉じる
             _log('[KC.Popup] ' + source + ': cross-origin 遷移を検知、モーダルを閉じます:', e);
-            KC.Popup._close();
+            KC.Popup._close({ auto: true });
           }
         }
       };
@@ -2174,6 +2388,7 @@
       // フォールバックポーリング（1500ms: SPA 遷移で hashchange が発火しないケースを補完）
       KC.Popup._urlWatcher = setInterval(function () {
         _checkIframeUrl('polling');
+        KC.Popup._updateSavingUi();
       }, 1500);
     },
 
@@ -2182,9 +2397,19 @@
      * iframe を DOM から削除することで about:blank の load イベントが発火しなくなり、
      * 遷移監視ハンドラが再帰的に呼ばれる無限ループを原理的に防ぐ。
      * ×ボタン・ESC・backdrop クリック・許可外 URL 遷移の共通クローズ処理。
+     * @param {{auto?: boolean}} [opts] - auto: true は自動検知（load ハンドラ / URL ポーリングの
+     *   許可外 URL・cross-origin 分岐）経由の呼び出し。保存中ガードで止めた場合も案内を表示しない
+     *   （ポーリングごとに案内が出続けるのを防ぐ）。ユーザー操作（×・backdrop・ESC・キャンセル）は省略する。
      */
-    _close: function () {
+    _close: function (opts) {
       if (!this._backdrop) return;
+
+      // 保存処理中は閉じない（Customine 等の保存直前/直後処理を iframe 破棄で中断させないため）。
+      // SAVE_GUARD_TIMEOUT_MS 経過後は _isSaving() が false になり従来どおり閉じられる。
+      if (this._isSaving()) {
+        if (!(opts && opts.auto)) this._showSavingNotice();
+        return;
+      }
 
       // FR-4/FR-5: モーダルクローズ時に record/new パラメータを URL から除去する（replaceState）
       // ×ボタン / backdrop / ESC / 保存後自動クローズ / 許可外URL遷移 すべての経路でここを通る
@@ -2193,25 +2418,14 @@
         KC.UrlState.remove('new');
       }
 
-      // ポーリング監視を停止（先に停止してから iframe 削除）。
-      // clearInterval を先に行うことで、削除後にポーリングが走り続けるリークを防ぐ。
-      clearInterval(KC.Popup._urlWatcher);
-      KC.Popup._urlWatcher = null;
-
-      // キャンセルボタン検知の MutationObserver を解除
-      if (KC.Popup._cancelObserver) {
-        KC.Popup._cancelObserver.disconnect();
-        KC.Popup._cancelObserver = null;
-      }
-
-      // 保存ボタン検知の MutationObserver を解除
-      if (KC.Popup._saveObserver) {
-        KC.Popup._saveObserver.disconnect();
-        KC.Popup._saveObserver = null;
-      }
+      // 監視系（ポーリング・各 MutationObserver・保存中案内）を解放（iframe 削除より先）
+      KC.Popup._teardownWatchers();
 
       // 保存待ちフラグをリセット（閉じたので保留中の保存状態はクリア）
       KC.Popup._savePending = false;
+      KC.Popup._saveStartedAt = null;
+      KC.Popup._saveErrorBaseline = null;
+      KC.Popup._updateSavingUi();
 
       // REQ_workflow-actions §8.3: 作成/編集モードを次回オープンに持ち越さないようリセットする
       KC.Popup._mode = null;
@@ -2488,6 +2702,8 @@
      * @param {string} newEnd   - 移動後の終了日時 (ISO 8601)
      */
     async function _commitOptimistic(origEv, newStart, newEnd) {
+      // 二重防御: ドラッグ操作無効設定時は一切更新せず resolve する（呼び出し元は .catch のみ使用）
+      if (!KC.Config.DND_ENABLED) return;
       // NOTE: origEv は drag.ev = KC.State.events[i] への直接参照（live reference）。
       //       以下の楽観先行フェーズで origEv.start / origEv.end を書き換えてしまうと
       //       ブロックフェーズで「元の値」が失われるため、上書き前に退避する。
@@ -2819,6 +3035,7 @@
      * @param {HTMLElement} barEl - クリックされた .kc-ad-event 要素
      */
     function startMoveAllday(ev, mousedown, barEl) {
+      if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -3005,6 +3222,7 @@
      * @param {HTMLElement} barEl - .kc-ad-event 要素
      */
     function startResizeAllday(ev, side, mousedown, barEl) {
+      if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -3363,6 +3581,7 @@
      * @param {HTMLElement[]} allBars - 同イベントの全セグメント（日跨ぎ用）
      */
     function startMove(ev, mousedown, barEl, allBars) {
+      if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var origStart = new Date(ev.start);
@@ -3411,6 +3630,7 @@
      * @param {HTMLElement} barEl - .kc-event 要素
      */
     function startResize(ev, side, mousedown, barEl) {
+      if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var origStart = new Date(ev.start);
@@ -3593,6 +3813,7 @@
      * @param {HTMLElement[]} [allSegs] - 同一イベントの全セグメント要素（薄表示を全体に適用するため）
      */
     function startMoveAlldayMonth(ev, mousedown, barEl, allSegs) {
+      if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -3629,6 +3850,7 @@
      * @param {HTMLElement[]} [allSegs] - 同一イベントの全セグメント要素（薄表示用）
      */
     function startResizeAlldayMonth(ev, side, mousedown, barEl, allSegs) {
+      if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -3814,6 +4036,7 @@
      * @param {HTMLElement} chipEl - クリックされた .kc-month-chip 要素
      */
     function startMoveMonthChip(ev, mousedown, chipEl) {
+      if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildMonthChipGhost(ev);
@@ -3846,6 +4069,7 @@
      * @param {HTMLElement[]} [allSegs] - 同一イベントの全セグメント要素（薄表示用）
      */
     function startResizeMonthTimedSpan(ev, side, mousedown, barEl, allSegs) {
+      if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildMonthChipGhost(ev);
@@ -11499,6 +11723,9 @@
       // プラグイン設定を読み込み KC.Config を上書きする（detectFields より前に呼ぶ）
       // 設定なし / 必須フィールド未入力の場合はハードコード値を維持し、detectFields でフォールバック
       KC.Config.loadFromPluginConfig(viewId);
+
+      // ドラッグ操作無効時はリサイズハンドル非表示・grab カーソル解除用クラスを付与（設定は読み込み時に確定）
+      root.classList.toggle('kc-dnd-disabled', !KC.Config.DND_ENABLED);
 
       // チェックボックス式フィルタの初期化（REQ_checkbox-filter §8.3, §9.3）
       // KC.Config.FILTER_CONFIG（loadFromPluginConfig で確定済み）を前提に、

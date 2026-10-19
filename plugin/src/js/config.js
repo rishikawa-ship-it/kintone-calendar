@@ -534,6 +534,7 @@
 
   /* --- マッピング設定内メール初期値チェックボックス --- */
   var elMailLoginUserDefault = document.getElementById('kc-mail-login-user-default');
+  var elDndEnabled = document.getElementById('kc-dnd-enabled');
 
   /* --- セクション 2: ビュー個別設定 (統合版) --- */
   var elPerViewSelect = document.getElementById('kc-per-view-select');
@@ -5478,6 +5479,10 @@
     if (typeof fm.mailLoginUserDefault !== 'boolean') {
       fm.mailLoginUserDefault = false;
     }
+    // fieldMapping.dndEnabled の後方互換デフォルト処理 (存在しない場合は true: 既定 ON)
+    if (typeof fm.dndEnabled !== 'boolean') {
+      fm.dndEnabled = true;
+    }
     parsed.fieldMapping = fm;
 
     return parsed;
@@ -6303,7 +6308,8 @@
 
       // fieldMapping にチェック結果をマージする
       var updatedFieldMapping = Object.assign({}, currentConfig.fieldMapping, {
-        mailLoginUserDefault: mailLoginUserDefault
+        mailLoginUserDefault: mailLoginUserDefault,
+        dndEnabled: elDndEnabled ? elDndEnabled.checked : true
       });
 
       // 最終的な保存オブジェクト (version 13 形式: permissionRules + fieldValueRules + searchTargets
@@ -6535,7 +6541,8 @@
     // マッピング設定内メール初期値チェックを finalConfig と同様にマージする（saveConfig と同じ扱い）
     var mailLoginUserDefault = elMailLoginUserDefault ? elMailLoginUserDefault.checked : false;
     var exportFieldMapping = Object.assign({}, currentConfig.fieldMapping, {
-      mailLoginUserDefault: mailLoginUserDefault
+      mailLoginUserDefault: mailLoginUserDefault,
+      dndEnabled: elDndEnabled ? elDndEnabled.checked : true
     });
 
     var exportConfig = {
@@ -6821,6 +6828,9 @@
         applyFieldMapping(currentConfig.fieldMapping);
         if (elMailLoginUserDefault) {
           elMailLoginUserDefault.checked = currentConfig.fieldMapping.mailLoginUserDefault === true;
+        }
+        if (elDndEnabled) {
+          elDndEnabled.checked = currentConfig.fieldMapping.dndEnabled !== false;
         }
         updateMailCheckboxState();
         break;
@@ -7124,6 +7134,10 @@
     if (elMailLoginUserDefault) {
       var savedMail = currentConfig.fieldMapping && currentConfig.fieldMapping.mailLoginUserDefault;
       elMailLoginUserDefault.checked = savedMail === true;
+    }
+    // ドラッグ操作許可チェックボックス（既定 ON: 未保存・旧設定は true 扱い）
+    if (elDndEnabled) {
+      elDndEnabled.checked = !(currentConfig.fieldMapping && currentConfig.fieldMapping.dndEnabled === false);
     }
     updateMailCheckboxState();
 

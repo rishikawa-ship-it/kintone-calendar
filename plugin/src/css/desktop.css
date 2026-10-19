@@ -1634,6 +1634,29 @@ body.kc-dnd-active * {
   color: #111827;
 }
 
+/* 保存処理中は×ボタンを無効風に表示（クリックは _close() 側のガードで抑止） */
+.kc-modal-close--saving,
+.kc-modal-close--saving:hover {
+  opacity: .4;
+  cursor: not-allowed;
+  background: none;
+}
+
+/* 保存処理中に閉じ操作があったときの案内（ヘッダー内・左寄せ） */
+.kc-modal-saving-notice {
+  margin-right: auto;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+.kc-modal-saving-notice[hidden] {
+  display: none;
+}
+
 /* ==========================================================================
  * エラー通知バナー（REQ_cursor-error-and-notify FR-2）
  * ========================================================================== */
@@ -1872,4 +1895,16 @@ body.kc-dnd-active * {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* ドラッグ操作無効設定（fieldMapping.dndEnabled === false）: リサイズハンドル非表示・grab カーソル解除
+   既存の cursor: grab 定義より後ろに置いて上書きする */
+.kc-root.kc-dnd-disabled .kc-resize-handle {
+  display: none !important;
+}
+.kc-root.kc-dnd-disabled .kc-ad-event,
+.kc-root.kc-dnd-disabled .kc-event,
+.kc-root.kc-dnd-disabled .kc-month-chip,
+.kc-root.kc-dnd-disabled .kc-month-chip--span {
+  cursor: pointer;
 }
