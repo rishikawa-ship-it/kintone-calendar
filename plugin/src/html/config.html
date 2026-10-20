@@ -165,6 +165,28 @@
             <p class="kc-config-hint">
               OFF にすると移動・リサイズは無効になり、予定のクリックで開く編集画面からのみ変更できます。保存前チェックや保存後処理を必ず通したい場合は OFF を推奨
             </p>
+
+            <!-- DnD 保存フック (REQ_dnd-save-hooks FR-2): 上のチェック OFF のときは disabled（値は保持） -->
+            <div class="kc-config-radio-group" id="kc-dnd-save-mode-group" role="radiogroup" aria-label="ドラッグ確定時の保存方法">
+              <label class="kc-config-radio-label">
+                <input type="radio" id="kc-dnd-save-mode-direct" name="dndSaveMode" value="direct" checked />
+                変更を直接保存する（従来どおり）
+              </label>
+              <label class="kc-config-radio-label">
+                <input type="radio" id="kc-dnd-save-mode-viaEdit" name="dndSaveMode" value="viaEdit" />
+                編集画面を開いて保存する（保存前チェック・保存後処理を通す）
+              </label>
+            </div>
+            <p class="kc-config-hint">
+              「編集画面を開いて保存する」を選ぶと、ドラッグで確定するたびに新しい日付が入った編集画面が開きます。kintone 標準の保存イベントを通るため Customine 等の保存前チェック・保存後処理が走りますが、保存ボタンを 1 回押す手間が増えます
+            </p>
+            <label class="kc-config-checkbox-label">
+              <input type="checkbox" id="kc-dnd-require-listener" name="dndRequireListener">
+              保存前チェックを行う拡張が見つからないときは保存を止める
+            </label>
+            <p class="kc-config-hint">
+              「変更を直接保存する」のときだけ有効です。別プラグイン（保存前チェック拡張）が導入されていない場合に、ドラッグでの保存を行わずエラーを表示します
+            </p>
           </div>
 
           <div class="kc-config-field-group">

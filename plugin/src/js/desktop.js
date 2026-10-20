@@ -339,6 +339,11 @@
 
       // ドラッグ操作（移動・リサイズ）許可設定 (fieldMapping.dndEnabled が存在しない場合は true: 既定 ON のため !== false 判定)
       KC.Config.DND_ENABLED = !(config.fieldMapping && config.fieldMapping.dndEnabled === false);
+      // DnD 保存フック設定 (REQ_dnd-save-hooks FR-1): 欠落・未知値・null は従来互換（'direct' / false）
+      KC.Config.DND_SAVE_MODE =
+        (config.fieldMapping && config.fieldMapping.dndSaveMode === 'viaEdit') ? 'viaEdit' : 'direct';
+      KC.Config.DND_REQUIRE_LISTENER =
+        !!(config.fieldMapping && config.fieldMapping.dndRequireListener === true);
 
       // DnD 重複チェック設定 (REQ_dnd-overlap-block §9B, version 9 以降)
       // version 8 以前の設定には overlapMode が存在しないため後方互換デフォルトを適用（NF-3）:
@@ -405,6 +410,20 @@
    * @type {boolean}
    */
   KC.Config.DND_ENABLED = true;
+  /**
+   * DnD の確定方法 (REQ_dnd-save-hooks FR-1)
+   * 'direct'  : 従来どおり REST PUT で直接保存（kc:before-save / kc:after-save を発火）
+   * 'viaEdit' : REST では保存せず、新しい日付入りの編集ポップアップを開く
+   * loadFromPluginConfig で上書きされる。キー欠落・未知値・null は 'direct'。
+   * @type {string}
+   */
+  KC.Config.DND_SAVE_MODE = 'direct';
+  /**
+   * kc:before-save の購読者がいないときに保存を止めるか (REQ_dnd-save-hooks FR-5)
+   * 'direct' のときだけ参照する。キー欠落・boolean 以外は false。
+   * @type {boolean}
+   */
+  KC.Config.DND_REQUIRE_LISTENER = false;
   /**
    * デフォルト権限設定 (REQ_default-permission)
    * loadFromPluginConfig で上書きされる。null = ハードコードフォールバックを維持
@@ -699,6 +718,27 @@
 
     fmtYMD: function (d) {
       return d.getFullYear() + '-' + this.pad2(d.getMonth() + 1) + '-' + this.pad2(d.getDate());
+    },
+
+    /**
+     * KcEvent の ISO 8601 日時を、kintone の開始/終了フィールドに書く値へ変換する共通ヘルパー
+     * （KC.Api.updateEvent と viaEdit の編集画面側（KC_EDIT_CONTEXT 適用）で共有する。REQ_dnd-save-hooks NFR-4）。
+     *   DATE 型     : start は先頭 10 桁（YYYY-MM-DD）、end は「1 日戻した YMD」
+     *                 （終日イベントの end は翌日 0 時のため）
+     *   DATETIME 型 : ISO のまま
+     * @param {'start'|'end'} kind
+     * @param {string} iso - ISO 8601
+     * @param {string} fieldType - 'DATE' | 'DATETIME'
+     * @returns {string}
+     */
+    toFieldDateValue: function (kind, iso, fieldType) {
+      if (fieldType === 'DATE') {
+        if (kind === 'start') return iso.substring(0, 10);
+        var d = new Date(iso);
+        d.setDate(d.getDate() - 1);
+        return KC.Utils.fmtYMD(d);
+      }
+      return iso;
     },
 
     addDays: function (d, n) {
@@ -1564,14 +1604,9 @@
       if ('title'    in ev && F.title)    record[F.title]    = { value: ev.title || '' };
 
       if (KC.Config.START_FIELD_TYPE === 'DATE') {
-        // ISO → "YYYY-MM-DD"
-        if ('start' in ev && F.start && ev.start) record[F.start] = { value: ev.start.substring(0, 10) };
-        if ('end' in ev && F.end && ev.end) {
-          // 終日イベントの end は翌日0時なので、1日戻す
-          var d = new Date(ev.end);
-          d.setDate(d.getDate() - 1);
-          record[F.end] = { value: KC.Utils.fmtYMD(d) };
-        }
+        // ISO → "YYYY-MM-DD"（終日イベントの end は翌日0時なので1日戻す。変換は KC.Utils.toFieldDateValue に集約）
+        if ('start' in ev && F.start && ev.start) record[F.start] = { value: KC.Utils.toFieldDateValue('start', ev.start, 'DATE') };
+        if ('end' in ev && F.end && ev.end) record[F.end] = { value: KC.Utils.toFieldDateValue('end', ev.end, 'DATE') };
       } else {
         if ('start'  in ev && F.start)    record[F.start]    = { value: ev.start };
         if ('end'    in ev && F.end)      record[F.end]      = { value: ev.end };
@@ -2492,11 +2527,22 @@
      * 編集（レコード詳細）モーダルを開く。
      * URL 組み立てロジックは旧 openEdit から流用し、開く手段のみモーダルに変更する。
      * @param {string|number} recordId - kintone レコード ID
+     * @param {Object} [opts]
+     * @param {{ source: string, start: string, end: string, allday: boolean }} [opts.editContext]
+     *   REQ_dnd-save-hooks FR-3（viaEdit）: 指定時は sessionStorage に KC_EDIT_CONTEXT 等を書き、
+     *   編集モード（show#record={id}&mode=edit）で開く。iframe 側の app.record.edit.show が
+     *   新しい開始・終了を適用する。start/end は KcEvent と同じ ISO 8601（DATE 型への変換は iframe 側）。
      */
-    openEdit: function (recordId) {
+    openEdit: function (recordId, opts) {
       if (recordId === undefined || recordId === null || recordId === '') {
         console.error('[KC.Popup.openEdit] recordId が取得できていません:', recordId);
         alert('レコードIDの取得に失敗しました。コンソールを確認してください。');
+        return;
+      }
+      var editContext = (opts && opts.editContext) ? opts.editContext : null;
+      // FR-3-4: 保存処理中は書き込みも開きもしない（sessionStorage に残骸を作らない）。案内のみ表示する。
+      if (editContext && this._isSaving()) {
+        this._showSavingNotice();
         return;
       }
       // more-popup-close: 詳細/編集モーダルを開く前に、開いている +N more ポップオーバー
@@ -2507,13 +2553,40 @@
       if (KC.MonthOverflowPopup && typeof KC.MonthOverflowPopup.close === 'function') {
         KC.MonthOverflowPopup.close();
       }
+      var appId = KC.Config.getAppId();
+      var url = '/k/' + appId + '/show#record=' + recordId;
+      // FR-3-3: viaEdit は編集モード（&mode=edit）で開く。sessionStorage への書き込みは URL 履歴 push より前に行い、
+      // 書き込み失敗時に履歴だけ進む状態を避ける。
+      // 注意: /k/{appId}/edit?record=ID は kintone の「レコード再利用」URL（新規作成画面）になるため絶対に使わない。
+      if (editContext) {
+        url += '&mode=edit';
+        try {
+          sessionStorage.setItem('KC_EDIT_CONTEXT', JSON.stringify({
+            v: 1,
+            appId: String(appId),
+            recordId: String(recordId),
+            source: editContext.source,
+            start: editContext.start,
+            end: editContext.end,
+            allday: !!editContext.allday,
+            createdAt: Date.now()
+          }));
+          // 以下は openCreate と同じ流儀（iframe 側の detectFields 未完了の補完）
+          sessionStorage.setItem('KC_FIELD_CONFIG', JSON.stringify(KC.Config.FIELD));
+          sessionStorage.setItem('KC_START_FIELD_TYPE', KC.Config.START_FIELD_TYPE || 'DATETIME');
+          sessionStorage.setItem('KC_ALLDAY_LABEL', KC.Config.ALLDAY_LABEL || '終日');
+        } catch (ctxErr) {
+          console.warn('[KC.Popup.openEdit] KC_EDIT_CONTEXT の書き込みに失敗:', ctxErr);
+          try { sessionStorage.removeItem('KC_EDIT_CONTEXT'); } catch (e2) { /* noop */ }
+          KC.Banner.show('編集画面を開けませんでした。再度操作してください。');
+          return;
+        }
+      }
       // FR-4: 編集モーダルオープンを URL ハッシュに記録（pushState）
       // URL に既に同値が載っている場合はスキップ（リロード復元・popstate 進む の二重化防止）
       if (KC.UrlState && KC.UrlState.get('record') !== String(recordId)) {
         KC.UrlState.push('record', String(recordId));
       }
-      var appId = KC.Config.getAppId();
-      var url = '/k/' + appId + '/show#record=' + recordId;
       _log('[KC.Popup.openEdit] open modal:', url);
       // REQ_workflow-actions §8.3: 編集モーダルであることを記録する（_show() 呼び出し前にセット）。
       // 保存成功検知時にこの値を見て recordUpdate トリガーを発火する。
@@ -2683,6 +2756,201 @@
       document.body.style.userSelect = '';
     }
 
+    // =========================================================================
+    // DnD 保存フック（REQ_dnd-save-hooks）
+    //
+    // 【イベント契約】別プラグイン（KC オートメーション等）との契約。名前・detail の形・発火タイミングは
+    // ここに固定する。破壊的変更をするときは detail.contractVersion を上げる（現行 1。プロパティ追加は後方互換）。
+    //
+    // 共通: dispatch 先は document、CustomEvent、bubbles / cancelable なし。'direct' モードのときだけ発火する
+    //       （'viaEdit' モードでは一切発火しない）。DnD（移動・リサイズ）による既存レコードの更新のみが対象。
+    //
+    //  イベント              発火タイミング                                         購読者の返し方
+    //  kc:before-save        楽観更新・重複チェックの後、resolveForDnd と PUT の前     detail.waitUntil(promise) をハンドラ内で
+    //                        （重複チェック無効時は楽観更新の直後）                    同期的に呼ぶ。複数回可
+    //  kc:after-save         PUT 成功後（currentEv.rev 更新後）。待たない              返り値なし（fire-and-forget）
+    //                        KC.Workflow.notifyRecordSave は従来どおり維持
+    //  kc:after-save-failed  購読者が保存後処理の失敗を知らせるための逆方向イベント。   detail.message（必須・文字列）
+    //                        購読者が dispatch し、カレンダーが受信してバナー表示する
+    //
+    //  detail のプロパティ（型固定）:
+    //                 before-save  after-save  after-save-failed   内容
+    //   contractVersion   ○          ○          ○（任意）          数値 1
+    //   appId             ○          ○          ○                  文字列
+    //   recordId          ○          ○          ○                  文字列
+    //   source            ○          ○          ○                  'dnd'（移動）または 'resize'（リサイズ）
+    //   op                ○          ○          ○                  'update' 固定
+    //   before            ○          ○          任意               { start, end, allday }。変更前（KcEvent と同じ ISO 8601。allday は boolean）
+    //   after             ○          ○          任意               { start, end, allday }。変更後
+    //   record            ○          ○          -                  PUT 前の KcEvent のコピー（楽観更新前に取得。kintone レコード形式ではない）
+    //   revision          PUT 前     PUT 成功後  -                  文字列
+    //   waitUntil(p)      ○          -          -                  複数回呼べる。ハンドラ内で同期的に呼ぶこと（dispatch 後の呼び出しは無視）
+    //   message           -          -          ○                  バナー表示文言（必須。文字列）
+    //   cause             -          -          任意               原因の文字列（ログ用。バナーには出さない）
+    //
+    //  kc:before-save の判定（fail-closed）:
+    //   全 promise が resolve し値が {ok:false} / false のいずれでもない（undefined / null / true / {ok:true} 等） → 続行
+    //   いずれかが {ok:false, message} を返す → ブロック（message 採用。複数あれば先頭）
+    //   いずれかが裸の false に resolve する → ブロック（{ok:false} と同じ扱い。文言は既定「保存前チェックでブロックされました。」）
+    //   いずれかが reject                    → ブロック（固定文言）
+    //   DND_BEFORE_SAVE_TIMEOUT_MS 以内に完了しない → ブロック（固定文言）
+    //   waitUntil が 1 件も呼ばれない = 購読者なし → 既定は続行。DND_REQUIRE_LISTENER=true ならブロック
+    //   ブロック時: State を退避値へ巻き戻し → renderGrid() → KC.Banner.show(文言) → PUT しない
+    // =========================================================================
+
+    /** kc:before-save の完了待ちタイムアウト（ms）。REQ_dnd-save-hooks U-2: 固定 10 秒 */
+    var DND_BEFORE_SAVE_TIMEOUT_MS = 10000;
+    /** イベント契約のバージョン（detail.contractVersion） */
+    var DND_HOOK_CONTRACT_VERSION = 1;
+
+    /** _drag.type から保存フック用の source を導出する（resize-* はリサイズ、それ以外は移動） */
+    function _deriveDndSource(dragType) {
+      return (typeof dragType === 'string' && dragType.indexOf('resize') === 0) ? 'resize' : 'dnd';
+    }
+
+    /** detail 用の KcEvent コピー（購読者が State を壊さないよう深いコピー。失敗時は浅いコピー） */
+    function _cloneForDetail(obj) {
+      try {
+        return JSON.parse(JSON.stringify(obj));
+      } catch (e) {
+        return Object.assign({}, obj);
+      }
+    }
+
+    function _revString(rev) {
+      return (rev === undefined || rev === null) ? '' : String(rev);
+    }
+
+    /** kc:before-save / kc:after-save 共通の detail（waitUntil は before-save 側で付与）を組み立てる */
+    function _buildHookDetail(recordCopy, source, savedStart, savedEnd, newStart, newEnd, revision) {
+      var allday = !!recordCopy.allday;
+      return {
+        contractVersion: DND_HOOK_CONTRACT_VERSION,
+        appId: String(KC.Config.getAppId()),
+        recordId: String(recordCopy.id),
+        source: source,
+        op: 'update',
+        before: { start: savedStart, end: savedEnd, allday: allday },
+        after:  { start: newStart,   end: newEnd,   allday: allday },
+        record: recordCopy,
+        revision: _revString(revision)
+      };
+    }
+
+    /** document へ CustomEvent を dispatch する（購読側の例外は dispatchEvent が握るが、念のため try/catch） */
+    function _dispatchHook(name, detail) {
+      try {
+        document.dispatchEvent(new CustomEvent(name, { detail: detail }));
+        _log('[KC.DnD] dispatch', name, detail);
+      } catch (e) {
+        console.warn('[KC.DnD] ' + name + ' の dispatch に失敗:', e);
+      }
+    }
+
+    /**
+     * kc:before-save を dispatch し、購読者の判定を返す。
+     * 購読者なし（waitUntil 未呼び出し）のときは Promise を作らず { subscribed: false } を同期で返す
+     * （購読者なしの既存経路に非同期の遅延を加えないため）。
+     * @returns {{ subscribed: boolean, promise?: Promise<{ blocked: boolean, message?: string, reason?: string }> }}
+     */
+    function _startBeforeSave(detail) {
+      var pending = [];
+      var open = true;
+      detail.waitUntil = function (p) {
+        if (!open) {
+          console.warn('[KC.DnD] kc:before-save: waitUntil は dispatch 中に同期的に呼ぶ必要があります（無視しました）');
+          return;
+        }
+        // reject を即座に捕捉して unhandledrejection を避ける
+        pending.push(Promise.resolve(p).then(
+          function (v) { return { rejected: false, value: v }; },
+          function (e) { return { rejected: true, error: e }; }
+        ));
+      };
+      try {
+        _dispatchHook('kc:before-save', detail);
+      } finally {
+        open = false;
+      }
+      if (pending.length === 0) return { subscribed: false };
+
+      var timer = null;
+      var timeoutP = new Promise(function (resolve) {
+        timer = setTimeout(function () { resolve('__timeout__'); }, DND_BEFORE_SAVE_TIMEOUT_MS);
+      });
+      var promise = Promise.race([Promise.all(pending), timeoutP]).then(function (r) {
+        clearTimeout(timer);
+        if (r === '__timeout__') {
+          return { blocked: true, reason: 'timeout', message: '保存前チェックがタイムアウトしました。再度操作してください。' };
+        }
+        // 登録順に見て、最初に失敗した結果で判定する（reject は固定文言、{ok:false} は message 採用）
+        for (var i = 0; i < r.length; i++) {
+          if (r[i].rejected) {
+            console.warn('[KC.DnD] kc:before-save 購読者が reject しました:', r[i].error);
+            return { blocked: true, reason: 'rejected', message: '保存前チェックでエラーが発生しました。再度操作してください。' };
+          }
+          var v = r[i].value;
+          if (v === false) {
+            // 裸の false も {ok:false} と同じくブロック（fail-closed。message が無いので既定文言）
+            return { blocked: true, reason: 'ng', message: '保存前チェックでブロックされました。' };
+          }
+          if (v && typeof v === 'object' && v.ok === false) {
+            return {
+              blocked: true,
+              reason: 'ng',
+              message: (typeof v.message === 'string' && v.message) ? v.message : '保存前チェックでブロックされました。'
+            };
+          }
+        }
+        return { blocked: false };
+      });
+      return { subscribed: true, promise: promise };
+    }
+
+    /**
+     * viaEdit: 楽観更新も REST 保存もせず、新しい日付入りの編集ポップアップを開く（REQ_dnd-save-hooks FR-3）。
+     * ゴースト・薄表示は呼び出し元 mouseup 側で除去済み（State は更新していないので予定は元の位置のまま）。
+     * 保存は kintone 標準の保存イベントを通る（Customine の保存直前・直後処理がそのまま走る）。
+     * 重複チェック・FieldLink・kc:* イベントは意図的に実行しない（FR-3-9）。
+     */
+    function _openEditViaDnd(origEv, newStart, newEnd, source) {
+      _log('[KC.DnD] viaEdit: 編集ポップアップを開く', origEv.id, source, newStart, newEnd);
+      KC.Popup.openEdit(origEv.id, {
+        editContext: { source: source, start: newStart, end: newEnd, allday: !!origEv.allday }
+      });
+    }
+
+    /**
+     * kc:after-save-failed のリスナーを 1 回だけ登録する（KC.Boot.init から呼ぶ。多重登録防止フラグ付き）。
+     * 受信したら「保存後処理に失敗しました: {message}」をバナー表示し、実状態へ再読み込みする。
+     * 主レコードは PUT 済みで巻き戻しは行わない。
+     */
+    var _afterSaveFailedListenerRegistered = false;
+    function initHooks() {
+      if (_afterSaveFailedListenerRegistered) return;
+      _afterSaveFailedListenerRegistered = true;
+      document.addEventListener('kc:after-save-failed', function (e) {
+        var d = e && e.detail;
+        if (!d || typeof d.message !== 'string' || !d.message) {
+          console.warn('[KC.DnD] kc:after-save-failed: detail.message が文字列でないため無視しました:', d);
+          return;
+        }
+        console.warn('[KC.DnD] kc:after-save-failed を受信:', d.message, d.cause !== undefined ? d.cause : '');
+        var text = '保存後処理に失敗しました: ' + d.message;
+        KC.Banner.show(text);
+        // refresh は先頭で Banner.hide() するため、再読み込みの完了後にバナーを出し直す
+        // _refreshImmediate が無い・同期例外を投げる場合も .catch に流す
+        Promise.resolve()
+          .then(function () {
+            if (KC.Render && typeof KC.Render._refreshImmediate === 'function') {
+              return KC.Render._refreshImmediate();
+            }
+          })
+          .catch(function (err) { console.warn('[KC.DnD] kc:after-save-failed: 再読み込みに失敗:', err); })
+          .then(function () { KC.Banner.show(text); });
+      });
+    }
+
     /**
      * DnD 確定処理: 楽観先行更新 → 重複チェック → 送信 or ブロック
      *
@@ -2700,10 +2968,23 @@
      * @param {Object} origEv  - DnD 開始時点の KcEvent（変更前）
      * @param {string} newStart - 移動後の開始日時 (ISO 8601)
      * @param {string} newEnd   - 移動後の終了日時 (ISO 8601)
+     * @param {string} [source] - 'dnd'（移動）/ 'resize'（リサイズ）。呼び出し元が _drag.type から導出する
+     *
+     * 保存方法（KC.Config.DND_SAVE_MODE。REQ_dnd-save-hooks）:
+     *   'viaEdit' : 先頭で編集ポップアップを開いて return（以降のフェーズは一切実行しない）
+     *   'direct'  : 上記フローに kc:before-save / kc:after-save の発火を加える（購読者なしなら従来どおり）
      */
-    async function _commitOptimistic(origEv, newStart, newEnd) {
+    async function _commitOptimistic(origEv, newStart, newEnd, source) {
       // 二重防御: ドラッグ操作無効設定時は一切更新せず resolve する（呼び出し元は .catch のみ使用）
       if (!KC.Config.DND_ENABLED) return;
+      source = (source === 'resize') ? 'resize' : 'dnd';
+      // viaEdit: State の楽観更新より前に分岐する（REST は呼ばない）
+      if (KC.Config.DND_SAVE_MODE === 'viaEdit') {
+        _openEditViaDnd(origEv, newStart, newEnd, source);
+        return;
+      }
+      // kc:before-save / kc:after-save の detail.record 用に、楽観更新前の KcEvent をコピーしておく
+      var recordBefore = _cloneForDetail(origEv);
       // NOTE: origEv は drag.ev = KC.State.events[i] への直接参照（live reference）。
       //       以下の楽観先行フェーズで origEv.start / origEv.end を書き換えてしまうと
       //       ブロックフェーズで「元の値」が失われるため、上書き前に退避する。
@@ -2805,6 +3086,40 @@
         KC.Banner.hide();
       }
 
+      // ── kc:before-save フェーズ（REQ_dnd-save-hooks FR-4・FR-5）──────────────────
+      // 発火タイミング: 楽観更新・重複チェックの後、resolveForDnd と PUT の前（契約は上部コメント参照）
+      var beforeDetail = _buildHookDetail(
+        _cloneForDetail(recordBefore), source, savedStart, savedEnd, newStart, newEnd,
+        currentEv ? currentEv.rev : origEv.rev
+      );
+      var beforeRun = _startBeforeSave(beforeDetail);
+      var hookBlockMsg = null;
+      if (!beforeRun.subscribed) {
+        // 購読者なし（waitUntil 未登録）。既定は続行、DND_REQUIRE_LISTENER=true ならブロック
+        if (KC.Config.DND_REQUIRE_LISTENER) {
+          hookBlockMsg = '保存前チェックを行う拡張が見つかりません';
+          console.warn('[KC.DnD] kc:before-save の購読者がいないため保存を中止しました（dndRequireListener=true）');
+        }
+      } else {
+        // 購読者あり: 前回のエラーバナーを消してから結果を待つ
+        KC.Banner.hide();
+        var beforeResult = await beforeRun.promise;
+        if (beforeResult.blocked) {
+          hookBlockMsg = beforeResult.message;
+          console.warn('[KC.DnD] kc:before-save でブロックされました (' + beforeResult.reason + '):', beforeResult.message);
+        }
+      }
+      if (hookBlockMsg) {
+        // 既存の重複ブロックと同じ巻き戻し
+        if (currentEv) {
+          currentEv.start = savedStart;
+          currentEv.end   = savedEnd;
+        }
+        KC.Render.renderGrid();
+        KC.Banner.show(hookBlockMsg);
+        return; // updateEvent は送信しない
+      }
+
       // ── フィールド連動 相乗り解決フェーズ（REQ_workflow-actions §10.2.4・§10.4.3）───────────────
       // 監視フィールドが開始/終了/終日のいずれかで、かつ実際に値が変化した場合のみ評価する。
       // lookup ソースは PUT 前に await で解決する（解決に失敗した場合は相乗りさせず PUT はそのまま
@@ -2839,6 +3154,13 @@
           if (resp && resp.revision && currentEv) {
             currentEv.rev = resp.revision;
           }
+          // kc:after-save: PUT 成功後（rev 更新後）に発火する。待たない（fire-and-forget）。契約は上部コメント参照。
+          // dispatch の失敗が下の .catch（「更新に失敗しました」alert）へ流れないよう _dispatchHook 内で握る。
+          var afterDetail = _buildHookDetail(
+            _cloneForDetail(recordBefore), source, savedStart, savedEnd, newStart, newEnd,
+            (resp && resp.revision) ? resp.revision : (currentEv ? currentEv.rev : origEv.rev)
+          );
+          _dispatchHook('kc:after-save', afterDetail);
           // REQ_workflow-actions §3.1(a)・§3.6 NFR-2・§8.1: PUT 成功コールバック内で recordUpdate
           // トリガーを非同期・fire-and-forget で起動する（await しない。DnD の UI 応答をブロックしない）。
           // DnD は常に既存レコードの更新（移動・リサイズ）のため recordUpdate 固定でよい。
@@ -3023,7 +3345,7 @@
       if (drag.newStart === drag.ev.start && drag.newEnd === drag.ev.end) return;
 
       // _commitOptimistic は async のため未処理 rejection を防ぐ .catch を付与（§6.2）
-      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd).catch(function (err) {
+      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd, _deriveDndSource(drag.type)).catch(function (err) {
         console.error('[KC.DnD] _commitOptimistic 未処理エラー:', err);
       });
     }
@@ -3568,7 +3890,7 @@
       if (drag.newStart === drag.ev.start && drag.newEnd === drag.ev.end) return;
 
       // _commitOptimistic は async のため未処理 rejection を防ぐ .catch を付与（§6.2）
-      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd).catch(function (err) {
+      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd, _deriveDndSource(drag.type)).catch(function (err) {
         console.error('[KC.DnD] _commitOptimistic 未処理エラー:', err);
       });
     }
@@ -4024,7 +4346,7 @@
       if (drag.newStart === drag.ev.start && drag.newEnd === drag.ev.end) return;
 
       // _commitOptimistic は async のため未処理 rejection を防ぐ .catch を付与（§6.2）
-      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd).catch(function (err) {
+      _commitOptimistic(drag.ev, drag.newStart, drag.newEnd, _deriveDndSource(drag.type)).catch(function (err) {
         console.error('[KC.DnD] _commitOptimistic 未処理エラー:', err);
       });
     }
@@ -4119,6 +4441,7 @@
       startMove:                 startMove,
       startResize:               startResize,
       beginSelection:         beginSelection,
+      initHooks:              initHooks,
       _cancel:                _cancel
     };
   }());
@@ -11727,6 +12050,12 @@
       // ドラッグ操作無効時はリサイズハンドル非表示・grab カーソル解除用クラスを付与（設定は読み込み時に確定）
       root.classList.toggle('kc-dnd-disabled', !KC.Config.DND_ENABLED);
 
+      // DnD 保存フック: kc:after-save-failed の受信リスナーを 1 回だけ登録する（REQ_dnd-save-hooks FR-6）。
+      // dndEnabled=false のときは何も登録しない（FR-7: 本番 704 の挙動を変えない）。
+      if (KC.Config.DND_ENABLED && KC.DnD && typeof KC.DnD.initHooks === 'function') {
+        KC.DnD.initHooks();
+      }
+
       // チェックボックス式フィルタの初期化（REQ_checkbox-filter §8.3, §9.3）
       // KC.Config.FILTER_CONFIG（loadFromPluginConfig で確定済み）を前提に、
       // defaultChecked 初期値 → localStorage 復元（旧キーからのマイグレーション込み）の順で適用する。
@@ -12241,6 +12570,80 @@
       _kcWatchCancelButton();
     }
 
+    return event;
+  });
+
+  /* ====================================================================
+   * 編集画面での開始・終了の自動セット（viaEdit。ポップアップ iframe 内で発火）
+   * REQ_dnd-save-hooks FR-3-5
+   *
+   * KC.Popup.openEdit(recordId, { editContext }) が sessionStorage に書いた KC_EDIT_CONTEXT を読み、
+   * 編集画面の開始・終了フィールドへ DnD 後の値をセットする。
+   * 既存の app.record.edit.show 購読（window.opener 判定のポップアップ用）とは別に、独立して登録する。
+   *   - 読んだら適用有無にかかわらず即 removeItem（1 回使ったら消す。create.show と同じ流儀）
+   *   - カレンダーのモーダル内（iframe の dataset.kcModal === '1'）のときだけ適用する
+   *   - appId / recordId の一致と createdAt から 60 秒以内のときだけ適用する
+   *   - 終日フラグは DnD で変わらないため触らない
+   * ==================================================================== */
+  var KC_EDIT_CONTEXT_MAX_AGE_MS = 60000;
+  kintone.events.on('app.record.edit.show', function (event) {
+    var raw = null;
+    try {
+      raw = sessionStorage.getItem('KC_EDIT_CONTEXT');
+      if (raw) sessionStorage.removeItem('KC_EDIT_CONTEXT');
+    } catch (storageErr) {
+      return event;
+    }
+    if (!raw) return event;
+
+    var inModal = false;
+    try {
+      inModal = !!(window.frameElement && window.frameElement.dataset && window.frameElement.dataset.kcModal === '1');
+    } catch (frameErr) {
+      inModal = false;
+    }
+    if (!inModal) {
+      _log('[KC] KC_EDIT_CONTEXT 不適用: カレンダーのモーダル外の編集画面');
+      return event;
+    }
+
+    var ctx;
+    try {
+      ctx = JSON.parse(raw);
+    } catch (parseErr) {
+      console.warn('[KC] KC_EDIT_CONTEXT のパース失敗。適用しません:', parseErr);
+      return event;
+    }
+    var age = ctx && typeof ctx.createdAt === 'number' ? (Date.now() - ctx.createdAt) : NaN;
+    if (!ctx || ctx.v !== 1 ||
+        String(ctx.appId) !== String(event.appId) ||
+        String(ctx.recordId) !== String(event.recordId) ||
+        !(age >= 0 && age <= KC_EDIT_CONTEXT_MAX_AGE_MS) ||
+        typeof ctx.start !== 'string' || typeof ctx.end !== 'string') {
+      _log('[KC] KC_EDIT_CONTEXT 不適用: appId / recordId / 期限の照合に通らない', ctx);
+      return event;
+    }
+
+    // 親ウィンドウで検出済みの FIELD 設定・フィールド型を優先する（iframe 側の detectFields 未完了の補完）
+    var F = KC.Config.FIELD;
+    try {
+      var savedFieldConfig = sessionStorage.getItem('KC_FIELD_CONFIG');
+      if (savedFieldConfig) F = JSON.parse(savedFieldConfig);
+    } catch (fcErr) {
+      console.warn('[KC] KC_FIELD_CONFIG のパース失敗。フォールバック使用:', fcErr);
+      F = KC.Config.FIELD;
+    }
+    var fieldType = sessionStorage.getItem('KC_START_FIELD_TYPE') || KC.Config.START_FIELD_TYPE || 'DATETIME';
+
+    var record = event.record;
+    if (!F || !F.start || !F.end || !record[F.start] || !record[F.end]) {
+      _log('[KC] KC_EDIT_CONTEXT 不適用: 開始・終了フィールドが編集画面に見つからない', F);
+      return event;
+    }
+    // 値の形式は KC.Api.updateEvent と同じ規則（共通ヘルパー）
+    record[F.start].value = KC.Utils.toFieldDateValue('start', ctx.start, fieldType);
+    record[F.end].value   = KC.Utils.toFieldDateValue('end', ctx.end, fieldType);
+    _log('[KC] KC_EDIT_CONTEXT 適用:', ctx.source, record[F.start].value, record[F.end].value);
     return event;
   });
 

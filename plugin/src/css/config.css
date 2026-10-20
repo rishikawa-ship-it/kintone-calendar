@@ -1405,6 +1405,15 @@ body {
   margin-top: 8px;
 }
 
+/* DnD 保存方法ラジオ（REQ_dnd-save-hooks FR-2）: disabled 時のラジオラベルをグレーアウト */
+#kc-dnd-save-mode-group .kc-config-radio-label:has(input[type="radio"]:disabled) {
+  color: #aaa;
+  cursor: not-allowed;
+}
+#kc-dnd-save-mode-group .kc-config-radio-label input[type="radio"]:disabled {
+  cursor: not-allowed;
+}
+
 /* disabled 時のラベルをグレーアウト */
 .kc-config-checkbox-label input[type="checkbox"]:disabled + span,
 .kc-config-checkbox-label:has(input[type="checkbox"]:disabled) {

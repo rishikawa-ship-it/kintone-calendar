@@ -535,6 +535,10 @@
   /* --- マッピング設定内メール初期値チェックボックス --- */
   var elMailLoginUserDefault = document.getElementById('kc-mail-login-user-default');
   var elDndEnabled = document.getElementById('kc-dnd-enabled');
+  /* --- DnD 保存フック設定 (REQ_dnd-save-hooks FR-2) --- */
+  var elDndSaveModeDirect  = document.getElementById('kc-dnd-save-mode-direct');
+  var elDndSaveModeViaEdit = document.getElementById('kc-dnd-save-mode-viaEdit');
+  var elDndRequireListener = document.getElementById('kc-dnd-require-listener');
 
   /* --- セクション 2: ビュー個別設定 (統合版) --- */
   var elPerViewSelect = document.getElementById('kc-per-view-select');
@@ -5483,6 +5487,14 @@
     if (typeof fm.dndEnabled !== 'boolean') {
       fm.dndEnabled = true;
     }
+    // fieldMapping.dndSaveMode / dndRequireListener の後方互換デフォルト処理
+    // (REQ_dnd-save-hooks FR-1: 欠落時は 'direct' / false。version は 13 のまま)
+    if (typeof fm.dndSaveMode !== 'string') {
+      fm.dndSaveMode = 'direct';
+    }
+    if (typeof fm.dndRequireListener !== 'boolean') {
+      fm.dndRequireListener = false;
+    }
     parsed.fieldMapping = fm;
 
     return parsed;
@@ -5820,6 +5832,46 @@
       console.warn('[KC Config] プロセス管理ステータス取得失敗（プロセス管理未設定の可能性）:', err);
       statusEnabled = false;
       statusOptions = [];
+    }
+  }
+
+  /* ====================================================================
+   * DnD 保存フック設定 (REQ_dnd-save-hooks FR-2)
+   * ==================================================================== */
+
+  /**
+   * DnD の確定方法ラジオの現在値を返す（'viaEdit' 以外は 'direct'）。
+   * disabled でも checked は読めるため、保存・エクスポートは DOM の値をそのまま採用する。
+   * @returns {string}
+   */
+  function getDndSaveModeValue() {
+    return (elDndSaveModeViaEdit && elDndSaveModeViaEdit.checked) ? 'viaEdit' : 'direct';
+  }
+
+  /**
+   * 保存済み／インポートされた fieldMapping の値を、ラジオ・チェックボックスへ反映する。
+   * キー欠落・未知値は 'direct' / false（FR-1）。
+   * @param {Object} fm - fieldMapping（欠落可）
+   */
+  function applyDndSaveSettings(fm) {
+    var mode = (fm && fm.dndSaveMode === 'viaEdit') ? 'viaEdit' : 'direct';
+    if (elDndSaveModeDirect)  { elDndSaveModeDirect.checked  = (mode === 'direct'); }
+    if (elDndSaveModeViaEdit) { elDndSaveModeViaEdit.checked = (mode === 'viaEdit'); }
+    if (elDndRequireListener) { elDndRequireListener.checked = !!(fm && fm.dndRequireListener === true); }
+    updateDndSaveControlsState();
+  }
+
+  /**
+   * ラジオ・チェックボックスの disabled 状態を更新する。値（checked）は変更しない。
+   *   - dndEnabled が OFF のとき: ラジオ・チェックボックスとも disabled
+   *   - viaEdit 選択時: dndRequireListener のチェックボックスは disabled（direct のときだけ参照されるため）
+   */
+  function updateDndSaveControlsState() {
+    var dndOn = elDndEnabled ? elDndEnabled.checked : true;
+    if (elDndSaveModeDirect)  { elDndSaveModeDirect.disabled  = !dndOn; }
+    if (elDndSaveModeViaEdit) { elDndSaveModeViaEdit.disabled = !dndOn; }
+    if (elDndRequireListener) {
+      elDndRequireListener.disabled = !dndOn || getDndSaveModeValue() === 'viaEdit';
     }
   }
 
@@ -6309,7 +6361,9 @@
       // fieldMapping にチェック結果をマージする
       var updatedFieldMapping = Object.assign({}, currentConfig.fieldMapping, {
         mailLoginUserDefault: mailLoginUserDefault,
-        dndEnabled: elDndEnabled ? elDndEnabled.checked : true
+        dndEnabled: elDndEnabled ? elDndEnabled.checked : true,
+        dndSaveMode: getDndSaveModeValue(),
+        dndRequireListener: elDndRequireListener ? elDndRequireListener.checked : false
       });
 
       // 最終的な保存オブジェクト (version 13 形式: permissionRules + fieldValueRules + searchTargets
@@ -6542,7 +6596,9 @@
     var mailLoginUserDefault = elMailLoginUserDefault ? elMailLoginUserDefault.checked : false;
     var exportFieldMapping = Object.assign({}, currentConfig.fieldMapping, {
       mailLoginUserDefault: mailLoginUserDefault,
-      dndEnabled: elDndEnabled ? elDndEnabled.checked : true
+      dndEnabled: elDndEnabled ? elDndEnabled.checked : true,
+      dndSaveMode: getDndSaveModeValue(),
+      dndRequireListener: elDndRequireListener ? elDndRequireListener.checked : false
     });
 
     var exportConfig = {
@@ -6832,6 +6888,7 @@
         if (elDndEnabled) {
           elDndEnabled.checked = currentConfig.fieldMapping.dndEnabled !== false;
         }
+        applyDndSaveSettings(currentConfig.fieldMapping);
         updateMailCheckboxState();
         break;
       case 'permissionRules':
@@ -7139,6 +7196,8 @@
     if (elDndEnabled) {
       elDndEnabled.checked = !(currentConfig.fieldMapping && currentConfig.fieldMapping.dndEnabled === false);
     }
+    // DnD 保存方法・購読者必須チェック（既定 direct / false。dndEnabled の反映後に disabled 連動も更新する）
+    applyDndSaveSettings(currentConfig.fieldMapping);
     updateMailCheckboxState();
 
     // 4. ビュー一覧を取得してプルダウンを構築 (orphan 削除も実行)
@@ -7163,6 +7222,11 @@
     if (elFieldUserMail) {
       elFieldUserMail.addEventListener('change', updateMailCheckboxState);
     }
+
+    // DnD 許可チェック・保存方法ラジオの変更に連動して、保存方法ラジオ／購読者必須チェックの disabled を更新する
+    [elDndEnabled, elDndSaveModeDirect, elDndSaveModeViaEdit].forEach(function (el) {
+      if (el) { el.addEventListener('change', updateDndSaveControlsState); }
+    });
 
     // ビュー選択プルダウンにも空文字クラス同期を登録する（初期状態も反映）
     attachSelectEmptyClassSync(elPerViewSelect);
