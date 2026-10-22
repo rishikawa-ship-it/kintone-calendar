@@ -947,96 +947,10 @@ body {
   margin: 0 0 12px;
 }
 
-/* テーブル全体のラッパー */
-/* overflow: visible にしてカラーピッカーポップオーバーが親に切られないようにする */
-.kc-fieldvalue-table {
-  border: 1px solid #d8dce4;
-  border-radius: 4px;
-  overflow: visible;
-  margin-bottom: 10px;
-}
-
-/* カラムヘッダー行 (7列: ハンドル / フィールド / 値 / 権限 / 背景 / 文字 / 操作) */
-.kc-fieldvalue-header {
-  display: grid;
-  grid-template-columns: 24px 2fr 1.5fr 1fr 44px 44px 40px;
-  gap: 8px;
-  align-items: center;
-  background: #e8ecf1;
-  border-bottom: 1px solid #d0d5df;
-  padding: 6px 8px;
-}
-
-.kc-fieldvalue-header-col {
-  font-size: 12px;
-  font-weight: bold;
-  color: #555;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* 権限エントリ行コンテナ */
-.kc-fieldvalue-rows {
-  display: flex;
-  flex-direction: column;
-  background: #fff;
-}
-
-/* 1 行のエントリ (7列: ハンドル / フィールド / 値 / 権限 / 背景 / 文字 / 操作) */
-.kc-fieldvalue-row {
-  display: grid;
-  grid-template-columns: 24px 2fr 1.5fr 1fr 44px 44px 40px;
-  gap: 8px;
-  align-items: center;
-  padding: 6px 8px;
-  border-bottom: 1px solid #eaecf0;
-  transition: background 0.1s;
-}
-
-.kc-fieldvalue-row:last-child:not(.kc-drag-over-bottom) {
-  border-bottom: none;
-}
-
-.kc-fieldvalue-row:hover {
-  background: #f0f4f8;
-}
-
-/* 各セル wrapper */
-.kc-fieldvalue-cell {
-  min-width: 0;
-}
-
-/* フィールド選択ドロップダウン */
-.kc-fieldvalue-field-select {
-  width: 100%;
-  max-width: none;
-}
-
-/* 値選択ドロップダウン */
-.kc-fieldvalue-value-select {
-  width: 100%;
-  max-width: none;
-}
-
 /* 権限種別ドロップダウン */
 .kc-fieldvalue-perm-select {
   width: 100%;
   max-width: none;
-}
-
-/* 背景色カラム */
-.kc-fieldvalue-col-bgcolor {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* 文字色カラム */
-.kc-fieldvalue-col-textcolor {
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 /* 行追加ボタンエリア */
@@ -1071,6 +985,312 @@ body {
 
 .kc-fieldvalue-del-btn:active {
   background-color: #8c1c16;
+}
+
+/* ====================================================================
+ * 権限フィールド設定: 条件グループの入れ子ビルダー (REQ_field-value-rule-groups FR-5)
+ * ルール 1 件 = .kc-fvr-block（条件ツリー + 結果）。グループは左ボーダー＋インデントで階層を表す。
+ * 条件行・グループヘッダは flex-wrap のため、深く入れ子にして幅が足りなくなっても折り返して崩れない
+ * （検証は 3 段まで。さらに深い場合は .kc-fvr-tree が横スクロールする）。
+ * ==================================================================== */
+
+/* ルール一覧: 0 件のときは案内文を出し、1 件以上あれば隠す（コンテナ内に空白文字を置かないこと） */
+.kc-fvr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.kc-fvr-empty-hint {
+  margin: 0 0 10px;
+}
+
+.kc-fvr-list:not(:empty) + .kc-fvr-empty-hint {
+  display: none;
+}
+
+/* ルールのカウンタ（「ルール N」。並び替え・削除に自動追従する） */
+.kc-fvr-list {
+  counter-reset: kc-fvr-rule;
+}
+
+.kc-fvr-block {
+  counter-increment: kc-fvr-rule;
+  background: #fff;
+  border: 1px solid #d0d5df;
+  border-radius: 6px;
+  padding: 10px 12px 12px;
+}
+
+.kc-fvr-block--invalid {
+  border-color: #d93025;
+  box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.25);
+}
+
+.kc-fvr-block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+/* .kc-fieldvalue-section .kc-hint（下マージン 12px）に負けないよう、セクション配下の指定で上書きする */
+.kc-fieldvalue-section .kc-fvr-block-prio,
+.kc-fieldvalue-section .kc-fvr-date-hint {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.kc-fieldvalue-section .kc-fvr-empty-hint {
+  margin: 0 0 10px;
+}
+
+.kc-fvr-block-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: #333;
+  white-space: nowrap;
+}
+
+.kc-fvr-block-title::before {
+  content: "ルール " counter(kc-fvr-rule);
+}
+
+.kc-fvr-block-prio {
+  margin: 0;
+  flex: 1 1 auto;
+}
+
+.kc-fvr-rule-del-btn,
+.kc-fvr-group-del-btn,
+.kc-fvr-add-cond-btn,
+.kc-fvr-add-group-btn {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* 条件ツリー（横にはみ出すほど深い入れ子は横スクロール） */
+.kc-fvr-tree {
+  overflow-x: auto;
+}
+
+.kc-fvr-group {
+  border: 1px solid #d8dce4;
+  border-radius: 6px;
+  background: #f8f9fb;
+  padding: 10px 12px;
+}
+
+.kc-fvr-group .kc-fvr-group {
+  background: #fff;
+}
+
+.kc-fvr-group.kc-fvr-invalid {
+  border-color: #d93025;
+  box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.25);
+}
+
+.kc-fvr-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.kc-fvr-group-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.kc-fvr-group-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.kc-fvr-group-label {
+  font-size: 12px;
+  font-weight: bold;
+  color: #555;
+  white-space: nowrap;
+}
+
+.kc-fvr-logic-select {
+  width: auto;
+  min-width: 170px;
+}
+
+/* 入れ子のグループ・条件は左ボーダー＋インデントで階層を表現する */
+.kc-fvr-children {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 14px;
+  border-left: 2px solid #d0d5df;
+  margin-left: 4px;
+}
+
+.kc-fvr-children:empty {
+  display: none;
+}
+
+/* 条件 1 行: フィールド / 演算子 / 値 / 削除 */
+.kc-fvr-cond {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.kc-fvr-cond.kc-fvr-invalid {
+  outline: 2px solid #d93025;
+  background: #fdecea;
+}
+
+.kc-fvr-cond .kc-fvr-field-select {
+  flex: 1 1 180px;
+  min-width: 150px;
+  max-width: 260px;
+}
+
+.kc-fvr-cond .kc-fvr-op-select {
+  flex: 0 1 190px;
+  min-width: 120px;
+  max-width: 260px;
+}
+
+.kc-fvr-value-slot {
+  flex: 1 1 200px;
+  min-width: 140px;
+}
+
+.kc-fvr-value-slot[hidden],
+.kc-fvr-value[hidden],
+.kc-fvr-date-fixed[hidden],
+.kc-fvr-date-today[hidden] {
+  display: none;
+}
+
+.kc-fvr-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kc-fvr-value > .kc-config-input,
+.kc-fvr-value > .kc-config-select {
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 260px;
+}
+
+/* 選択肢のチェックボックス列 */
+.kc-fvr-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  padding: 2px 8px;
+  background: #eef2f7;
+  border: 1px solid #d0d5df;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.kc-fvr-choice input {
+  margin: 0;
+}
+
+.kc-fvr-choice.kc-option-missing {
+  background: #fff3f2;
+  border-color: #e0a09b;
+}
+
+/* 日付: 「今日 + N 日」入力 */
+.kc-fvr-date-today {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.kc-fvr-date-today .kc-fvr-date-offset {
+  width: 76px;
+  min-width: 76px;
+  flex: 0 0 76px;
+}
+
+.kc-fvr-date-hint {
+  margin: 0;
+}
+
+/* 狭幅では共通の .kc-config-btn（width:100%）をルール内の小ボタンには効かせない */
+@media (max-width: 600px) {
+  .kc-fvr-block .kc-config-btn-secondary {
+    width: auto;
+  }
+
+  .kc-fvr-block-head {
+    flex-wrap: nowrap;
+  }
+
+  .kc-fvr-block-prio {
+    display: none;
+  }
+}
+
+/* 結果（権限・色。ルール単位） */
+.kc-fvr-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #d0d5df;
+}
+
+.kc-fvr-result-label {
+  font-size: 12px;
+  font-weight: bold;
+  color: #555;
+}
+
+.kc-fvr-result .kc-fieldvalue-perm-select {
+  width: auto;
+  min-width: 110px;
+}
+
+.kc-fvr-result-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #555;
+}
+
+.kc-fvr-block.kc-dragging {
+  opacity: 0.4;
+}
+
+.kc-fvr-block.kc-drag-over-top {
+  border-top: 3px solid #0078d4;
+}
+
+.kc-fvr-block.kc-drag-over-bottom {
+  border-bottom: 3px solid #0078d4;
 }
 
 /* ====================================================================
@@ -1452,7 +1672,6 @@ body {
 
 /* ドラッグ中の行: 半透明化 */
 .kc-permission-row.kc-dragging,
-.kc-fieldvalue-row.kc-dragging,
 .kc-filter-group-row.kc-dragging,
 .kc-filter-item-row.kc-dragging {
   opacity: 0.4;
@@ -1460,7 +1679,6 @@ body {
 
 /* ドロップ位置の挿入線: 上 */
 .kc-permission-row.kc-drag-over-top,
-.kc-fieldvalue-row.kc-drag-over-top,
 .kc-filter-group-row.kc-drag-over-top,
 .kc-filter-item-row.kc-drag-over-top {
   border-top: 2px solid #0078d4;
@@ -1468,7 +1686,6 @@ body {
 
 /* ドロップ位置の挿入線: 下 */
 .kc-permission-row.kc-drag-over-bottom,
-.kc-fieldvalue-row.kc-drag-over-bottom,
 .kc-filter-group-row.kc-drag-over-bottom,
 .kc-filter-item-row.kc-drag-over-bottom {
   border-bottom: 2px solid #0078d4;

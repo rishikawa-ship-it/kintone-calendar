@@ -280,26 +280,21 @@
           ==================================================== -->
           <div class="kc-fieldvalue-section">
             <h3 class="kc-config-subsection-title">権限フィールド設定（優先度: 高）</h3>
-            <p class="kc-hint">フィールド値やステータスで権限を制御します（ユーザー権限より優先）。上の行ほど優先されます。</p>
+            <p class="kc-hint">
+              フィールド値やステータスの条件で権限と色を制御します（ユーザー権限より優先）。
+              1 つのルールは「条件グループ（すべて満たす／いずれかを満たす。グループは入れ子にできます）」と
+              「一致したときの権限・色」で構成します。上のルールほど優先され、最初に一致したルールが採用されます。
+              ルールが 0 件の場合は従来動作のままです。
+            </p>
 
-            <div class="kc-fieldvalue-table">
-              <div class="kc-fieldvalue-header">
-                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-handle"></div>
-                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-field">フィールド</div>
-                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-value">値</div>
-                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-perm">権限</div>
-                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-bgcolor">背景</div>
-                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-textcolor">文字</div>
-                <div class="kc-fieldvalue-header-col kc-fieldvalue-col-action"></div>
-              </div>
-              <div id="kc-fieldvalue-rows" class="kc-fieldvalue-rows">
-                <!-- 権限フィールド設定行を JavaScript で動的追加 -->
-              </div>
-            </div>
+            <!-- #kc-fieldvalue-rows は JavaScript が条件グループ付きのルールブロックを動的に追加する。
+                 0 件のときは :empty により下の案内文が出る（空白文字を入れないこと） -->
+            <div id="kc-fieldvalue-rows" class="kc-fvr-list"></div>
+            <p class="kc-hint kc-fvr-empty-hint">ルールはありません（従来動作）。「+ ルールを追加」で追加できます。</p>
 
             <div class="kc-fieldvalue-add-row">
               <button type="button" id="kc-fieldvalue-add" class="kc-config-btn kc-config-btn-secondary">
-                + 行を追加
+                + ルールを追加
               </button>
             </div>
           </div>

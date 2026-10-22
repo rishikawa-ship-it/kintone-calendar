@@ -1,10 +1,10 @@
 /**
  * config.js
- * KC Calendar プラグイン設定画面スクリプト (v13: ワークフロー（別アプリ連携アクション）追加)
+ * KC Calendar プラグイン設定画面スクリプト (v14: 権限フィールド設定の条件グループ化)
  *
- * 保存形式 (version 13):
+ * 保存形式 (version 14):
  *   {
- *     version: 13,
+ *     version: 14,
  *     fieldMapping: { fieldTitle, fieldStart, fieldEnd, fieldAllday, ...,
  *                     overlapMode,                  // 'none' / 'fieldKey' / 'refTable'
  *                     overlapKeyFieldCode,          // モード A
@@ -16,7 +16,12 @@
  *                     overlapRefTableFilterCond,          // モード B: REFERENCE_TABLE の filterCond（自動取得、既定 ''）
  *                     overlapResourceFieldCode },         // モード B: 関連先のリソース識別フィールド
  *     permissionRules: [ { fieldCode, fieldType: "USER_SELECT", permission, bgColor, textColor }, ... ],
- *     fieldValueRules: [ { fieldCode, fieldType, value, permission, bgColor, textColor }, ... ],
+ *     fieldValueRules: [ { when: { logic: 'and'|'or', conditions: [ 条件 | グループ, ... ] },
+ *                          permission, bgColor, textColor }, ... ],
+ *       条件 = { fieldCode, fieldType, operator, value }。演算子・値の形は RULE_OPERATORS / FR-2（REQ_field-value-rule-groups）。
+ *       グループは入れ子可（深さ無制限。動作保証は 3 段まで）。空グループは一致しない。
+ *       v13 以前の旧形式 { fieldCode, fieldType, value, permission, bgColor, textColor } は v14 マイグレーションで
+ *       { when: { logic:'and', conditions:[条件1つ] }, ... } へ変換する（desktop.js も実行時に同じ変換を行う）
  *     searchTargets: [ { fieldCode: "memo" }, { fieldCode: "relatedMeetings" }, ... ],
  *     filterConfig: { groups: [ { id, label, type: 'assignee'|'fieldValue', fieldCode, fieldType, items: [ { id, label, value, defaultChecked } ] } ] },
  *     views: { "<viewId>": { calendarTitle, defaultView } },
@@ -41,6 +46,14 @@
  *       セット先フィールドが kintone のルックアップフィールドの場合のみ保存される。未定義（旧データ）
  *       は非ルックアップとして扱う（後方互換。AC-50）
  *   }
+ * v14 変更点 (REQ_field-value-rule-groups):
+ *   - fieldValueRules の各行を { when（条件グループ AND/OR 入れ子）, permission, bgColor, textColor } に拡張。
+ *     演算子・対象型の拡張（文字列・数値・日付（今日基準の相対日付）・複数選択・ユーザー・組織・グループ）。
+ *   - v13→v14 マイグレーション: 旧形式の単一値行を条件 1 つの AND グループへ変換（冪等。旧実装で一致しなかった行は破棄）。
+ *     インポートは旧形式・新形式の混在を受け付け、不正な行は取り込まず警告する。
+ *   - 設定画面: 「権限フィールド設定」カードを入れ子ビルダーに置換。保存時検証（フィールド未選択・値が空・
+ *     条件ゼロのグループ）で保存・書き出しを止め、該当ブロックを赤枠で示す。
+ *   - 他のキーの形は変更なし。
  * v13 変更点 (REQ_workflow-actions):
  *   - workflows 配列を追加（レコードの作成/更新を起点に
  *     別アプリへレコードを追加/更新するワークフロー定義）
@@ -353,13 +366,13 @@
    * ==================================================================== */
 
   /**
-   * setConfig で保存する全体設定オブジェクト (version 13)
+   * setConfig で保存する全体設定オブジェクト (version 14)
    * §11 改訂4: fieldLinkRules トップレベルキーは廃止。workflows 配列に統合済み
    * （trigger.type: recordCreate/recordUpdate/fieldChange）。
    * @type {{ version: number, fieldMapping: Object, permissionRules: Array, fieldValueRules: Array, searchTargets: Array, defaultPermission: Object, filterConfig: Object, views: Object, workflows: Array }}
    */
   var currentConfig = {
-    version: 13,
+    version: 14,
     fieldMapping: {},
     permissionRules: [],
     fieldValueRules: [],
@@ -399,6 +412,14 @@
    * @type {Array<{code: string, label: string, type: string, options: Object}>}
    */
   var fieldValueFieldOptions = [];
+
+  /**
+   * 権限フィールド設定の条件ビルダー（REQ_field-value-rule-groups FR-5）で使うフィールド一覧
+   * （RULE_TYPE_CATEGORY の対象型。STATUS は $status として別途追加。ルックアップ・計算・TIME・サブテーブル内は対象外）。
+   * options は DROP_DOWN / RADIO_BUTTON / CHECK_BOX / MULTI_SELECT の選択肢（index 順）。loadFields 後に設定される。
+   * @type {Array<{code: string, label: string, type: string, options: string[]}>}
+   */
+  var ruleCondFieldOptions = [];
 
   /**
    * 検索対象フィールド設定 UI で使用するフィールド一覧（SEARCH_TARGET_TYPES でフィルタ済み）
@@ -1566,7 +1587,7 @@
    * フラットなリスト（権限テーブル・フィルタ設定のグループ行・ワークフロー一覧等、行の子が
    * ネストを持たない場合）では、直接の子のみの検索は従来の querySelector と同じ結果になり、
    * stopPropagation も他に伝播先の同種リスナーが存在しないため挙動に影響しない。
-   * @param {HTMLElement} row - .kc-permission-row または .kc-fieldvalue-row 等の行要素
+   * @param {HTMLElement} row - .kc-permission-row または .kc-fvr-block 等の行要素
    * @param {HTMLElement} handle - buildDragHandle() で生成したハンドル要素
    */
   function attachRowDragEvents(row, handle) {
@@ -1589,8 +1610,8 @@
       if (container) {
         // §12 改訂5: 条件ツリーの行（.kc-condtree-row）・グループ（.kc-condtree-group）も対象に追加
         var allRows = container.querySelectorAll(
-          '.kc-permission-row, .kc-fieldvalue-row, .kc-filter-group-row, .kc-filter-item-row, ' +
-          '.kc-workflow-row, .kc-workflow-action-block, .kc-condtree-row, .kc-condtree-group'
+          '.kc-permission-row, .kc-filter-group-row, .kc-filter-item-row, ' +
+          '.kc-workflow-row, .kc-workflow-action-block, .kc-condtree-row, .kc-condtree-group, .kc-fvr-block'
         );
         allRows.forEach(function (r) {
           r.classList.remove('kc-drag-over-top', 'kc-drag-over-bottom');
@@ -1866,6 +1887,286 @@
   }
 
   /* ====================================================================
+   * 権限フィールド設定（fieldValueRules）の条件グループ定義
+   * （REQ_field-value-rule-groups FR-1〜FR-4）
+   *
+   * 1 行 = { when, permission, bgColor, textColor }
+   *   when : グループ { logic: 'and'|'or', conditions: [条件 | グループ, ...] }（入れ子の深さは無制限）
+   *   条件 : { fieldCode, fieldType, operator, value }
+   *
+   * ★ 相互参照: RULE_OPERATORS / RULE_TYPE_CATEGORY / RULE_VALUELESS_OPS / convertLegacyFieldValueRule は
+   *   desktop.js の KC.RuleEval.OPERATORS / TYPE_CATEGORY / VALUELESS_OPS / convertLegacyRule と完全に同一の
+   *   定義・ロジックにすること。別スクリプトコンテキストのため実装は重複するが、片方だけ直すと設定画面の
+   *   表示・移行結果と実行時の評価がズレる（scratchpad の単体テストが両者の一致を機械的に確認する）。
+   * ==================================================================== */
+  /* @KC-RULEDEF-BEGIN */
+  /** フィールド型の区分 → 使える演算子（FR-2） */
+  var RULE_OPERATORS = {
+    text:   ['eq', 'ne', 'contains', 'notContains', 'isEmpty', 'isNotEmpty'],
+    single: ['in', 'notIn', 'isEmpty', 'isNotEmpty'],
+    multi:  ['contains', 'notContains', 'isEmpty', 'isNotEmpty'],
+    status: ['in', 'notIn'],
+    number: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'isEmpty', 'isNotEmpty'],
+    date:   ['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'isEmpty', 'isNotEmpty'],
+    user:   ['containsLoginUser', 'notContainsLoginUser']
+  };
+
+  /** フィールド型 → 区分（ここに無い型は条件にできない。サブテーブル内・ルックアップ・計算・TIME は対象外） */
+  var RULE_TYPE_CATEGORY = {
+    SINGLE_LINE_TEXT: 'text', MULTI_LINE_TEXT: 'text', LINK: 'text',
+    DROP_DOWN: 'single', RADIO_BUTTON: 'single',
+    CHECK_BOX: 'multi', MULTI_SELECT: 'multi',
+    STATUS: 'status',
+    NUMBER: 'number',
+    DATE: 'date', DATETIME: 'date', CREATED_TIME: 'date', UPDATED_TIME: 'date',
+    USER_SELECT: 'user', ORGANIZATION_SELECT: 'user', GROUP_SELECT: 'user'
+  };
+
+  /** 値入力を持たない演算子 */
+  var RULE_VALUELESS_OPS = { isEmpty: true, isNotEmpty: true, containsLoginUser: true, notContainsLoginUser: true };
+
+  /**
+   * 旧形式 fieldValueRules の 1 行 → 新形式の 1 行（FR-4。冪等: when を持つ行はそのまま返す）
+   * 旧実装（desktop.js の getPermission）との一致:
+   *   - CHECK_BOX は配列包含 → contains [value]
+   *   - DROP_DOWN / RADIO_BUTTON / STATUS は完全一致 → in [value]
+   *   - 値が空の DROP_DOWN / RADIO_BUTTON は旧実装では「フィールド値が空のレコード」に一致した → isEmpty
+   *     （値が空の STATUS は in [''] で同じ結果になる）
+   *   - 旧実装で絶対に一致しなかった行（フィールドコード空、値が空の CHECK_BOX）・旧 UI で作れない型の行は
+   *     一致に影響しないため rule: null を返す（呼び出し側は破棄し、note で理由を知らせる）
+   * @param {Object} row
+   * @returns {{rule: ?Object, note: ?string}}
+   */
+  function convertLegacyFieldValueRule(row) {
+    if (!row || typeof row !== 'object') return { rule: null, note: '行がオブジェクトではありません' };
+    if (row.when && typeof row.when === 'object') return { rule: row, note: null };
+    var code = row.fieldCode;
+    if (!code || typeof code !== 'string') return { rule: null, note: 'フィールドコードが空のため（旧実装でも一致しない行）' };
+    var type = row.fieldType || (code === '$status' ? 'STATUS' : 'DROP_DOWN');
+    var val = row.value;
+    var cond;
+    if (type === 'CHECK_BOX') {
+      if (typeof val !== 'string' || val === '') return { rule: null, note: 'チェックボックスの値が空のため（旧実装でも一致しない行）' };
+      cond = { fieldCode: code, fieldType: type, operator: 'contains', value: [val] };
+    } else if (type === 'DROP_DOWN' || type === 'RADIO_BUTTON') {
+      if (typeof val !== 'string') return { rule: null, note: '値が文字列ではありません' };
+      cond = (val === '')
+        ? { fieldCode: code, fieldType: type, operator: 'isEmpty' }
+        : { fieldCode: code, fieldType: type, operator: 'in', value: [val] };
+    } else if (type === 'STATUS') {
+      if (typeof val !== 'string') return { rule: null, note: '値が文字列ではありません' };
+      cond = { fieldCode: code, fieldType: type, operator: 'in', value: [val] };
+    } else {
+      return { rule: null, note: 'フィールド型 ' + type + ' は旧形式では扱えません' };
+    }
+    return {
+      rule: {
+        when: { logic: 'and', conditions: [cond] },
+        permission: row.permission || 'view',
+        bgColor: row.bgColor,
+        textColor: row.textColor
+      },
+      note: null
+    };
+  }
+  /* @KC-RULEDEF-END */
+
+  /**
+   * v13 → v14 マイグレーション: fieldValueRules を新形式（条件グループ）へ変換する（FR-4）。
+   * 冪等（すでに when を持つ行は触らない）。変換できない行（旧実装でも一致しなかった行など）は破棄する
+   * （一致に影響しないため、判定結果は移行前と同じ）。
+   * @param {Array} rules - 旧形式・新形式が混在していてもよい fieldValueRules
+   * @returns {Array} 新形式の fieldValueRules
+   */
+  function migrateFieldValueRulesV13toV14(rules) {
+    var out = [];
+    (Array.isArray(rules) ? rules : []).forEach(function (row, i) {
+      var res = convertLegacyFieldValueRule(row);
+      if (res.rule) {
+        out.push(res.rule);
+      } else {
+        console.warn('[KC Config] fieldValueRules[' + i + '] は新形式へ移行できないため破棄しました: ' + res.note);
+      }
+    });
+    return out;
+  }
+
+  /** 条件グループの演算子ラベル（区分ごと。FR-5） */
+  var RULE_OPERATOR_LABELS = {
+    text: {
+      eq: '等しい', ne: '等しくない', contains: '含む', notContains: '含まない',
+      isEmpty: '空である', isNotEmpty: '空でない'
+    },
+    single: { in: 'いずれか', notIn: 'いずれでもない', isEmpty: '空である', isNotEmpty: '空でない' },
+    multi: {
+      contains: 'いずれかを含む', notContains: 'いずれも含まない',
+      isEmpty: '空である', isNotEmpty: '空でない'
+    },
+    status: { in: 'いずれか', notIn: 'いずれでもない' },
+    number: {
+      eq: '＝', ne: '≠', gt: '＞', gte: '≧', lt: '＜', lte: '≦',
+      isEmpty: '空である', isNotEmpty: '空でない'
+    },
+    date: {
+      eq: '等しい', ne: '等しくない', lt: 'より前', lte: '以前', gt: 'より後', gte: '以後',
+      isEmpty: '空である', isNotEmpty: '空でない'
+    },
+    user: { containsLoginUser: 'ログインユーザーを含む', notContainsLoginUser: 'ログインユーザーを含まない' }
+  };
+
+  /**
+   * 条件の演算子ラベルを返す（組織・グループは「所属」を含む文言にする）
+   * @param {string} fieldType
+   * @param {string} operator
+   * @returns {string}
+   */
+  function getRuleOperatorLabel(fieldType, operator) {
+    var cat = RULE_TYPE_CATEGORY[fieldType];
+    if (cat === 'user') {
+      if (fieldType === 'ORGANIZATION_SELECT') {
+        return operator === 'containsLoginUser' ? 'ログインユーザーの所属組織を含む' : 'ログインユーザーの所属組織を含まない';
+      }
+      if (fieldType === 'GROUP_SELECT') {
+        return operator === 'containsLoginUser' ? 'ログインユーザーの所属グループを含む' : 'ログインユーザーの所属グループを含まない';
+      }
+    }
+    return ((RULE_OPERATOR_LABELS[cat] || {})[operator]) || operator;
+  }
+
+  /**
+   * 条件ツリー（when）内の全条件に対してコールバックする
+   * @param {Object} node - グループまたは条件
+   * @param {function(Object): void} cb
+   */
+  function walkRuleConditions(node, cb) {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node.conditions)) {
+      node.conditions.forEach(function (c) { walkRuleConditions(c, cb); });
+      return;
+    }
+    cb(node);
+  }
+
+  var RULE_YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  /**
+   * インポートされた 1 条件（またはグループ）を検証・正規化する（FR-4）。
+   * 未知の operator・型不一致・値の形の不正は problems に積み、null を返す（その行ごと取り込まない）。
+   * 空グループは取り込む（実行時は一致しない扱い。設定画面で保存時検証に掛かる）
+   * @param {*} node
+   * @param {string} path - 警告表示用のパス
+   * @param {string[]} problems - 問題の説明を追加する配列
+   * @param {{emptyGroup: boolean}} flags - 空グループを見つけたら emptyGroup を true にする
+   * @returns {?Object} 正規化したノード。不正なら null
+   */
+  function sanitizeRuleNode(node, path, problems, flags) {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+      problems.push(path + ': 条件がオブジェクトではありません');
+      return null;
+    }
+    if (Array.isArray(node.conditions)) {
+      if (node.logic !== 'and' && node.logic !== 'or') {
+        problems.push(path + ': logic が "and" / "or" ではありません（' + JSON.stringify(node.logic) + '）');
+        return null;
+      }
+      var children = [];
+      var bad = false;
+      node.conditions.forEach(function (c, i) {
+        var s = sanitizeRuleNode(c, path + '.conditions[' + i + ']', problems, flags);
+        if (s === null) { bad = true; } else { children.push(s); }
+      });
+      if (bad) return null;
+      if (children.length === 0) { flags.emptyGroup = true; }
+      return { logic: node.logic, conditions: children };
+    }
+    var code = node.fieldCode;
+    if (!code || typeof code !== 'string') {
+      problems.push(path + ': fieldCode がありません');
+      return null;
+    }
+    var cat = RULE_TYPE_CATEGORY[node.fieldType];
+    if (!cat) {
+      problems.push(path + ': フィールド型 ' + JSON.stringify(node.fieldType) + ' は条件に使えません（' + code + '）');
+      return null;
+    }
+    var op = node.operator;
+    if (RULE_OPERATORS[cat].indexOf(op) === -1) {
+      problems.push(path + ': 演算子 ' + JSON.stringify(op) + ' は型 ' + node.fieldType + ' では使えません（' + code + '）');
+      return null;
+    }
+    var out = { fieldCode: code, fieldType: node.fieldType, operator: op };
+    if (RULE_VALUELESS_OPS[op]) return out;
+    var v = node.value;
+    if (cat === 'single' || cat === 'multi' || cat === 'status') {
+      if (typeof v === 'string') { v = [v]; }
+      if (!Array.isArray(v) || v.length === 0 || !v.every(function (x) { return typeof x === 'string' && x !== ''; })) {
+        problems.push(path + ': value は 1 件以上の選択肢（文字列の配列）が必要です（' + code + '）');
+        return null;
+      }
+      out.value = v.slice();
+    } else if (cat === 'text') {
+      if (typeof v !== 'string') {
+        problems.push(path + ': value は文字列が必要です（' + code + '）');
+        return null;
+      }
+      out.value = v;
+    } else if (cat === 'number') {
+      var num = (typeof v === 'number') ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+      if (!isFinite(num)) {
+        problems.push(path + ': value は数値が必要です（' + code + '）');
+        return null;
+      }
+      out.value = String(typeof v === 'number' ? v : v.trim());
+    } else if (cat === 'date') {
+      if (v && v.mode === 'fixed' && typeof v.date === 'string' && RULE_YMD_RE.test(v.date)) {
+        out.value = { mode: 'fixed', date: v.date };
+      } else if (v && v.mode === 'today' && isFinite(Number(v.offsetDays)) && v.offsetDays !== '' &&
+                 v.offsetDays !== null && typeof v.offsetDays !== 'boolean' && Math.floor(Number(v.offsetDays)) === Number(v.offsetDays)) {
+        out.value = { mode: 'today', offsetDays: Number(v.offsetDays) };
+      } else {
+        problems.push(path + ': value は { mode: "fixed", date: "YYYY-MM-DD" } または { mode: "today", offsetDays: 整数 } が必要です（' + code + '）');
+        return null;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * インポートされた fieldValueRules を新形式へそろえ、不正な行を取り除く（FR-4。旧形式・新形式の混在可）。
+   * 戻り値の warnings は取り込み結果の警告として表示する。
+   * @param {Array} rows
+   * @returns {{rules: Array, warnings: string[]}}
+   */
+  function sanitizeImportedFieldValueRules(rows) {
+    var rules = [];
+    var warnings = [];
+    (Array.isArray(rows) ? rows : []).forEach(function (row, i) {
+      var label = '権限フィールド設定 fieldValueRules[' + i + ']';
+      var res = convertLegacyFieldValueRule(row);
+      if (!res.rule) {
+        warnings.push(label + ' は取り込みませんでした: ' + res.note);
+        return;
+      }
+      var problems = [];
+      var flags = { emptyGroup: false };
+      var when = sanitizeRuleNode(res.rule.when, 'when', problems, flags);
+      if (when === null) {
+        warnings.push(label + ' は取り込みませんでした: ' + problems.join(' / '));
+        return;
+      }
+      var perm = res.rule.permission;
+      if (perm !== 'edit' && perm !== 'view' && perm !== 'delete') { perm = 'view'; }
+      var bg = (typeof res.rule.bgColor === 'string' && res.rule.bgColor) ? res.rule.bgColor : '#1976d2';
+      var txt = (typeof res.rule.textColor === 'string' && res.rule.textColor) ? res.rule.textColor : pickTextColorByBg(bg);
+      if (flags.emptyGroup) {
+        warnings.push(label + ' に条件のないグループがあります（実行時は一致しません。設定画面で条件を追加するか削除してください）');
+      }
+      rules.push({ when: when, permission: perm, bgColor: bg, textColor: txt });
+    });
+    return { rules: rules, warnings: warnings };
+  }
+
+  /* ====================================================================
    * 権限フィールド設定 UI (REQ_edit-permission-extension v6 §4.3)
    * ==================================================================== */
 
@@ -1924,152 +2225,396 @@
     syncSelectEmptyClass(valueSel);
   }
 
+  /* ----------------------------------------------------------------------
+   * 条件グループの入れ子ビルダー（REQ_field-value-rule-groups FR-5）
+   *
+   * DOM 構造（ルール 1 件 = .kc-fvr-block 1 枚。ルールの並び順 = 評価の優先順）:
+   *   .kc-fvr-block[data-node-type=rule]
+   *     .kc-fvr-block-head      : ドラッグハンドル / タイトル / 「ルールを削除」
+   *     .kc-fvr-tree            : ルートグループ（.kc-fvr-group）
+   *     .kc-fvr-result          : 権限 / 背景色 / 文字色（結果は行単位）
+   *   .kc-fvr-group[data-node-type=group]  : ヘッダ（AND/OR・+条件・+グループ・グループを削除）と .kc-fvr-children
+   *   .kc-fvr-cond[data-node-type=condition] : フィールド / 演算子 / 値（.kc-fvr-value-slot）/ 削除
+   *
+   * 入れ子の深さは無制限（深さを理由にした拒否・ボタンの無効化はしない。動作保証は 3 段まで）。
+   * 収集・書き出しは DOM を再帰で読む。★ 非選択タブのパネルは hidden のみで DOM から外さないこと
+   * （収集・書き出しが全パネルを読む。REQ_config-tabs）。
+   * ---------------------------------------------------------------------- */
+
   /**
-   * 権限フィールド設定 1 行を生成する
-   * 6 セル: フィールド / 値 / 権限 / 背景色 / 文字色 / 削除
-   * フィールド変更時に値ドロップダウンを動的更新する（§C-2）
-   * @param {Object} [rule] - 既存ルール { fieldCode, fieldType, value, permission, bgColor, textColor }
-   * @returns {HTMLElement} .kc-fieldvalue-row 要素
+   * 条件に使えるフィールド一覧（'$status' を含む）を返す。STATUS はプロセス管理が有効な場合のみ
+   * @returns {Array<{code: string, label: string, type: string, options: string[]}>}
    */
-  function buildFieldValueRow(rule) {
-    var row = document.createElement('div');
-    row.className = 'kc-fieldvalue-row';
-
-    // ドラッグハンドル（ハンドル部分だけを draggable にして input/select との競合を回避）
-    var handle = buildDragHandle();
-    attachRowDragEvents(row, handle);
-
-    var fieldSel = buildFieldValueFieldSelect(rule);
-    var valueSel = buildFieldValueValueSelect(rule, fieldSel);
-    var permSel  = buildFieldValuePermSelect(rule);
-
-    var bgColor   = (rule && rule.bgColor)   ? rule.bgColor   : '#1976d2';
-    var textColor = (rule && rule.textColor)  ? rule.textColor : '#ffffff';
-    var bgWidget   = buildColorPickerWidget(bgColor,   'kc-fieldvalue-bgcolor');
-    var textWidget = buildColorPickerWidget(textColor, 'kc-fieldvalue-textcolor');
-
-    var delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn';
-    delBtn.textContent = '−';
-    delBtn.addEventListener('click', function () {
-      row.parentNode && row.parentNode.removeChild(row);
-    });
-
-    var cellHandle  = wrapCell(handle);
-    var cellField   = wrapCell(fieldSel);
-    var cellValue   = wrapCell(valueSel);
-    var cellPerm    = wrapCell(permSel);
-    var cellBg      = wrapCellCenter('kc-fieldvalue-col-bgcolor', bgWidget);
-    var cellText    = wrapCellCenter('kc-fieldvalue-col-textcolor', textWidget);
-    var cellAction  = wrapCell(delBtn);
-
-    row.appendChild(cellHandle);
-    row.appendChild(cellField);
-    row.appendChild(cellValue);
-    row.appendChild(cellPerm);
-    row.appendChild(cellBg);
-    row.appendChild(cellText);
-    row.appendChild(cellAction);
-
-    return row;
+  function getFvrFieldOptionList() {
+    var list = ruleCondFieldOptions.slice();
+    if (statusEnabled && statusOptions.length > 0) {
+      list.push({ code: '$status', label: 'ステータス', type: 'STATUS', options: statusOptions.slice() });
+    }
+    return list;
   }
 
   /**
-   * セルラッパー（.kc-fieldvalue-cell）を生成して子要素を追加する
-   * @param {HTMLElement} child
-   * @returns {HTMLElement}
+   * フィールドの選択肢（DROP_DOWN / RADIO_BUTTON / CHECK_BOX / MULTI_SELECT の選択肢、または STATUS の名前一覧）
+   * @param {string} fieldCode
+   * @param {string} fieldType
+   * @returns {string[]}
    */
-  function wrapCell(child) {
-    var cell = document.createElement('div');
-    cell.className = 'kc-fieldvalue-cell';
-    cell.appendChild(child);
-    return cell;
+  function getFvrChoiceOptions(fieldCode, fieldType) {
+    if (fieldType === 'STATUS' || fieldCode === '$status') { return statusOptions.slice(); }
+    var found = ruleCondFieldOptions.filter(function (f) { return f.code === fieldCode; })[0];
+    return found ? found.options.slice() : [];
   }
 
   /**
-   * 中央揃えセルラッパーを生成する
-   * @param {string} extraClass - 追加クラス名
-   * @param {HTMLElement} child
-   * @returns {HTMLElement}
+   * フィールド選択ドロップダウンの現在のフィールド型を返す（'$status' は STATUS 確定）
+   * @param {HTMLSelectElement} sel
+   * @returns {string} 未選択は ''
    */
-  function wrapCellCenter(extraClass, child) {
-    var cell = document.createElement('div');
-    cell.className = 'kc-fieldvalue-cell ' + extraClass;
-    cell.appendChild(child);
-    return cell;
+  function getFvrSelectedFieldType(sel) {
+    if (!sel || !sel.value) { return ''; }
+    if (sel.value === '$status') { return 'STATUS'; }
+    var opt = sel.options[sel.selectedIndex];
+    return opt ? (opt.dataset.fieldtype || '') : '';
   }
 
   /**
-   * フィールド選択ドロップダウンを生成する（DROP_DOWN/RADIO_BUTTON/CHECK_BOX + STATUS）
-   * @param {Object|null} rule
+   * 要素の直接の子から、指定クラスを持つ最初の要素を返す（入れ子ブロックの子孫を誤って拾わないため）
+   * @param {HTMLElement} el
+   * @param {string} cls
+   * @returns {HTMLElement|null}
+   */
+  function fvrChild(el, cls) {
+    if (!el) { return null; }
+    for (var i = 0; i < el.children.length; i++) {
+      if (el.children[i].classList.contains(cls)) { return el.children[i]; }
+    }
+    return null;
+  }
+
+  /**
+   * 条件のフィールド選択ドロップダウンを生成する（FR-2 の対象型 + STATUS）
+   * @param {Object|null} cond
    * @returns {HTMLSelectElement}
    */
-  function buildFieldValueFieldSelect(rule) {
-    var fieldSel = document.createElement('select');
-    fieldSel.className = 'kc-config-select kc-fieldvalue-field-select';
+  function buildFvrFieldSelect(cond) {
+    var sel = document.createElement('select');
+    sel.className = 'kc-config-select kc-fvr-field-select';
 
     var emptyOpt = document.createElement('option');
     emptyOpt.value = '';
     emptyOpt.textContent = '-- フィールドを選択 --';
-    fieldSel.appendChild(emptyOpt);
+    sel.appendChild(emptyOpt);
 
-    // DROP_DOWN/RADIO_BUTTON/CHECK_BOX フィールドを追加
-    fieldValueFieldOptions.forEach(function (f) {
+    getFvrFieldOptionList().forEach(function (f) {
       var opt = document.createElement('option');
       opt.value = f.code;
       opt.dataset.fieldtype = f.type;
-      opt.textContent = f.label + ' (' + f.code + ')';
-      fieldSel.appendChild(opt);
+      opt.textContent = f.code === '$status' ? 'ステータス (STATUS)' : (f.label + ' (' + f.code + ')');
+      sel.appendChild(opt);
     });
 
-    // プロセス管理が有効かつステータス一覧が取得できた場合のみ STATUS を追加
-    if (statusEnabled && statusOptions.length > 0) {
-      var statusOpt = document.createElement('option');
-      statusOpt.value = '$status';
-      statusOpt.dataset.fieldtype = 'STATUS';
-      statusOpt.textContent = 'ステータス (STATUS)';
-      fieldSel.appendChild(statusOpt);
-    }
-
-    if (rule && rule.fieldCode) {
-      fieldSel.value = rule.fieldCode;
-      if (fieldSel.value !== rule.fieldCode) {
+    if (cond && cond.fieldCode) {
+      sel.value = cond.fieldCode;
+      if (sel.value !== cond.fieldCode) {
+        // 保存済みのフィールドがアプリ側に無い（削除・型変更・対象外の型など）: 保存値を保つため選択肢を補う
         var missingOpt = document.createElement('option');
-        missingOpt.value = rule.fieldCode;
-        missingOpt.textContent = rule.fieldCode + ' (フィールドが見つかりません)';
+        missingOpt.value = cond.fieldCode;
+        missingOpt.dataset.fieldtype = cond.fieldType || '';
+        missingOpt.textContent = cond.fieldCode + ' (フィールドが見つかりません)';
         missingOpt.className = 'kc-option-missing';
-        fieldSel.appendChild(missingOpt);
-        fieldSel.value = rule.fieldCode;
+        sel.appendChild(missingOpt);
+        sel.value = cond.fieldCode;
       }
     }
-    attachSelectEmptyClassSync(fieldSel);
-    return fieldSel;
+    attachSelectEmptyClassSync(sel);
+    return sel;
   }
 
   /**
-   * 値選択ドロップダウンを生成する（フィールド選択変更時に動的更新）
-   * @param {Object|null} rule
-   * @param {HTMLSelectElement} fieldSel - 連動するフィールド選択ドロップダウン
-   * @returns {HTMLSelectElement}
+   * 演算子ドロップダウンの選択肢を、フィールド型に応じて作り直す（FR-2 の表）
+   * @param {HTMLSelectElement} opSel
+   * @param {string} fieldType - '' の場合は無効化（先にフィールドを選ぶ）
+   * @param {string|null} selectedOp - 保持したい演算子（その型で使えなければ先頭）
    */
-  function buildFieldValueValueSelect(rule, fieldSel) {
-    var valueSel = document.createElement('select');
-    valueSel.className = 'kc-config-select kc-fieldvalue-value-select';
+  function fillFvrOperatorSelect(opSel, fieldType, selectedOp) {
+    while (opSel.options.length > 0) { opSel.remove(0); }
+    var cat = RULE_TYPE_CATEGORY[fieldType];
+    var ops = cat ? RULE_OPERATORS[cat] : [];
+    if (ops.length === 0) {
+      var ph = document.createElement('option');
+      ph.value = '';
+      ph.textContent = '-- 先にフィールドを選択 --';
+      opSel.appendChild(ph);
+      opSel.disabled = true;
+      return;
+    }
+    opSel.disabled = false;
+    ops.forEach(function (op) {
+      var opt = document.createElement('option');
+      opt.value = op;
+      opt.textContent = getRuleOperatorLabel(fieldType, op);
+      opSel.appendChild(opt);
+    });
+    opSel.value = (selectedOp && ops.indexOf(selectedOp) !== -1) ? selectedOp : ops[0];
+  }
 
-    var initCode  = rule ? rule.fieldCode  : '';
-    var initType  = rule ? (rule.fieldType || '') : '';
-    var initValue = rule ? rule.value : '';
-    rebuildValueSelect(valueSel, initCode, initType, initValue);
+  /**
+   * 日付の「今日基準」入力に添える説明テキスト（今日 / 今日から N 日後 / N 日前）
+   * @param {string} raw - 整数入力欄の値
+   * @returns {string}
+   */
+  function describeFvrOffset(raw) {
+    var s = String(raw).trim();
+    var n = Number(s);
+    if (s === '' || !isFinite(n) || Math.floor(n) !== n) { return '整数で入力してください'; }
+    if (n === 0) { return '今日'; }
+    return n > 0 ? ('今日から ' + n + ' 日後') : ('今日から ' + (-n) + ' 日前');
+  }
 
-    // フィールド選択変更時に値選択肢を更新する
-    fieldSel.addEventListener('change', function () {
-      var selOpt = fieldSel.options[fieldSel.selectedIndex];
-      var newType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
-      rebuildValueSelect(valueSel, fieldSel.value, newType, '');
+  /**
+   * 条件の値入力（区分ごと。FR-5）を生成する。
+   *   文字列: テキスト / 数値: 数値入力 / 選択肢系: 選択肢のチェックボックス列 /
+   *   日付: 「固定日」「今日基準」の切替 + 日付ピッカー or 整数入力 / ユーザー系: 値なし
+   * @param {string} fieldCode
+   * @param {string} fieldType
+   * @param {*} value - 保存済みの値（新規は undefined）
+   * @returns {HTMLElement} .kc-fvr-value
+   */
+  function buildFvrValueArea(fieldCode, fieldType, value) {
+    var cat = RULE_TYPE_CATEGORY[fieldType];
+    var area = document.createElement('div');
+    area.className = 'kc-fvr-value';
+    area.dataset.category = cat || '';
+
+    if (cat === 'text') {
+      var tin = document.createElement('input');
+      tin.type = 'text';
+      tin.className = 'kc-config-input kc-fvr-value-text';
+      tin.placeholder = '比較する文字列';
+      tin.value = (typeof value === 'string') ? value : '';
+      area.appendChild(tin);
+    } else if (cat === 'number') {
+      var nin = document.createElement('input');
+      nin.type = 'number';
+      nin.step = 'any';
+      nin.className = 'kc-config-input kc-fvr-value-number';
+      nin.placeholder = '数値';
+      nin.value = (value === undefined || value === null) ? '' : String(value);
+      area.appendChild(nin);
+    } else if (cat === 'single' || cat === 'multi' || cat === 'status') {
+      var selected = Array.isArray(value) ? value.slice() : (typeof value === 'string' && value ? [value] : []);
+      var choices = getFvrChoiceOptions(fieldCode, fieldType);
+      var addChoice = function (text, isMissing) {
+        var label = document.createElement('label');
+        label.className = 'kc-fvr-choice' + (isMissing ? ' kc-option-missing' : '');
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'kc-fvr-choice-cb';
+        cb.value = text;
+        cb.checked = selected.indexOf(text) !== -1;
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(isMissing ? (text + ' (選択肢が見つかりません)') : text));
+        area.appendChild(label);
+      };
+      choices.forEach(function (c) { addChoice(c, false); });
+      // 保存済みの値が現在の選択肢に無い（選択肢の改名・削除）場合も、保存値を失わないよう補う
+      selected.forEach(function (s) { if (choices.indexOf(s) === -1) { addChoice(s, true); } });
+      if (choices.length === 0 && selected.length === 0) {
+        var none = document.createElement('span');
+        none.className = 'kc-hint';
+        none.textContent = '選択肢を取得できません';
+        area.appendChild(none);
+      }
+    } else if (cat === 'date') {
+      var mode = (value && value.mode === 'today') ? 'today' : 'fixed';
+      var modeSel = document.createElement('select');
+      modeSel.className = 'kc-config-select kc-fvr-date-mode';
+      [{ v: 'fixed', t: '固定日' }, { v: 'today', t: '今日基準' }].forEach(function (o) {
+        var opt = document.createElement('option');
+        opt.value = o.v;
+        opt.textContent = o.t;
+        modeSel.appendChild(opt);
+      });
+      modeSel.value = mode;
+
+      var fixedIn = document.createElement('input');
+      fixedIn.type = 'date';
+      fixedIn.className = 'kc-config-input kc-fvr-date-fixed';
+      fixedIn.value = (value && value.mode === 'fixed' && typeof value.date === 'string') ? value.date : '';
+
+      var todayWrap = document.createElement('span');
+      todayWrap.className = 'kc-fvr-date-today';
+      var pre = document.createElement('span');
+      pre.textContent = '今日 +';
+      var offIn = document.createElement('input');
+      offIn.type = 'number';
+      offIn.step = '1';
+      offIn.className = 'kc-config-input kc-fvr-date-offset';
+      offIn.value = (value && value.mode === 'today' && value.offsetDays !== undefined && value.offsetDays !== null)
+        ? String(value.offsetDays) : '0';
+      var post = document.createElement('span');
+      post.textContent = '日';
+      var hint = document.createElement('span');
+      hint.className = 'kc-hint kc-fvr-date-hint';
+      hint.textContent = describeFvrOffset(offIn.value);
+      todayWrap.appendChild(pre);
+      todayWrap.appendChild(offIn);
+      todayWrap.appendChild(post);
+      todayWrap.appendChild(hint);
+
+      var syncMode = function () {
+        fixedIn.hidden = (modeSel.value !== 'fixed');
+        todayWrap.hidden = (modeSel.value !== 'today');
+      };
+      modeSel.addEventListener('change', syncMode);
+      offIn.addEventListener('input', function () { hint.textContent = describeFvrOffset(offIn.value); });
+      syncMode();
+
+      area.appendChild(modeSel);
+      area.appendChild(fixedIn);
+      area.appendChild(todayWrap);
+    }
+    return area;
+  }
+
+  /**
+   * 条件 1 行（フィールド → 演算子 → 値 → 削除）を生成する
+   * @param {Object|null} cond - { fieldCode, fieldType, operator, value }
+   * @returns {HTMLElement} .kc-fvr-cond
+   */
+  function buildFvrCondition(cond) {
+    var row = document.createElement('div');
+    row.className = 'kc-fvr-cond';
+    row.dataset.nodeType = 'condition';
+
+    var fieldSel = buildFvrFieldSelect(cond);
+    var opSel = document.createElement('select');
+    opSel.className = 'kc-config-select kc-fvr-op-select';
+    var slot = document.createElement('div');
+    slot.className = 'kc-fvr-value-slot';
+
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-fieldvalue-del-btn kc-fvr-cond-del-btn';
+    delBtn.textContent = '−';
+    delBtn.setAttribute('aria-label', 'この条件を削除');
+    delBtn.addEventListener('click', function () {
+      row.parentNode && row.parentNode.removeChild(row);
     });
 
-    return valueSel;
+    // 値入力は演算子が「値なし」型（空・ログインユーザー系）のとき、またはフィールド未選択のとき隠す
+    var syncSlot = function () {
+      slot.hidden = !opSel.value || RULE_VALUELESS_OPS[opSel.value] === true;
+    };
+
+    var initType = getFvrSelectedFieldType(fieldSel);
+    fillFvrOperatorSelect(opSel, initType, cond ? cond.operator : null);
+    slot.appendChild(buildFvrValueArea(fieldSel.value, initType, cond ? cond.value : undefined));
+    syncSlot();
+
+    // フィールド変更: 演算子と値入力を作り直す（fieldType を保持するため dataset の型から再導出）
+    fieldSel.addEventListener('change', function () {
+      var t = getFvrSelectedFieldType(fieldSel);
+      fillFvrOperatorSelect(opSel, t, null);
+      slot.innerHTML = '';
+      slot.appendChild(buildFvrValueArea(fieldSel.value, t, undefined));
+      syncSlot();
+    });
+    opSel.addEventListener('change', syncSlot);
+
+    row.appendChild(fieldSel);
+    row.appendChild(opSel);
+    row.appendChild(slot);
+    row.appendChild(delBtn);
+    return row;
+  }
+
+  /**
+   * 条件グループ 1 件分の編集ブロックを再帰的に生成する
+   * @param {Object} groupData - { logic, conditions }（正規化済み）
+   * @param {boolean} isRoot - ルートグループ（「グループを削除」を持たない。ルール自体の削除のみ）
+   * @returns {HTMLElement} .kc-fvr-group
+   */
+  function buildFvrGroup(groupData, isRoot) {
+    var groupEl = document.createElement('div');
+    groupEl.className = 'kc-fvr-group' + (isRoot ? ' kc-fvr-group-root' : '');
+    groupEl.dataset.nodeType = 'group';
+
+    var header = document.createElement('div');
+    header.className = 'kc-fvr-group-header';
+
+    var headerLeft = document.createElement('div');
+    headerLeft.className = 'kc-fvr-group-header-left';
+    var label = document.createElement('span');
+    label.className = 'kc-fvr-group-label';
+    label.textContent = 'グループ内の条件:';
+    headerLeft.appendChild(label);
+
+    var logicSel = document.createElement('select');
+    logicSel.className = 'kc-config-select kc-fvr-logic-select';
+    [{ v: 'and', t: 'すべて満たす（AND）' }, { v: 'or', t: 'いずれかを満たす（OR）' }].forEach(function (o) {
+      var opt = document.createElement('option');
+      opt.value = o.v;
+      opt.textContent = o.t;
+      logicSel.appendChild(opt);
+    });
+    logicSel.value = (groupData && groupData.logic === 'or') ? 'or' : 'and';
+    headerLeft.appendChild(logicSel);
+
+    var headerRight = document.createElement('div');
+    headerRight.className = 'kc-fvr-group-header-right';
+
+    var childrenEl = document.createElement('div');
+    childrenEl.className = 'kc-fvr-children';
+
+    var addCondBtn = document.createElement('button');
+    addCondBtn.type = 'button';
+    addCondBtn.className = 'kc-config-btn kc-config-btn-secondary kc-fvr-add-cond-btn';
+    addCondBtn.textContent = '+ 条件を追加';
+    addCondBtn.addEventListener('click', function () {
+      childrenEl.appendChild(buildFvrCondition(null));
+    });
+    headerRight.appendChild(addCondBtn);
+
+    // 「グループを追加」は深さに関わらず常に使える（上限なし。REQ U-1）
+    var addGroupBtn = document.createElement('button');
+    addGroupBtn.type = 'button';
+    addGroupBtn.className = 'kc-config-btn kc-config-btn-secondary kc-fvr-add-group-btn';
+    addGroupBtn.textContent = '+ グループを追加';
+    addGroupBtn.addEventListener('click', function () {
+      // 新しいグループは空の条件行を 1 つ持たせて作る（フィールドを選ぶだけで書き始められる）
+      childrenEl.appendChild(buildFvrGroup({ logic: 'and', conditions: [{}] }, false));
+    });
+    headerRight.appendChild(addGroupBtn);
+
+    if (!isRoot) {
+      var groupDelBtn = document.createElement('button');
+      groupDelBtn.type = 'button';
+      groupDelBtn.className = 'kc-config-btn kc-config-btn-secondary kc-fvr-group-del-btn';
+      groupDelBtn.textContent = 'グループを削除';
+      groupDelBtn.addEventListener('click', function () {
+        if (childrenEl.children.length > 0 &&
+            !window.confirm('このグループを削除しますか？（内側の条件・グループもすべて削除されます）')) { return; }
+        groupEl.parentNode && groupEl.parentNode.removeChild(groupEl);
+      });
+      headerRight.appendChild(groupDelBtn);
+    }
+
+    header.appendChild(headerLeft);
+    header.appendChild(headerRight);
+
+    var conds = (groupData && Array.isArray(groupData.conditions)) ? groupData.conditions : [];
+    conds.forEach(function (child) {
+      if (child && typeof child === 'object' && Array.isArray(child.conditions)) {
+        childrenEl.appendChild(buildFvrGroup(child, false));
+      } else {
+        childrenEl.appendChild(buildFvrCondition(child && typeof child === 'object' ? child : null));
+      }
+    });
+
+    groupEl.appendChild(header);
+    groupEl.appendChild(childrenEl);
+    return groupEl;
   }
 
   /**
@@ -2103,36 +2648,211 @@
   }
 
   /**
-   * 権限フィールド設定行を DOM から収集して fieldValueRules 配列を返す
-   * fieldCode または value が未選択の行はスキップする
-   * @returns {Array<{fieldCode, fieldType, value, permission, bgColor, textColor}>}
+   * 権限フィールド設定のルール 1 件（条件ツリー + 結果）を生成する
+   * @param {Object} rule - { when, permission, bgColor, textColor }（新形式）
+   * @returns {HTMLElement} .kc-fvr-block
    */
-  function collectFieldValueRules() {
-    if (!elFieldValueRows) return [];
-    var rows = elFieldValueRows.querySelectorAll('.kc-fieldvalue-row');
+  function buildFvrRuleBlock(rule) {
+    var block = document.createElement('div');
+    block.className = 'kc-fvr-block';
+    block.dataset.nodeType = 'rule';
+
+    var head = document.createElement('div');
+    head.className = 'kc-fvr-block-head';
+
+    // ドラッグハンドル（ハンドル部分だけを draggable にして input/select との競合を回避）
+    var handle = buildDragHandle();
+    attachRowDragEvents(block, handle);
+    head.appendChild(handle);
+
+    var title = document.createElement('span');
+    title.className = 'kc-fvr-block-title'; // 「ルール N」は CSS カウンタで付ける（並び替え・削除に自動追従）
+    head.appendChild(title);
+
+    var prio = document.createElement('span');
+    prio.className = 'kc-hint kc-fvr-block-prio';
+    prio.textContent = '上のルールほど優先';
+    head.appendChild(prio);
+
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'kc-config-btn kc-config-btn-secondary kc-fvr-rule-del-btn';
+    delBtn.textContent = 'ルールを削除';
+    delBtn.addEventListener('click', function () {
+      if (!window.confirm('このルールを削除しますか？')) { return; }
+      block.parentNode && block.parentNode.removeChild(block);
+    });
+    head.appendChild(delBtn);
+
+    var tree = document.createElement('div');
+    tree.className = 'kc-fvr-tree';
+    var when = (rule && rule.when && typeof rule.when === 'object') ? rule.when : { logic: 'and', conditions: [{}] };
+    tree.appendChild(buildFvrGroup(when, true));
+
+    var result = document.createElement('div');
+    result.className = 'kc-fvr-result';
+    var resLabel = document.createElement('span');
+    resLabel.className = 'kc-fvr-result-label';
+    resLabel.textContent = '一致したとき:';
+    var permSel = buildFieldValuePermSelect(rule);
+
+    var bgColor   = (rule && rule.bgColor)   ? rule.bgColor   : '#1976d2';
+    var textColor = (rule && rule.textColor) ? rule.textColor : '#ffffff';
+    var bgItem = document.createElement('span');
+    bgItem.className = 'kc-fvr-result-item';
+    var bgLabel = document.createElement('span');
+    bgLabel.textContent = '背景';
+    bgItem.appendChild(bgLabel);
+    bgItem.appendChild(buildColorPickerWidget(bgColor, 'kc-fieldvalue-bgcolor'));
+    var txtItem = document.createElement('span');
+    txtItem.className = 'kc-fvr-result-item';
+    var txtLabel = document.createElement('span');
+    txtLabel.textContent = '文字';
+    txtItem.appendChild(txtLabel);
+    txtItem.appendChild(buildColorPickerWidget(textColor, 'kc-fieldvalue-textcolor'));
+
+    result.appendChild(resLabel);
+    result.appendChild(permSel);
+    result.appendChild(bgItem);
+    result.appendChild(txtItem);
+
+    block.appendChild(head);
+    block.appendChild(tree);
+    block.appendChild(result);
+    return block;
+  }
+
+  /** ルールの追加ボタンで作る新規ルール（ルート AND グループに空の条件行 1 つ。既定は閲覧のみ） */
+  function newFvrRuleTemplate() {
+    return { when: { logic: 'and', conditions: [{}] }, permission: 'view', bgColor: '#1976d2', textColor: '#ffffff' };
+  }
+
+  /**
+   * 検証エラーの赤枠表示を解除する（収集のたびに実行／入力操作でも該当ルール分を解除）
+   * @param {HTMLElement} [root] - 対象の範囲（省略時は権限フィールド設定の全ルール）
+   */
+  function clearFvrInvalidMarks(root) {
+    var scope = root || elFieldValueRows;
+    if (!scope) { return; }
+    scope.querySelectorAll('.kc-fvr-invalid').forEach(function (el) { el.classList.remove('kc-fvr-invalid'); });
+    scope.querySelectorAll('.kc-fvr-block--invalid').forEach(function (el) { el.classList.remove('kc-fvr-block--invalid'); });
+    if (scope.classList && scope.classList.contains('kc-fvr-block')) { scope.classList.remove('kc-fvr-block--invalid'); }
+  }
+
+  /**
+   * 条件ツリー 1 ノード（グループ／条件）を DOM から再帰的に収集する。値が必須の演算子で値が空、
+   * フィールド未選択、条件ゼロのグループは ctx.errors に積み、該当ノードを赤枠にする（FR-5 / U-7）。
+   * 収集自体は不備があっても構造どおりに行う（保存側が errors を見て停止する）。
+   * @param {HTMLElement} el - .kc-fvr-group または .kc-fvr-cond
+   * @param {{errors: string[], ruleNo: number, invalid: boolean}} ctx
+   * @returns {Object|null}
+   */
+  function collectFvrNode(el, ctx) {
+    var fail = function (msg) {
+      el.classList.add('kc-fvr-invalid');
+      ctx.invalid = true;
+      ctx.errors.push('権限フィールド設定 ルール' + ctx.ruleNo + ': ' + msg);
+    };
+
+    if (el.dataset.nodeType === 'group') {
+      var logicSel = fvrChild(fvrChild(el, 'kc-fvr-group-header'), 'kc-fvr-group-header-left');
+      logicSel = logicSel ? logicSel.querySelector('.kc-fvr-logic-select') : null;
+      var logic = (logicSel && logicSel.value === 'or') ? 'or' : 'and';
+      var childrenEl = fvrChild(el, 'kc-fvr-children');
+      var conditions = [];
+      if (childrenEl) {
+        Array.prototype.forEach.call(childrenEl.children, function (childEl) {
+          var node = collectFvrNode(childEl, ctx);
+          if (node) { conditions.push(node); }
+        });
+      }
+      if (conditions.length === 0) { fail('条件のないグループがあります（条件を追加するか、グループを削除してください）'); }
+      return { logic: logic, conditions: conditions };
+    }
+
+    if (el.dataset.nodeType === 'condition') {
+      var fieldSel = fvrChild(el, 'kc-fvr-field-select');
+      var opSel = fvrChild(el, 'kc-fvr-op-select');
+      var fieldCode = fieldSel ? fieldSel.value : '';
+      var fieldType = getFvrSelectedFieldType(fieldSel);
+      var operator = opSel ? opSel.value : '';
+      var cond = { fieldCode: fieldCode, fieldType: fieldType, operator: operator };
+      if (!fieldCode) { fail('条件のフィールドが選択されていません'); return cond; }
+      var cat = RULE_TYPE_CATEGORY[fieldType];
+      if (!cat) { fail('フィールド「' + fieldCode + '」は条件に使えない型です'); return cond; }
+      if (!operator || RULE_OPERATORS[cat].indexOf(operator) === -1) { fail('フィールド「' + fieldCode + '」の演算子が選択されていません'); return cond; }
+      if (RULE_VALUELESS_OPS[operator]) { return cond; }
+
+      var slot = fvrChild(el, 'kc-fvr-value-slot');
+      var area = slot ? slot.firstElementChild : null;
+      if (!area) { fail('フィールド「' + fieldCode + '」の値が入力されていません'); return cond; }
+      if (cat === 'single' || cat === 'multi' || cat === 'status') {
+        var picked = [];
+        area.querySelectorAll('input.kc-fvr-choice-cb').forEach(function (cb) { if (cb.checked) { picked.push(cb.value); } });
+        if (picked.length === 0) { fail('フィールド「' + fieldCode + '」の選択肢が 1 つも選ばれていません'); }
+        cond.value = picked;
+      } else if (cat === 'text') {
+        var tin = area.querySelector('.kc-fvr-value-text');
+        var tv = tin ? tin.value : '';
+        if (tv === '') { fail('フィールド「' + fieldCode + '」の比較文字列が入力されていません'); }
+        cond.value = tv;
+      } else if (cat === 'number') {
+        var nin = area.querySelector('.kc-fvr-value-number');
+        var nv = nin ? nin.value.trim() : '';
+        if (nv === '' || !isFinite(Number(nv))) { fail('フィールド「' + fieldCode + '」の数値が入力されていません'); }
+        cond.value = nv;
+      } else if (cat === 'date') {
+        var modeSel = area.querySelector('.kc-fvr-date-mode');
+        if (modeSel && modeSel.value === 'today') {
+          var offIn = area.querySelector('.kc-fvr-date-offset');
+          var ov = offIn ? offIn.value.trim() : '';
+          var on = Number(ov);
+          if (ov === '' || !isFinite(on) || Math.floor(on) !== on) {
+            fail('フィールド「' + fieldCode + '」の「今日基準」の日数が整数で入力されていません');
+          }
+          cond.value = { mode: 'today', offsetDays: (ov === '' || !isFinite(on)) ? 0 : Math.floor(on) };
+        } else {
+          var fixedIn = area.querySelector('.kc-fvr-date-fixed');
+          var fv = fixedIn ? fixedIn.value : '';
+          if (!RULE_YMD_RE.test(fv)) { fail('フィールド「' + fieldCode + '」の日付が入力されていません'); }
+          cond.value = { mode: 'fixed', date: fv };
+        }
+      }
+      return cond;
+    }
+    return null;
+  }
+
+  /**
+   * 権限フィールド設定を DOM から再帰的に収集して fieldValueRules（新形式）を返す（FR-5）。
+   * 検証エラー（フィールド未選択・値が空・条件ゼロのグループ）は errors に追加し、該当ブロックを赤枠にする。
+   * @param {string[]} [errors] - エラーメッセージの追加先
+   * @returns {Array<{when: Object, permission: string, bgColor: string, textColor: string}>}
+   */
+  function collectFieldValueRules(errors) {
+    if (!elFieldValueRows) { return []; }
+    var errs = errors || [];
+    clearFvrInvalidMarks();
     var result = [];
-    rows.forEach(function (row) {
-      var fieldSel = row.querySelector('.kc-fieldvalue-field-select');
-      var valueSel = row.querySelector('.kc-fieldvalue-value-select');
-      var permSel  = row.querySelector('.kc-fieldvalue-perm-select');
-      var bgInput  = row.querySelector('.kc-fieldvalue-bgcolor');
-      var txtInput = row.querySelector('.kc-fieldvalue-textcolor');
-      if (!fieldSel || !valueSel || !permSel) return;
+    var ruleNo = 0;
+    Array.prototype.forEach.call(elFieldValueRows.children, function (block) {
+      if (!block.classList || !block.classList.contains('kc-fvr-block')) { return; }
+      ruleNo++;
+      var ctx = { errors: errs, ruleNo: ruleNo, invalid: false };
+      var rootEl = fvrChild(fvrChild(block, 'kc-fvr-tree'), 'kc-fvr-group');
+      var when = rootEl ? collectFvrNode(rootEl, ctx) : { logic: 'and', conditions: [] };
+      if (!rootEl) {
+        ctx.invalid = true;
+        errs.push('権限フィールド設定 ルール' + ruleNo + ': 条件がありません');
+      }
+      if (ctx.invalid) { block.classList.add('kc-fvr-block--invalid'); }
 
-      var fieldCode = fieldSel.value;
-      var value     = valueSel.value;
-      if (!fieldCode || !value) return;
-
-      var selOpt   = fieldSel.options[fieldSel.selectedIndex];
-      var fieldType = selOpt ? (selOpt.dataset.fieldtype || '') : '';
-      // フィールドコードが $status の場合は STATUS 型確定
-      if (fieldCode === '$status') { fieldType = 'STATUS'; }
-
+      var permSel  = block.querySelector('.kc-fieldvalue-perm-select');
+      var bgInput  = block.querySelector('.kc-fieldvalue-bgcolor');
+      var txtInput = block.querySelector('.kc-fieldvalue-textcolor');
       result.push({
-        fieldCode:  fieldCode,
-        fieldType:  fieldType,
-        value:      value,
-        permission: permSel.value || 'view',
+        when:       when,
+        permission: (permSel && permSel.value) || 'view',
         bgColor:    bgInput  ? bgInput.value  : '#1976d2',
         textColor:  txtInput ? txtInput.value : '#ffffff'
       });
@@ -4302,19 +5022,17 @@
   }
 
   /**
-   * 保存済み fieldValueRules をフォームに反映する
-   * rules が空配列の場合は空の入力行を 1 つ表示する（UX 向上のため）
+   * 保存済み fieldValueRules をフォームに反映する（条件グループの入れ子ビルダーとして描画）
+   * 旧形式の行が混ざっていても新形式へ変換して表示する（冪等。通常は読み込み時のマイグレーションで変換済み）。
+   * ルールが 0 件のときは何も描画しない（空のルールは保存時検証で止まるため、空行を勝手に置かない。
+   * 「ルールがありません」の案内は CSS の :empty で出す）
    * @param {Array} rules - fieldValueRules 配列
    */
   function applyFieldValueRules(rules) {
     if (!elFieldValueRows) return;
     elFieldValueRows.innerHTML = '';
-    if (!Array.isArray(rules) || rules.length === 0) {
-      elFieldValueRows.appendChild(buildFieldValueRow(null));
-      return;
-    }
-    rules.forEach(function (rule) {
-      elFieldValueRows.appendChild(buildFieldValueRow(rule));
+    migrateFieldValueRulesV13toV14(rules).forEach(function (rule) {
+      elFieldValueRows.appendChild(buildFvrRuleBlock(rule));
     });
   }
 
@@ -5427,6 +6145,15 @@
       parsed.version = 13;
     }
 
+    // version 13 → 14 マイグレーション（fieldValueRules を条件グループ形式へ。REQ_field-value-rule-groups FR-4）
+    // 旧形式 { fieldCode, fieldType, value, ... } を { when: {logic:'and', conditions:[条件1つ]}, ... } へ変換する。
+    // 旧実装で一致しなかった行は破棄する（判定結果は移行前と同じ）。冪等（when を持つ行は触らない）
+    if (Number(parsed.version) < 14) {
+      console.log('[KC Config] version 13 → 14 へマイグレーション実行');
+      parsed.fieldValueRules = migrateFieldValueRulesV13toV14(parsed.fieldValueRules);
+      parsed.version = 14;
+    }
+
     // §11 改訂4: fieldLinkRules トップレベルキーの防御的変換（履歴互換）。
     // 旧中間ビルド（§10 改訂3当時の別キー保存形式）が残っている環境向けに、存在すれば各ルールを
     // trigger.type='fieldChange' のワークフローへ変換して workflows へ統合し、
@@ -5469,6 +6196,11 @@
       delete wf.conditionGroupsJoin;
       delete wf.conditions;
     });
+
+    // fieldValueRules: version 欠落（手書き/AI 生成ファイル等）で v14 段を通らなかった場合も新形式にそろえる（冪等）
+    if (Array.isArray(parsed.fieldValueRules)) {
+      parsed.fieldValueRules = migrateFieldValueRulesV13toV14(parsed.fieldValueRules);
+    }
 
     // bgColor / textColor が欠落したエントリを補完（念のため）
     var rules = Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [];
@@ -5528,7 +6260,7 @@
     if (!parsed || !parsed.version || Number(parsed.version) < 2) {
       console.log('[KC Config] version 2 未満の設定を破棄し再初期化します');
       currentConfig = {
-        version: 13,
+        version: 14,
         fieldMapping: {},
         permissionRules: [],
         fieldValueRules: [],
@@ -5549,7 +6281,7 @@
     parsed = runConfigMigrationChain(parsed);
 
     currentConfig = {
-      version:           13,
+      version:           14,
       fieldMapping:      parsed.fieldMapping || {},
       permissionRules:   Array.isArray(parsed.permissionRules) ? parsed.permissionRules : [],
       fieldValueRules:   Array.isArray(parsed.fieldValueRules) ? parsed.fieldValueRules : [],
@@ -5654,6 +6386,25 @@
         }
       });
       fieldValueFieldOptions.sort(function (a, b) {
+        if (a.label < b.label) return -1;
+        if (a.label > b.label) return 1;
+        return 0;
+      });
+
+      // 権限フィールド設定の条件ビルダー用フィールド一覧（FR-2 の対象型。ルックアップは対象外）
+      ruleCondFieldOptions = [];
+      Object.keys(props).forEach(function (code) {
+        var field = props[code];
+        if (!RULE_TYPE_CATEGORY[field.type] || field.type === 'STATUS') return;
+        if (field.lookup) return; // ルックアップは v1 の対象外（参照キー元の型で返るため lookup 属性で判別）
+        var optNames = field.options
+          ? Object.keys(field.options).sort(function (a, b) {
+            return Number((field.options[a] || {}).index) - Number((field.options[b] || {}).index);
+          })
+          : [];
+        ruleCondFieldOptions.push({ code: code, label: field.label || code, type: field.type, options: optNames });
+      });
+      ruleCondFieldOptions.sort(function (a, b) {
         if (a.label < b.label) return -1;
         if (a.label > b.label) return 1;
         return 0;
@@ -6182,8 +6933,10 @@
     // 権限設定を収集して currentConfig.permissionRules を更新
     currentConfig.permissionRules = collectPermissionRules();
 
-    // 権限フィールド設定を収集して currentConfig.fieldValueRules を更新
-    currentConfig.fieldValueRules = collectFieldValueRules();
+    // 権限フィールド設定（条件グループ）を再帰的に収集して currentConfig.fieldValueRules を更新。
+    // 検証エラー（フィールド未選択・値が空・条件ゼロのグループ）は fvrErrors に積まれ、該当ブロックが赤枠になる
+    var fvrErrors = [];
+    currentConfig.fieldValueRules = collectFieldValueRules(fvrErrors);
 
     // デフォルト権限設定を収集して currentConfig.defaultPermission を更新 (REQ_default-permission)
     currentConfig.defaultPermission = collectDefaultPermission();
@@ -6220,12 +6973,23 @@
       return validation;
     }
 
+
     // ワークフロー設定のバリデーション（AC-9: CHECK_BOX→単一値マッピング等 / §10.4.2: lookup 必須項目。
     // §11.1: トリガー種別ごとに appAction/setField いずれかのバリデーションを適用する）
     var workflowError = validateAllWorkflows(currentConfig.workflows || []);
+
+    // 権限フィールド設定の検証（REQ_field-value-rule-groups FR-5 / U-7: 不備があれば保存・書き出しを止める）と
+    // ワークフローの検証は、片方で早期 return せず連結して返す（両方のタブにエラー印を付けるため）
+    var errs = fvrErrors.slice();
+    var errTabs = [];
+    if (fvrErrors.length > 0) { errTabs.push('permission'); }
     if (workflowError) {
       // ワークフローは「ワークフロー」タブ（REQ_config-tabs FR-5）
-      return { valid: false, errors: [workflowError], tabIds: ['workflow'] };
+      errs.push(workflowError);
+      errTabs.push('workflow');
+    }
+    if (errs.length > 0) {
+      return { valid: false, errors: errs, tabIds: errTabs };
     }
 
     return { valid: true, errors: [], tabIds: [] };
@@ -6366,13 +7130,13 @@
         dndRequireListener: elDndRequireListener ? elDndRequireListener.checked : false
       });
 
-      // 最終的な保存オブジェクト (version 13 形式: permissionRules + fieldValueRules + searchTargets
+      // 最終的な保存オブジェクト (version 14 形式: permissionRules + fieldValueRules（条件グループ形式）+ searchTargets
       // + defaultPermission + overlapMode/refTable(+filterCond) + filterConfig + workflows を含む。
       // §11 改訂4: fieldLinkRules キーは廃止済み。workflows 配列（trigger.type に
       // recordCreate/recordUpdate/fieldChange を含む）のみで全定義を永続化する（AC-28）)
       // §15 改訂8: modalCloseBehavior（保存後モーダルクローズ動作の3モード設定）は廃止済み（AC-44）
       var finalConfig = {
-        version: 13,
+        version: 14,
         fieldMapping:       updatedFieldMapping,
         permissionRules:    currentConfig.permissionRules    || [],
         fieldValueRules:    currentConfig.fieldValueRules    || [],
@@ -6602,7 +7366,7 @@
     });
 
     var exportConfig = {
-      version:           13,
+      version:           14,
       fieldMapping:       exportFieldMapping,
       permissionRules:    currentConfig.permissionRules    || [],
       fieldValueRules:    currentConfig.fieldValueRules    || [],
@@ -6699,7 +7463,15 @@
 
     if (presentKeys.indexOf('fieldValueRules') !== -1 && Array.isArray(configObj.fieldValueRules)) {
       configObj.fieldValueRules.forEach(function (r, i) {
-        if (r) { checkCode('fieldValueRules[' + i + '].fieldCode', r.fieldCode); }
+        if (!r) return;
+        // 新形式（条件グループ）は条件ツリーの全 fieldCode、旧形式は行直下の fieldCode を検査する
+        if (r.when) {
+          walkRuleConditions(r.when, function (c) {
+            checkCode('fieldValueRules[' + i + '] 条件.fieldCode', c.fieldCode);
+          });
+        } else {
+          checkCode('fieldValueRules[' + i + '].fieldCode', r.fieldCode);
+        }
       });
     }
 
@@ -6794,21 +7566,32 @@
         'searchTargets / defaultPermission / filterConfig / views / workflows のいずれも見つかりません）。'] };
     }
 
-    if (meta.fileVersion !== null && Number(meta.fileVersion) > 13) {
+    if (meta.fileVersion !== null && Number(meta.fileVersion) > 14) {
       return { blocked: ['このファイルの version（' + meta.fileVersion + '）は、このプラグインが対応する最大バージョン' +
-        '（13）を超えています。新しいバージョンのプラグインで書き出されたファイルの可能性があります。'] };
+        '（14）を超えています。新しいバージョンのプラグインで書き出されたファイルの可能性があります。'] };
     }
 
     var warnings = [];
 
-    // マイグレーション（AC-8）: version が現行 (13) より小さい場合のみ、既存の loadInitialConfig と
+    // マイグレーション（AC-8）: version が現行 (14) より小さい場合のみ、既存の loadInitialConfig と
     // 共通のマイグレーション連鎖（runConfigMigrationChain）を通してから取り込む。
     // 元データを破壊しないよう複製してから渡す。
     var workingConfigObj = configObj;
-    if (meta.fileVersion !== null && Number(meta.fileVersion) < 13) {
-      warnings.push('このファイルの version（' + meta.fileVersion + '）は現在（13）より古いため、' +
+    if (meta.fileVersion !== null && Number(meta.fileVersion) < 14) {
+      warnings.push('このファイルの version（' + meta.fileVersion + '）は現在（14）より古いため、' +
         'マイグレーションを適用して取り込みます。');
       workingConfigObj = runConfigMigrationChain(JSON.parse(JSON.stringify(configObj)));
+    }
+
+    // 権限フィールド設定（fieldValueRules）: 旧形式・新形式（混在可）を新形式へそろえ、不正な行
+    // （未知の operator・型不一致・値の形の不正・旧形式で変換できない行）は取り込まず警告にする
+    // （REQ_field-value-rule-groups FR-4）。マイグレーション連鎖が行う変換（不正行の黙った破棄）より前の
+    // 元データから検証する。version が無い手書き/AI 生成ファイルや、version 14 のファイルもここを通る。
+    if (presentKeys.indexOf('fieldValueRules') !== -1 && Array.isArray(configObj.fieldValueRules)) {
+      var fvrImport = sanitizeImportedFieldValueRules(configObj.fieldValueRules);
+      if (workingConfigObj === configObj) { workingConfigObj = Object.assign({}, configObj); }
+      workingConfigObj.fieldValueRules = fvrImport.rules;
+      warnings = warnings.concat(fvrImport.warnings);
     }
 
     // 型バリデーション（ブロック要因。AC-7）
@@ -7273,10 +8056,20 @@
       });
     }
 
-    // 権限フィールド設定 − 行追加ボタン
+    // 権限フィールド設定 − ルール追加ボタン（ルート AND グループ + 空の条件行 1 つの新規ルール）
     if (elFieldValueAdd) {
       elFieldValueAdd.addEventListener('click', function () {
-        elFieldValueRows.appendChild(buildFieldValueRow(null));
+        elFieldValueRows.appendChild(buildFvrRuleBlock(newFvrRuleTemplate()));
+      });
+    }
+    // 権限フィールド設定 − 検証エラーの赤枠は、そのルールを操作したら解除する（キャプチャ段階で拾い、
+    // 削除ボタン等で操作対象が DOM から外れても確実に解除する）
+    if (elFieldValueRows) {
+      ['input', 'change', 'click'].forEach(function (evName) {
+        elFieldValueRows.addEventListener(evName, function (e) {
+          var blk = e.target && e.target.closest ? e.target.closest('.kc-fvr-block') : null;
+          if (blk) { clearFvrInvalidMarks(blk); }
+        }, true);
       });
     }
 

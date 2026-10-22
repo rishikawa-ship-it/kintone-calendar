@@ -182,7 +182,7 @@
      *     version: 6,
      *     fieldMapping: { ... },
      *     permissionRules: [{ fieldCode, fieldType, permission, bgColor, textColor }, ...],
-     *     fieldValueRules: [{ fieldCode, fieldType, value, permission, bgColor, textColor }, ...],
+     *     fieldValueRules: [{ when: {logic, conditions}, permission, bgColor, textColor }, ...]（v14。v13 以前の旧形式行は実行時に変換）,
      *     views: { "<viewId>": { calendarTitle, defaultView } }
      *   }
      *
@@ -302,7 +302,14 @@
 
       // フィールド値権限ルール (version 6 以降) を適用
       // v5 以前の設定では fieldValueRules が存在しないため空配列として初期化する（§8.3 後方互換）
-      KC.Config.FIELDVALUE_RULES = Array.isArray(config.fieldValueRules) ? config.fieldValueRules : [];
+      // v14 以降は { when, permission, bgColor, textColor }（条件グループ AND/OR 入れ子。REQ_field-value-rule-groups）。
+      // 設定画面で再保存していない v13 以前の旧形式行（{ fieldCode, fieldType, value, ... }）も、ここで実行時に
+      // 新形式へ変換する（冪等。旧実装と同じ判定結果になる。KC.RuleEval.convertLegacyRule 参照）
+      KC.Config.FIELDVALUE_RULES = KC.RuleEval.normalizeRules(
+        Array.isArray(config.fieldValueRules) ? config.fieldValueRules : []);
+      // 条件ツリーに現れるフィールド（レコード取得の fields 自動追加・値抽出の定義）と、所属取得の要否
+      KC.Config.FIELDVALUE_FIELD_DEFS = KC.RuleEval.collectFieldDefs(KC.Config.FIELDVALUE_RULES);
+      KC.Config.FIELDVALUE_MEMBERSHIP_NEEDS = KC.RuleEval.needsMembership(KC.Config.FIELDVALUE_RULES);
 
       // 検索対象フィールド設定 (version 7 以降) を適用
       // v6 以前の設定では searchTargets が存在しないため空配列として初期化する
@@ -388,9 +395,21 @@
   /**
    * フィールド値権限ルール配列 (REQ_edit-permission-extension v6 §6.1)
    * loadFromPluginConfig で上書きされる。初期値は空配列 = フォールバック
-   * @type {Array<{fieldCode: string, fieldType: string, value: string, permission: string, bgColor: string, textColor: string}>}
+   * 各行は { when: 条件グループ, permission, bgColor, textColor }（REQ_field-value-rule-groups FR-1。評価は KC.RuleEval）
+   * @type {Array<{when: Object, permission: string, bgColor: string, textColor: string}>}
    */
   KC.Config.FIELDVALUE_RULES = [];
+  /**
+   * フィールド値ルールの条件ツリーに現れるフィールド定義（fieldCode 重複除去。FR-3）
+   * レコード取得の fields 指定への自動追加と、KcEvent.valueFields の抽出に使う。loadFromPluginConfig で設定される
+   * @type {Array<{fieldCode: string, fieldType: string}>}
+   */
+  KC.Config.FIELDVALUE_FIELD_DEFS = [];
+  /**
+   * フィールド値ルールの条件に ORGANIZATION_SELECT / GROUP_SELECT があるか（User API 取得の要否。FR-2）
+   * @type {{org: boolean, group: boolean}}
+   */
+  KC.Config.FIELDVALUE_MEMBERSHIP_NEEDS = { org: false, group: false };
   /**
    * 検索対象フィールド配列 (REQ_search-bar v3 §6.1)
    * loadFromPluginConfig で上書きされる。初期値は空配列 = 何もマッチしない（検索無効化に近い動作）。
@@ -658,9 +677,10 @@
       var pfc = permRules[pri].fieldCode;
       if (pfc && fieldList.indexOf(pfc) === -1) fieldList.push(pfc);
     }
-    var fvRules = KC.Config.FIELDVALUE_RULES || [];
-    for (var fvri = 0; fvri < fvRules.length; fvri++) {
-      var fvfc = fvRules[fvri].fieldCode;
+    // フィールド値ルールの条件ツリーに現れる全フィールドを自動で取得対象に加える（REQ_field-value-rule-groups FR-3）
+    var fvDefs = KC.Config.FIELDVALUE_FIELD_DEFS || [];
+    for (var fvri = 0; fvri < fvDefs.length; fvri++) {
+      var fvfc = fvDefs[fvri].fieldCode;
       if (fvfc && fieldList.indexOf(fvfc) === -1) fieldList.push(fvfc);
     }
     // フィルタ設定 (fieldValue 型グループ) の対象フィールドも取得対象に含める（REQ_checkbox-filter §8.2）
@@ -989,6 +1009,465 @@
   };
 
   /* ====================================================================
+   * KC.RuleEval — フィールド値ルール（条件グループ AND/OR 入れ子）の評価
+   * （REQ_field-value-rule-groups FR-1〜FR-4）
+   *
+   * fieldValueRules の 1 行は { when, permission, bgColor, textColor }。
+   *   when      : グループ { logic: 'and'|'or', conditions: [条件 | グループ, ...] }（入れ子の深さは無制限）
+   *   条件      : { fieldCode, fieldType, operator, value }
+   * 評価は純関数 evaluate(when, getValue, ctx)。DOM・kintone・State に依存しないため Node で単体テストできる
+   * （このブロックは @KC-RULEEVAL-BEGIN / END のマーカーで抜き出してテストする）。
+   *
+   * ★ 相互参照: OPERATORS / TYPE_CATEGORY / convertLegacyRule は config.js の RULE_OPERATORS /
+   *   RULE_TYPE_CATEGORY / convertLegacyFieldValueRule と同一定義にすること。別スクリプトコンテキスト
+   *   のため実装は重複するが、片方だけ直すと設定画面の表示・移行結果と実行時の評価がズレる。
+   *   （scratchpad の単体テストが両者の一致を機械的に確認する）
+   * ==================================================================== */
+  /* @KC-RULEEVAL-BEGIN */
+  KC.RuleEval = (function () {
+    /** フィールド型の区分 → 使える演算子（FR-2。設定画面と共有する定数テーブル） */
+    var OPERATORS = {
+      text:   ['eq', 'ne', 'contains', 'notContains', 'isEmpty', 'isNotEmpty'],
+      single: ['in', 'notIn', 'isEmpty', 'isNotEmpty'],
+      multi:  ['contains', 'notContains', 'isEmpty', 'isNotEmpty'],
+      status: ['in', 'notIn'],
+      number: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'isEmpty', 'isNotEmpty'],
+      date:   ['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'isEmpty', 'isNotEmpty'],
+      user:   ['containsLoginUser', 'notContainsLoginUser']
+    };
+
+    /** フィールド型 → 区分（ここに無い型は条件にできない。サブテーブル内・ルックアップ・計算・TIME は対象外） */
+    var TYPE_CATEGORY = {
+      SINGLE_LINE_TEXT: 'text', MULTI_LINE_TEXT: 'text', LINK: 'text',
+      DROP_DOWN: 'single', RADIO_BUTTON: 'single',
+      CHECK_BOX: 'multi', MULTI_SELECT: 'multi',
+      STATUS: 'status',
+      NUMBER: 'number',
+      DATE: 'date', DATETIME: 'date', CREATED_TIME: 'date', UPDATED_TIME: 'date',
+      USER_SELECT: 'user', ORGANIZATION_SELECT: 'user', GROUP_SELECT: 'user'
+    };
+
+    /** 値入力を持たない演算子 */
+    var VALUELESS_OPS = { isEmpty: true, isNotEmpty: true, containsLoginUser: true, notContainsLoginUser: true };
+
+    var _warned = {};
+    /** 同じ原因の警告は 1 度だけ出す（評価は描画のたびに走るためコンソールを埋めない） */
+    function _warnOnce(key, msg) {
+      if (_warned[key]) return;
+      _warned[key] = true;
+      console.warn('[KC.RuleEval] ' + msg);
+    }
+    function _resetWarnings() { _warned = {}; }
+
+    function _pad2(n) { return (n < 10 ? '0' : '') + n; }
+    /** Date → ローカル日付 'YYYY-MM-DD' */
+    function _ymd(d) { return d.getFullYear() + '-' + _pad2(d.getMonth() + 1) + '-' + _pad2(d.getDate()); }
+    var YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+    /**
+     * フィールド値（DATE は 'YYYY-MM-DD'、DATETIME 等は ISO 8601）→ ローカル日付 'YYYY-MM-DD'。
+     * 空・解釈不能は ''。DATETIME は値をローカル日付へ変換して日付単位で比較する（JST 運用前提）
+     */
+    function _toYmd(raw) {
+      if (typeof raw !== 'string' || raw === '') return '';
+      if (YMD_RE.test(raw)) return raw;
+      var d = new Date(raw);
+      if (isNaN(d.getTime())) return '';
+      return _ymd(d);
+    }
+
+    /** 条件の日付オペランド（固定日 / 今日基準）→ 'YYYY-MM-DD'。不正なら null */
+    function _resolveDateOperand(v, today) {
+      if (!v || typeof v !== 'object') return null;
+      if (v.mode === 'today') {
+        var n = Number(v.offsetDays);
+        if (v.offsetDays === '' || v.offsetDays === null || typeof v.offsetDays === 'boolean' ||
+            !isFinite(n) || Math.floor(n) !== n) return null;
+        var m = YMD_RE.test(today) ? today.split('-') : null;
+        if (!m) return null;
+        return _ymd(new Date(Number(m[0]), Number(m[1]) - 1, Number(m[2]) + n));
+      }
+      if (v.mode === 'fixed' && typeof v.date === 'string' && YMD_RE.test(v.date)) return v.date;
+      return null;
+    }
+
+    /** 選択肢系の value（配列。単一文字列は 1 要素配列として許容）→ 文字列配列 */
+    function _toArray(v) {
+      if (Array.isArray(v)) return v;
+      if (typeof v === 'string') return [v];
+      return [];
+    }
+
+    function _anyIn(haystack, needles) {
+      for (var i = 0; i < needles.length; i++) {
+        if (haystack.indexOf(needles[i]) !== -1) return true;
+      }
+      return false;
+    }
+
+    /** 評価に使う値の形が区分と合っているか（文字列系は string、配列系は array） */
+    function _shapeOk(cat, val) {
+      return (cat === 'multi' || cat === 'user') ? Array.isArray(val) : (typeof val === 'string');
+    }
+
+    /**
+     * 条件 1 件を評価する
+     * @returns {boolean} 値が未取得・型不一致・演算子不正・所属未取得のとき false（negative 系の演算子も false）
+     */
+    function _evalCondition(cond, getValue, ctx) {
+      if (!cond || typeof cond !== 'object' || !cond.fieldCode) return false;
+      var cat = TYPE_CATEGORY[cond.fieldType];
+      if (!cat) {
+        _warnOnce('type:' + cond.fieldCode + ':' + cond.fieldType,
+          'フィールド「' + cond.fieldCode + '」の型 ' + cond.fieldType + ' は条件に使えません。条件は false として扱います');
+        return false;
+      }
+      var op = cond.operator;
+      if (OPERATORS[cat].indexOf(op) === -1) {
+        _warnOnce('op:' + cond.fieldCode + ':' + op,
+          'フィールド「' + cond.fieldCode + '」（' + cond.fieldType + '）に演算子 ' + op + ' は使えません。条件は false として扱います');
+        return false;
+      }
+      var val = getValue(cond.fieldCode);
+      if (val === undefined) {
+        // 値が取得されていない（fields 指定漏れ等）。未取得と空は区別し、negative 系も含めて false
+        _warnOnce('missing:' + cond.fieldCode,
+          'フィールド「' + cond.fieldCode + '」の値が取得されていません。この条件は false として扱います');
+        return false;
+      }
+      if (!_shapeOk(cat, val)) {
+        _warnOnce('shape:' + cond.fieldCode,
+          'フィールド「' + cond.fieldCode + '」の値の形が型 ' + cond.fieldType + ' と一致しません（アプリ側でフィールド型が変わった可能性）。この条件は false として扱います');
+        return false;
+      }
+
+      // ---- ユーザー・組織・グループ ----
+      if (cat === 'user') {
+        var pool;
+        if (cond.fieldType === 'USER_SELECT') {
+          pool = ctx.loginCode ? [ctx.loginCode] : null;
+        } else if (cond.fieldType === 'ORGANIZATION_SELECT') {
+          pool = Array.isArray(ctx.orgCodes) ? ctx.orgCodes : null;
+        } else {
+          pool = Array.isArray(ctx.groupCodes) ? ctx.groupCodes : null;
+        }
+        // 所属・ログインユーザーが取得できていない場合は false（取得失敗の警告は取得側が 1 回出す）
+        if (pool === null) return false;
+        var hit = _anyIn(val, pool);
+        return op === 'containsLoginUser' ? hit : !hit;
+      }
+
+      // ---- 空判定（全区分共通） ----
+      if (op === 'isEmpty' || op === 'isNotEmpty') {
+        var empty = (cat === 'multi') ? (val.length === 0)
+          : (cat === 'date') ? (_toYmd(val) === '') : (val === '');
+        return op === 'isEmpty' ? empty : !empty;
+      }
+
+      // ---- 選択肢系（単一選択・ステータス） ----
+      if (cat === 'single' || cat === 'status') {
+        var inHit = _toArray(cond.value).indexOf(val) !== -1;
+        return op === 'in' ? inHit : !inHit;
+      }
+
+      // ---- 複数選択 ----
+      if (cat === 'multi') {
+        var mHit = _anyIn(val, _toArray(cond.value));
+        return op === 'contains' ? mHit : !mHit;
+      }
+
+      // ---- 文字列 ----
+      if (cat === 'text') {
+        var tv = (cond.value === undefined || cond.value === null) ? '' : String(cond.value);
+        switch (op) {
+          case 'eq':          return val === tv;
+          case 'ne':          return val !== tv;
+          case 'contains':    return val.indexOf(tv) !== -1;
+          case 'notContains': return val.indexOf(tv) === -1;
+        }
+        return false;
+      }
+
+      // ---- 数値 ----
+      if (cat === 'number') {
+        var rhs = (typeof cond.value === 'number') ? cond.value
+          : (typeof cond.value === 'string' && cond.value.trim() !== '' ? Number(cond.value) : NaN);
+        if (!isFinite(rhs)) {
+          _warnOnce('num:' + cond.fieldCode, 'フィールド「' + cond.fieldCode + '」の数値条件の値が不正です。この条件は false として扱います');
+          return false;
+        }
+        var lhs = (val.trim() === '') ? NaN : Number(val);
+        // 値が空・非数値のとき、isEmpty 以外は false、ne のみ true
+        if (!isFinite(lhs)) return op === 'ne';
+        switch (op) {
+          case 'eq':  return lhs === rhs;
+          case 'ne':  return lhs !== rhs;
+          case 'gt':  return lhs > rhs;
+          case 'gte': return lhs >= rhs;
+          case 'lt':  return lhs < rhs;
+          case 'lte': return lhs <= rhs;
+        }
+        return false;
+      }
+
+      // ---- 日付・日時（日付単位の比較） ----
+      if (cat === 'date') {
+        var dRhs = _resolveDateOperand(cond.value, ctx.today);
+        if (dRhs === null) {
+          _warnOnce('date:' + cond.fieldCode, 'フィールド「' + cond.fieldCode + '」の日付条件の値が不正です。この条件は false として扱います');
+          return false;
+        }
+        var dLhs = _toYmd(val);
+        if (dLhs === '') return op === 'ne'; // 値が空: isEmpty 以外は false、ne のみ true（数値と同じ扱い）
+        switch (op) {
+          case 'eq':  return dLhs === dRhs;
+          case 'ne':  return dLhs !== dRhs;
+          case 'lt':  return dLhs < dRhs;
+          case 'lte': return dLhs <= dRhs;
+          case 'gt':  return dLhs > dRhs;
+          case 'gte': return dLhs >= dRhs;
+        }
+        return false;
+      }
+      return false;
+    }
+
+    /**
+     * グループ／条件を再帰評価する。空グループ（conditions が空）は false（空の AND が全レコードに一致する事故の防止）
+     */
+    function _evalNode(node, getValue, ctx) {
+      if (node && typeof node === 'object' && Array.isArray(node.conditions)) {
+        var list = node.conditions;
+        if (list.length === 0) return false;
+        var i;
+        if (node.logic === 'or') {
+          for (i = 0; i < list.length; i++) {
+            if (_evalNode(list[i], getValue, ctx)) return true;
+          }
+          return false;
+        }
+        for (i = 0; i < list.length; i++) {
+          if (!_evalNode(list[i], getValue, ctx)) return false;
+        }
+        return true;
+      }
+      return _evalCondition(node, getValue, ctx);
+    }
+
+    /**
+     * 条件グループ when を評価する（純関数）
+     * @param {Object} when - ルートグループ { logic, conditions }
+     * @param {function(string): (string|string[]|undefined)} getValue - フィールドコード → 正規化済みの値（未取得は undefined）
+     *   値の形: 文字列系は string（空は ''）、CHECK_BOX/MULTI_SELECT は string[]、USER_SELECT/ORGANIZATION_SELECT/
+     *   GROUP_SELECT は code の string[]（extractValue がこの形にする）
+     * @param {{loginCode: ?string, orgCodes: ?string[], groupCodes: ?string[], today: ?(string|Date)}} ctx
+     *   today は 'YYYY-MM-DD' または Date（省略時は評価時点のローカル日付）。orgCodes/groupCodes が null は「所属を取得できていない」
+     * @returns {boolean}
+     */
+    function evaluate(when, getValue, ctx) {
+      ctx = ctx || {};
+      var today = ctx.today;
+      if (today instanceof Date) today = _ymd(today);
+      if (typeof today !== 'string') today = _ymd(new Date());
+      return _evalNode(when, getValue, {
+        loginCode: ctx.loginCode || null,
+        orgCodes: ctx.orgCodes,
+        groupCodes: ctx.groupCodes,
+        today: today
+      });
+    }
+
+    /** when ツリー内の全条件に対してコールバックする */
+    function _walkConditions(node, cb) {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node.conditions)) {
+        for (var i = 0; i < node.conditions.length; i++) _walkConditions(node.conditions[i], cb);
+        return;
+      }
+      cb(node);
+    }
+
+    /**
+     * 全ルールの条件ツリーに現れるフィールド（fieldCode 重複除去）を返す。
+     * レコード取得の fields 指定への自動追加と、レコードからの値抽出の定義に使う（FR-3）
+     * @param {Array} rules - 新形式の fieldValueRules
+     * @returns {Array<{fieldCode: string, fieldType: string}>}
+     */
+    function collectFieldDefs(rules) {
+      var seen = {};
+      var out = [];
+      (rules || []).forEach(function (r) {
+        _walkConditions(r && r.when, function (c) {
+          if (!c.fieldCode || seen[c.fieldCode]) return;
+          seen[c.fieldCode] = true;
+          out.push({ fieldCode: c.fieldCode, fieldType: c.fieldType });
+        });
+      });
+      return out;
+    }
+
+    /** 条件に ORGANIZATION_SELECT / GROUP_SELECT が含まれるか（User API を呼ぶ必要があるか） */
+    function needsMembership(rules) {
+      var need = { org: false, group: false };
+      (rules || []).forEach(function (r) {
+        _walkConditions(r && r.when, function (c) {
+          if (c.fieldType === 'ORGANIZATION_SELECT') need.org = true;
+          if (c.fieldType === 'GROUP_SELECT') need.group = true;
+        });
+      });
+      return need;
+    }
+
+    /**
+     * kintone レコードから、評価用に正規化した値を取り出す（getValue の元データ）
+     * @returns {string|string[]|undefined} レコードにフィールドが無ければ undefined（'$status' は旧実装どおり無ければ ''）
+     */
+    function extractValue(rec, fieldCode, fieldType) {
+      if (fieldCode === '$status') {
+        return rec.$status ? (rec.$status.value || '') : '';
+      }
+      var f = rec[fieldCode];
+      if (!f) return undefined;
+      var cat = TYPE_CATEGORY[fieldType];
+      var v = f.value;
+      if (cat === 'multi') {
+        return Array.isArray(v) ? v : [];
+      }
+      if (cat === 'user') {
+        return Array.isArray(v) ? v.map(function (x) { return (x && x.code) || ''; }) : [];
+      }
+      // 旧実装（rec.value || ''）と同じ: null/undefined は ''。配列等の想定外の形はそのまま渡す（評価側が型不一致として警告）
+      if (v === null || v === undefined) return '';
+      if (typeof v === 'number') return String(v);
+      return v;
+    }
+
+    /**
+     * 旧形式 fieldValueRules の 1 行 → 新形式の 1 行（FR-4。冪等: when を持つ行はそのまま返す）
+     * 旧実装（getPermission）との一致:
+     *   - CHECK_BOX は配列包含 → contains [value]
+     *   - DROP_DOWN / RADIO_BUTTON / STATUS は完全一致 → in [value]
+     *   - 値が空の DROP_DOWN / RADIO_BUTTON は旧実装では「フィールド値が空のレコード」に一致した → isEmpty
+     *     （値が空の STATUS は in [''] で同じ結果になる）
+     *   - 旧実装で絶対に一致しなかった行（フィールドコード空、値が空の CHECK_BOX）・旧 UI で作れない型の行は
+     *     一致に影響しないため rule: null を返す（呼び出し側は破棄し、note で理由を知らせる）
+     * ★ config.js の convertLegacyFieldValueRule と同一ロジックにすること
+     * @param {Object} row
+     * @returns {{rule: ?Object, note: ?string}}
+     */
+    function convertLegacyRule(row) {
+      if (!row || typeof row !== 'object') return { rule: null, note: '行がオブジェクトではありません' };
+      if (row.when && typeof row.when === 'object') return { rule: row, note: null };
+      var code = row.fieldCode;
+      if (!code || typeof code !== 'string') return { rule: null, note: 'フィールドコードが空のため（旧実装でも一致しない行）' };
+      var type = row.fieldType || (code === '$status' ? 'STATUS' : 'DROP_DOWN');
+      var val = row.value;
+      var cond;
+      if (type === 'CHECK_BOX') {
+        if (typeof val !== 'string' || val === '') return { rule: null, note: 'チェックボックスの値が空のため（旧実装でも一致しない行）' };
+        cond = { fieldCode: code, fieldType: type, operator: 'contains', value: [val] };
+      } else if (type === 'DROP_DOWN' || type === 'RADIO_BUTTON') {
+        if (typeof val !== 'string') return { rule: null, note: '値が文字列ではありません' };
+        cond = (val === '')
+          ? { fieldCode: code, fieldType: type, operator: 'isEmpty' }
+          : { fieldCode: code, fieldType: type, operator: 'in', value: [val] };
+      } else if (type === 'STATUS') {
+        if (typeof val !== 'string') return { rule: null, note: '値が文字列ではありません' };
+        cond = { fieldCode: code, fieldType: type, operator: 'in', value: [val] };
+      } else {
+        return { rule: null, note: 'フィールド型 ' + type + ' は旧形式では扱えません' };
+      }
+      return {
+        rule: {
+          when: { logic: 'and', conditions: [cond] },
+          permission: row.permission || 'view',
+          bgColor: row.bgColor,
+          textColor: row.textColor
+        },
+        note: null
+      };
+    }
+
+    /** 旧形式・新形式が混在する配列を新形式へそろえる（変換できない行は破棄して警告） */
+    function normalizeRules(rows) {
+      var out = [];
+      (rows || []).forEach(function (row, i) {
+        var res = convertLegacyRule(row);
+        if (res.rule) {
+          out.push(res.rule);
+        } else {
+          console.warn('[KC.RuleEval] fieldValueRules[' + i + '] は使用しません: ' + res.note);
+        }
+      });
+      return out;
+    }
+
+    /**
+     * ログインユーザーの所属組織・所属グループのコードを取得する（カレンダー起動時に 1 回）。
+     * 実測（2026-10-21、管理者ユーザーで DEV 654 から）:
+     *   - kintone.api(kintone.api.url('/v1/user/organizations.json', true), 'GET', { code }) と
+     *     '/v1/user/groups.json' を呼べる（URL は既存コードの流儀に合わせて .json を明示する）
+     *   - レスポンスは { organizationTitles: [{ organization: { code, name }, title }] } と { groups: [{ code, name }] }
+     *   - 組織コードは ORGANIZATION_SELECT の value[].code と同体系（グループも同形式を想定）
+     * 未確認（U-10 残り）: 一般ユーザーで本人分を取得できるか（権限不足なら失敗扱い＝該当条件 false＋警告）
+     * 失敗時は該当の codes を null のままにし（条件は false）、console.warn を 1 回出す。この Promise は reject しない
+     * @param {function} apiFn - kintone.api 相当 (url, method, params) を受け取り Promise を返す関数
+     * @param {function} urlFn - kintone.api.url 相当 (path, detectGuest) を受け取り string を返す関数
+     * @param {?string} loginCode
+     * @param {{org: boolean, group: boolean}} need
+     * @returns {Promise<{orgCodes: ?string[], groupCodes: ?string[]}>}
+     */
+    function loadMembership(apiFn, urlFn, loginCode, need) {
+      var out = { orgCodes: null, groupCodes: null };
+      var tasks = [];
+      need = need || {};
+      function fetchOne(path, pick, assign, label) {
+        if (!loginCode) {
+          _warnOnce('membership:' + label, 'ログインユーザーのコードが取得できないため、' + label + 'の所属を取得できません。該当条件は false として扱います');
+          return Promise.resolve();
+        }
+        return Promise.resolve()
+          .then(function () { return apiFn(urlFn(path, true), 'GET', { code: loginCode }); })
+          .then(function (resp) { assign(pick(resp)); })
+          .catch(function (err) {
+            _warnOnce('membership:' + label, label + 'の所属を取得できませんでした。該当条件は false として扱います: ' +
+              ((err && (err.message || err.code)) || err));
+          });
+      }
+      if (need.org) {
+        tasks.push(fetchOne('/v1/user/organizations.json', function (resp) {
+          return ((resp && resp.organizationTitles) || [])
+            .map(function (t) { return t && t.organization && t.organization.code; })
+            .filter(function (c) { return !!c; });
+        }, function (codes) { out.orgCodes = codes; }, '組織'));
+      }
+      if (need.group) {
+        tasks.push(fetchOne('/v1/user/groups.json', function (resp) {
+          return ((resp && resp.groups) || [])
+            .map(function (g) { return g && g.code; })
+            .filter(function (c) { return !!c; });
+        }, function (codes) { out.groupCodes = codes; }, 'グループ'));
+      }
+      return Promise.all(tasks).then(function () { return out; });
+    }
+
+    return {
+      OPERATORS: OPERATORS,
+      TYPE_CATEGORY: TYPE_CATEGORY,
+      VALUELESS_OPS: VALUELESS_OPS,
+      evaluate: evaluate,
+      collectFieldDefs: collectFieldDefs,
+      needsMembership: needsMembership,
+      extractValue: extractValue,
+      convertLegacyRule: convertLegacyRule,
+      normalizeRules: normalizeRules,
+      loadMembership: loadMembership,
+      _resetWarnings: _resetWarnings
+    };
+  }());
+  /* @KC-RULEEVAL-END */
+
+  /* ====================================================================
    * KC.Api — kintone REST API ラッパー
    * ==================================================================== */
   KC.Api = {
@@ -1023,24 +1502,19 @@
         }
       }
 
-      // フィールド値権限判定用のフィールド値を収集する（REQ_edit-permission-extension v6 §6.2）
-      // CHECK_BOX は文字列配列、その他（DROP_DOWN/RADIO_BUTTON/STATUS）は文字列で格納する
+      // フィールド値権限判定用のフィールド値を収集する（REQ_edit-permission-extension v6 §6.2 /
+      // REQ_field-value-rule-groups FR-3）。条件ツリーに現れる全フィールドを型に応じた形で格納する:
+      //   文字列系・選択肢系・数値・日付 = 文字列（空は ''）、CHECK_BOX/MULTI_SELECT = 文字列配列、
+      //   USER_SELECT/ORGANIZATION_SELECT/GROUP_SELECT = code の配列。
+      // レコードに含まれないフィールドは undefined のまま（評価側で条件 false＋警告。通常は fields 自動追加で発生しない）
       var valueFields = {};
-      var fvRules = KC.Config.FIELDVALUE_RULES || [];
-      for (var fvi = 0; fvi < fvRules.length; fvi++) {
-        var fvCode = fvRules[fvi].fieldCode;
-        var fvType = fvRules[fvi].fieldType;
+      var fvDefs = KC.Config.FIELDVALUE_FIELD_DEFS || [];
+      for (var fvi = 0; fvi < fvDefs.length; fvi++) {
+        var fvCode = fvDefs[fvi].fieldCode;
         if (!fvCode) continue;
-        if (fvCode === '$status') {
-          // $status はプロセス管理の特殊フィールドコード（未検証: 実機での動作を要確認）
-          valueFields[fvCode] = rec['$status'] ? (rec['$status'].value || '') : '';
-        } else if (rec[fvCode]) {
-          if (fvType === 'CHECK_BOX') {
-            valueFields[fvCode] = Array.isArray(rec[fvCode].value) ? rec[fvCode].value : [];
-          } else {
-            valueFields[fvCode] = rec[fvCode].value || '';
-          }
-        }
+        var fvVal = KC.RuleEval.extractValue(rec, fvCode, fvDefs[fvi].fieldType);
+        // $status はプロセス管理の特殊フィールドコード（未検証: 実機での動作を要確認）
+        if (fvVal !== undefined) valueFields[fvCode] = fvVal;
       }
 
       // チェックボックス式フィルタ（fieldValue 型グループ）対象フィールドの値も valueFields に収集する
@@ -1219,9 +1693,9 @@
               var pfc = permRules[pri].fieldCode;
               if (pfc && fieldList.indexOf(pfc) === -1) fieldList.push(pfc);
             }
-            var fvRulesForField = KC.Config.FIELDVALUE_RULES || [];
-            for (var fvri = 0; fvri < fvRulesForField.length; fvri++) {
-              var fvfc = fvRulesForField[fvri].fieldCode;
+            var fvDefsForField = KC.Config.FIELDVALUE_FIELD_DEFS || [];
+            for (var fvri = 0; fvri < fvDefsForField.length; fvri++) {
+              var fvfc = fvDefsForField[fvri].fieldCode;
               if (fvfc && fieldList.indexOf(fvfc) === -1) fieldList.push(fvfc);
             }
             var overlapKeyCode = KC.Config.OVERLAP_KEY_FIELD_CODE;
@@ -2803,6 +3277,25 @@
     /** イベント契約のバージョン（detail.contractVersion） */
     var DND_HOOK_CONTRACT_VERSION = 1;
 
+    /**
+     * DnD の権限ガード（REQ_field-value-rule-groups FR-6）。start 系 8 関数の先頭（DND_ENABLED ガードの直後・
+     * preventDefault / stopPropagation より前）と _commitOptimistic の先頭で使う。
+     * 描画側の配線（権限のないレコードにハンドルを付けない）が漏れても、権限のないレコードは動かせない最終防衛線。
+     * return のみで終わるため、mousedown 後の click で編集ポップアップを開く既存動作は妨げない
+     * （クリックで開く編集画面 KC.Popup.openEdit にはガードを適用しない。REQ U-5）。
+     * 権限判定が例外になった場合は安全側（不許可）に倒す。
+     * @param {Object} ev - KcEvent
+     * @returns {boolean} 編集してよければ true
+     */
+    function _canEditForDnd(ev) {
+      try {
+        return !!KC.LoginContext.getPermission(ev).canEdit;
+      } catch (e) {
+        console.error('[KC.DnD] 権限判定に失敗したため DnD を行いません:', e);
+        return false;
+      }
+    }
+
     /** _drag.type から保存フック用の source を導出する（resize-* はリサイズ、それ以外は移動） */
     function _deriveDndSource(dragType) {
       return (typeof dragType === 'string' && dragType.indexOf('resize') === 0) ? 'resize' : 'dnd';
@@ -2977,6 +3470,13 @@
     async function _commitOptimistic(origEv, newStart, newEnd, source) {
       // 二重防御: ドラッグ操作無効設定時は一切更新せず resolve する（呼び出し元は .catch のみ使用）
       if (!KC.Config.DND_ENABLED) return;
+      // 二重防御（REQ_field-value-rule-groups FR-6）: 編集権限がなければ保存も楽観更新もしない。
+      // start 系のガードを通らない経路（配線漏れ・直接呼び出し）への最終防衛線。viaEdit 分岐より前に置く
+      if (!_canEditForDnd(origEv)) {
+        console.warn('[KC.DnD] _commitOptimistic: 編集権限がないため中止しました（recordId=' +
+          (origEv && origEv.id) + '）');
+        return;
+      }
       source = (source === 'resize') ? 'resize' : 'dnd';
       // viaEdit: State の楽観更新より前に分岐する（REST は呼ばない）
       if (KC.Config.DND_SAVE_MODE === 'viaEdit') {
@@ -3170,8 +3670,18 @@
         })
         .catch(function (err) {
           var msg = (err && err.message) ? err.message : String(err);
-          // 409 競合も含む全エラーで alert + ロールバック
-          alert('予定の更新に失敗しました: ' + msg);
+          // 権限エラー（REQ_field-value-rule-groups FR-7）: kintone.api の reject は { code, id, message } 形で、
+          // 権限不足は code === 'CB_NO02' と想定して分岐する。★要実機確認（U-6）: 編集権限のないユーザーで
+          // 実際に失敗させ、reject オブジェクトの形と code の値を確認すること。
+          // status は kintone.api の reject には無い想定だが、含まれていた場合の保険として 403 も権限エラー扱いにする。
+          // code が無い・上記以外（409 リビジョン競合等）は従来文言のまま。
+          if (err && (err.code === 'CB_NO02' || err.status === 403)) {
+            alert('このレコードを編集する権限がありません。');
+          } else {
+            // 409 競合を含む権限エラー以外の全エラー
+            alert('予定の更新に失敗しました: ' + msg);
+          }
+          // 失敗時は従来どおり楽観更新を巻き戻す（実状態を再取得して再描画）
           KC.Render.refresh();
         });
     }
@@ -3358,6 +3868,7 @@
      */
     function startMoveAllday(ev, mousedown, barEl) {
       if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
+      if (!_canEditForDnd(ev)) return;    // 編集権限なし（配線漏れの最終防衛線。クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -3545,6 +4056,7 @@
      */
     function startResizeAllday(ev, side, mousedown, barEl) {
       if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
+      if (!_canEditForDnd(ev)) return;    // 編集権限なし（配線漏れの最終防衛線。クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -3904,6 +4416,7 @@
      */
     function startMove(ev, mousedown, barEl, allBars) {
       if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
+      if (!_canEditForDnd(ev)) return;    // 編集権限なし（配線漏れの最終防衛線。クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var origStart = new Date(ev.start);
@@ -3953,6 +4466,7 @@
      */
     function startResize(ev, side, mousedown, barEl) {
       if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
+      if (!_canEditForDnd(ev)) return;    // 編集権限なし（配線漏れの最終防衛線。クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var origStart = new Date(ev.start);
@@ -4136,6 +4650,7 @@
      */
     function startMoveAlldayMonth(ev, mousedown, barEl, allSegs) {
       if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
+      if (!_canEditForDnd(ev)) return;    // 編集権限なし（配線漏れの最終防衛線。クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -4173,6 +4688,7 @@
      */
     function startResizeAlldayMonth(ev, side, mousedown, barEl, allSegs) {
       if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
+      if (!_canEditForDnd(ev)) return;    // 編集権限なし（配線漏れの最終防衛線。クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildAlldayGhost(ev, '');
@@ -4359,6 +4875,7 @@
      */
     function startMoveMonthChip(ev, mousedown, chipEl) {
       if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
+      if (!_canEditForDnd(ev)) return;    // 編集権限なし（配線漏れの最終防衛線。クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildMonthChipGhost(ev);
@@ -4392,6 +4909,7 @@
      */
     function startResizeMonthTimedSpan(ev, side, mousedown, barEl, allSegs) {
       if (!KC.Config.DND_ENABLED) return; // ドラッグ操作無効設定（クリックでの編集は影響なし）
+      if (!_canEditForDnd(ev)) return;    // 編集権限なし（配線漏れの最終防衛線。クリックでの編集は影響なし）
       mousedown.preventDefault();
 
       var ghost = _buildMonthChipGhost(ev);
@@ -4462,6 +4980,26 @@
       _user = kintone.getLoginUser();
     }
 
+    /** ログインユーザーの所属組織・所属グループのコード（フィールド値ルールの ORGANIZATION_SELECT / GROUP_SELECT 条件用）。null = 未取得 */
+    var _membership = { orgCodes: null, groupCodes: null };
+
+    /**
+     * フィールド値ルールの条件に ORGANIZATION_SELECT / GROUP_SELECT がある場合だけ、所属を User API で 1 回取得してキャッシュする
+     * （REQ_field-value-rule-groups FR-2。評価のたびには呼ばない）。条件が無ければ API を呼ばない。
+     * KC.Boot.init が初回描画の前に await する。失敗しても reject しない（該当条件は false＋console.warn 1 回）
+     * @returns {Promise<void>}
+     */
+    function loadMembership() {
+      var need = KC.Config.FIELDVALUE_MEMBERSHIP_NEEDS || {};
+      if (!need.org && !need.group) return Promise.resolve();
+      return KC.RuleEval.loadMembership(
+        function (url, method, params) { return kintone.api(url, method, params); },
+        function (path, detectGuest) { return kintone.api.url(path, detectGuest); },
+        getUserCode(),
+        need
+      ).then(function (m) { _membership = m; });
+    }
+
     /**
      * ログインユーザーのコードを返す
      * @returns {string|null}
@@ -4518,20 +5056,6 @@
       return { bgColor: null, textColor: null };
     }
 
-    /**
-     * フィールド値権限ルール 1 エントリの値マッチを判定する（REQ v6 §5.10）
-     * CHECK_BOX は任意要素一致（§10 U-7）、その他は完全一致
-     * @param {string|string[]} fieldValue - レコードのフィールド値
-     * @param {string} ruleValue - ルールの条件値
-     * @param {string} fieldType - フィールド型
-     * @returns {boolean}
-     */
-    function _matchFieldValue(fieldValue, ruleValue, fieldType) {
-      if (fieldType === 'CHECK_BOX') {
-        return Array.isArray(fieldValue) && fieldValue.indexOf(ruleValue) !== -1;
-      }
-      return fieldValue === ruleValue;
-    }
 
     /**
      * デフォルト設定が有効な場合はその値を返し、無効な場合はハードコードフォールバックを返す (REQ_default-permission)
@@ -4571,12 +5095,19 @@
       var fvRules   = KC.Config.FIELDVALUE_RULES  || [];
       var permRules = KC.Config.PERMISSION_RULES  || [];
 
-      // 1. フィールド値ルールを先にチェック（§5.10）
+      // 1. フィールド値ルールを先にチェック（§5.10）。上から順に評価し、最初に一致した行を採用する。
+      //    各行の when（条件グループ AND/OR 入れ子）の評価は KC.RuleEval.evaluate に集約している
+      //    （REQ_field-value-rule-groups FR-3。DnD ガード・色決定・描画のすべてがこの関数を共通で通る）
+      var ruleCtx = {
+        loginCode:  _user ? _user.code : null,
+        orgCodes:   _membership.orgCodes,
+        groupCodes: _membership.groupCodes
+        // today は省略 = evaluate が呼び出し時点のブラウザのローカル日付を使う（日付が変わっても追従する）
+      };
+      var getRuleValue = function (code) { return evt.valueFields ? evt.valueFields[code] : undefined; };
       for (var fi = 0; fi < fvRules.length; fi++) {
         var fvRule    = fvRules[fi];
-        var fieldVal  = evt.valueFields ? evt.valueFields[fvRule.fieldCode] : undefined;
-        if (fieldVal === undefined) continue;
-        if (!_matchFieldValue(fieldVal, fvRule.value, fvRule.fieldType)) continue;
+        if (!KC.RuleEval.evaluate(fvRule.when, getRuleValue, ruleCtx)) continue;
         return {
           canEdit:       _permLevel(fvRule.permission) >= 2,
           canDelete:     _permLevel(fvRule.permission) >= 3,
@@ -4614,9 +5145,10 @@
     }
 
     return {
-      init:          init,
-      getUserCode:   getUserCode,
-      getPermission: getPermission
+      init:           init,
+      loadMembership: loadMembership,
+      getUserCode:    getUserCode,
+      getPermission:  getPermission
     };
   }());
 
@@ -12110,6 +12642,9 @@
       // ログインユーザー情報をキャッシュ（権限判定に使用）
       // USER_SELECT のみ対応のため同期呼び出しで十分
       KC.LoginContext.init();
+      // フィールド値ルールに ORGANIZATION_SELECT / GROUP_SELECT 条件がある場合のみ、所属を 1 回取得する
+      // （初回描画の前に完了させる。条件が無ければ API を呼ばず即 resolve。失敗しても reject しない）
+      await KC.LoginContext.loadMembership();
 
       // P-13: 祝日データを非同期取得（await しない: 初回はハードコードで即時描画し、取得完了後に再描画）
       // CSP で外部 API がブロックされた場合は console.warn のみ出力して継続する
