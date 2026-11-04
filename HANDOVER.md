@@ -59,7 +59,7 @@ kintone レコードを Google Calendar 風に表示するカスタマイズ JS�
 | 8l | `projects/kintone-calendar/requirements/REQ_search-bar.md` | 検索バー 要件定義書（v4 確定版。2026-06-02 更新） |
 | 8m | `projects/kintone-calendar/requirements/REQ_month-cell-fixed-height.md` | 月ビュー セル高さ固定・表示件数動的算出 要件定義書（確定版 第 5 版。2026-06-11 更新。実機検証済み） |
 | 8n | `projects/kintone-calendar/requirements/REQ_url-state-sync.md` | URL 状態同期（ディープリンク化）要件定義書（確定版 第 3 版。2026-06-11 更新。実機検証済み） |
-| 8o | `projects/kintone-calendar/requirements/REQ_dnd-overlap-block.md` | DnD 重複予防ブロック 要件定義書（確定版 第 6 版。2026-06-11 更新。モード B は実機未検証） |
+| 8o | `projects/kintone-calendar/requirements/REQ_dnd-overlap-block.md` | DnD 重複予防ブロック 要件定義書（確定版 第 6 版。2026-06-11 更新。モード B は実機検証済（2026-11-04、BMO 機材貸出 DEV 1004 で 4 ケース合格。記録: projects/bmo-equipment-lending/docs/VERIFY_V1_MODEB_2026-11-04.md）） |
 | 8p | `projects/kintone-calendar/requirements/PERF_AUDIT_2026-06.md` | 処理効率化調査レポート（全 14 件。2026-06-12 作成。P-1〜P-14 実装済み） |
 | 9 | `git log --oneline -40` | 直近の変更履歴（重要コミット: df9ff76 = DnD 重複モード B 実装、9af5a55/f05ae9c = URL 状態同期 Phase 1/2、8b2550f = リロード URL パラメータ消失修正、ea799b7 = CB_VA01 バグ修正、c67daa6 = getViewId 誤使用修正（ビュー個別設定が初めて有効化）、b64d251 = ポップアップ初回即閉じ修正、0a0b293 = 処理効率化 P-1〜P-14 一括実装） |
 
@@ -116,7 +116,7 @@ kintone レコードを Google Calendar 風に表示するカスタマイズ JS�
 | **残存 NG（reviewer 観察事項）** | #3 翌日表記、#4 `.kc-overlay` の CSS/JS 競合、Low 2 件（定数集約等）、ARIA 属性は別フェーズ |
 | **月ビュー セル高さ固定一式** | セル高固定・終日/日跨ぎ/chip の件数制限統一・`+N more` 最終スロット+1 配置・週行数動的化（4〜6 週。全日翌月の末尾週は非表示）。REQ_month-cell-fixed-height 第 5 版。**実機検証済み（k/891）** |
 | **+N more ポップオーバー（終日バー新形式）** | ポップオーバー内の複数日終日バーを「タイトル M/D - M/D」flex 形式（括弧なし・スペース区切り）に変更。旧「別行期間ラベル」方式廃止。終了日 +1 ずれバグも同時修正。REQ_month-overflow-popup 第 5 版。**実機検証済み** |
-| **DnD 重複ブロック** | モード A（`overlapKeyFieldCode` による直接フィールド比較クエリ）と モード B（関連レコード方式: 申請番号 → 機器 ID 集合の交差判定、4 ステップ）。config v7→v9。REQ_dnd-overlap-block 第 6 版。**モード A は実機検証済み、モード B は実機未検証** |
+| **DnD 重複ブロック** | モード A（`overlapKeyFieldCode` による直接フィールド比較クエリ）と モード B（関連レコード方式: 申請番号 → 機器 ID 集合の交差判定、4 ステップ）。config v7→v9。REQ_dnd-overlap-block 第 6 版。**モード A は実機検証済み、モード B は実機検証済（2026-11-04、BMO 機材貸出 DEV 1004 で 4 ケース合格。記録: projects/bmo-equipment-lending/docs/VERIFY_V1_MODEB_2026-11-04.md）** |
 | **URL 状態同期（ディープリンク）** | `KC.UrlState` モジュール新規追加。`#kc:` プレフィクスのハッシュ。view/date/filter/q/fs/scroll（replaceState 系）+ record/new/more（pushState 系・戻るボタン連動）。リロード時の URL 書き戻し（`_initialParams` キャッシュ方式）。REQ_url-state-sync 第 3 版。**実機検証済み（k/891 でリロード保持確認）** |
 | **処理効率化 P-1〜P-14** | `detectFields`/`detectAppName` 並列化、関連レコード TTL 5 分キャッシュ、placeMonthEvents 二重実行除去、祝日取得後の不要 loadEvents 削減、iframe ポーリング→イベント駆動+1500ms フォールバック、`KC_DEBUG` ログゲート等。PERF_AUDIT_2026-06.md 参照。**実機体感は未確認** |
 | **実装済（プラグイン化 Phase 1〜10）** | `plugin/` ディレクトリに src/html/js/css 構成＋ビルド成果物（`plugin/dist/*.ppk`）が存在。設定画面（config.html/config.js/config.css）・desktop.js/desktop.css・manifest.json・ローカル開発環境（plugin/dev/）・ビュー単位設定管理（Phase 9 の 2 階層設計）・重なり描画（Phase 10: 時間予定の列分割 + 半重ね + 右側余白、`OVERLAP_RATIO=0.5`、`RIGHT_MARGIN_PX=24`、FullCalendar 第 6 版互換）まで実装済 |
@@ -126,7 +126,7 @@ kintone レコードを Google Calendar 風に表示するカスタマイズ JS�
 | **月ビュー `+N more` ポップオーバー** | フローティングポップオーバー（Google カレンダー踏襲）を実装。全画面表示モード / 通常表示モード両方で動作確認済み（2026-05-29 実機検証 OK）。初版 b3614be → イベント委譲 03ba4a2 → ownerDocument + WeakSet 1e3e0ea → hover 完全分離 aed90c4 → z-index 99999 21ecde6 |
 | **検索バー Phase 2** | プラグイン設定で検索対象フィールドをテーブル形式で指定（文字列系 + REFERENCE_TABLE + USER_SELECT）。カーソル API で関連先全件を事前一括取得。フローティング一覧で `+N more` 隠れ予定も含む全マッチ表示。Enter キー / アイテムクリック → iframe モーダル起動。実機検証 OK（2026-06-02）。コミット系列: cfe4372 → 790546a → 970b494 → 81dd00b |
 | **バグ修正（2026-06-10〜12）** | 検索 REFERENCE_TABLE キャッシュ CB_VA01（空フィールドコード混入）修正（ea799b7）、リロード URL パラメータ消失修正（8b2550f）、`kintone.app.getViewId()` 不存在 API 誤使用修正（c67daa6）、ポップアップ初回即閉じ修正（b64d251） |
-| **未着手** | プラグイン版別アプリ動作検証（Phase 4 以降）、Phase 2 実機検証（Phase 5）、モード B 実機検証 |
+| **未着手** | プラグイン版別アプリ動作検証（Phase 4 以降）、Phase 2 実機検証（Phase 5）（モード B 実機検証は実施済: 2026-11-04、BMO 機材貸出 DEV 1004 で 4 ケース合格。記録: projects/bmo-equipment-lending/docs/VERIFY_V1_MODEB_2026-11-04.md） |
 
 ### 主要バグ（Phase 2 スコープ、2026-05-20 実機検証結果を追記）
 
@@ -144,7 +144,7 @@ kintone レコードを Google Calendar 風に表示するカスタマイズ JS�
 |---|---|
 | リサイズ DnD が MCP / JS dispatch で反応しない | 実機ユーザー操作で要再確認 |
 | 同一レコードへの連続 DnD が反映されないケース | 要件 §3.10.1「レスポンス待たない非同期送信」と関連 |
-| DnD 重複ブロック モード B 実機未検証 | REFERENCE_TABLE 方式（機器集合の交差判定）。検証環境の準備が必要 |
+| DnD 重複ブロック モード B 実機検証済（2026-11-04、BMO 機材貸出 DEV 1004 で 4 ケース合格。記録: projects/bmo-equipment-lending/docs/VERIFY_V1_MODEB_2026-11-04.md） | REFERENCE_TABLE 方式（機器集合の交差判定） |
 | CHECK_BOX 型 `in` 演算子の動作（Q-4） | REQ_dnd-overlap-block §10 Q-4 参照。実機確認が必要 |
 | 処理効率化の実機体感確認 | P-1〜P-14 実装済み（0a0b293）。実際の起動時間・月送り速度の変化を実機で確認すること |
 | `B-P4`（_computeMatchList の空クエリ時 _renderDropdown スキップ）は見送り | 既存動作保護のため実装見送り（PERF_AUDIT_2026-06 §4 参照） |
@@ -187,7 +187,7 @@ kintone-calendar プロジェクトを引き継ぎました。以下の順番で
    REQ_month-overflow-popup.md [第 5 版], REQ_search-bar.md [v4 確定],
    REQ_month-cell-fixed-height.md [第 5 版・実機検証済み],
    REQ_url-state-sync.md [第 3 版・実機検証済み],
-   REQ_dnd-overlap-block.md [第 6 版・モード B 実機未検証],
+   REQ_dnd-overlap-block.md [第 6 版・モード B 実機検証済（2026-11-04、BMO 機材貸出 DEV 1004 で 4 ケース合格。記録: projects/bmo-equipment-lending/docs/VERIFY_V1_MODEB_2026-11-04.md）],
    PERF_AUDIT_2026-06.md [P-1〜P-14 実装済み]）
 7. git log --oneline -40
 
@@ -208,7 +208,7 @@ kintone-calendar プロジェクトを引き継ぎました。以下の順番で
 【実装済（2026-06-12 時点）】
 - 月ビュー セル高さ固定一式（実機検証済み。0191c4a〜83557ef の系列）
 - +N more ポップオーバー 終日バー新形式「タイトル M/D - M/D」flex 表示（実機検証済み。bbd0d9b〜0ea7325）
-- DnD 重複ブロック モード A（実機検証済み）+ モード B（実機未検証。df9ff76）
+- DnD 重複ブロック モード A（実機検証済み）+ モード B（実機検証済（2026-11-04、BMO 機材貸出 DEV 1004 で 4 ケース合格。記録: projects/bmo-equipment-lending/docs/VERIFY_V1_MODEB_2026-11-04.md）。df9ff76）
 - URL 状態同期 Phase 1/2（実機検証済み。9af5a55/f05ae9c）
 - 処理効率化 P-1〜P-14（実機体感未確認。0a0b293）
 - バグ修正: CB_VA01（ea799b7）、リロード URL 消失（8b2550f）、getViewId 誤使用（c67daa6）、初回クリック即閉じ（b64d251）
@@ -217,7 +217,7 @@ kintone-calendar プロジェクトを引き継ぎました。以下の順番で
 時間予定機能への追加要件・バグ報告は検証環境の準備から始めること。
 
 【残存未確定事項】
-- DnD 重複ブロック モード B の実機検証（REFERENCE_TABLE 機器集合方式）
+- DnD 重複ブロック モード B の実機検証（REFERENCE_TABLE 機器集合方式）: 実施済（2026-11-04、BMO 機材貸出 DEV 1004 で 4 ケース合格。記録: projects/bmo-equipment-lending/docs/VERIFY_V1_MODEB_2026-11-04.md）
 - CHECK_BOX 型 in 演算子の実機確認（REQ_dnd-overlap-block §10 Q-4）
 - URL 状態同期 Q-3〜Q-5（builder 判断または実機確認）
 - 処理効率化の実機体感確認（起動時間・月送り速度）
@@ -259,7 +259,7 @@ kintone-calendar プロジェクトを引き継ぎました。以下の順番で
 | DATE / DATETIME フィールド | フィールドコードは `KC.Config.FIELD` にハードコード。汎用化する場合は `KC.Config.detectFields()` を使い起動時に fields API で自動判別する方式に移行（FIELD_REFERENCE.md §3〜§4 参照） |
 | 終日 ⇄ 時間あり相互変換 | kintone フィールド型固定のため未実装。変換には kintone アプリ側のフィールド設計変更が必要 |
 | ARIA / キーボード DnD / タッチ | 将来対応フェーズ。REQ_event-drag-resize.md §10.5 参照 |
-| DnD 重複ブロック モード B 実機未検証 | 関連レコード方式（REFERENCE_TABLE 経由の機器集合交差判定）。4 ステップ非同期処理。実機での動作確認が必要。CHECK_BOX 型 `in` 演算子の挙動（Q-4）も未確認 |
+| DnD 重複ブロック モード B 実機検証済（2026-11-04、BMO 機材貸出 DEV 1004 で 4 ケース合格。記録: projects/bmo-equipment-lending/docs/VERIFY_V1_MODEB_2026-11-04.md） | 関連レコード方式（REFERENCE_TABLE 経由の機器集合交差判定）。4 ステップ非同期処理。CHECK_BOX 型 `in` 演算子の挙動（Q-4）も未確認 |
 | URL 状態同期 Q-3〜Q-5 | 残存未確定事項。builder 判断または実機確認が必要（REQ_url-state-sync §10 参照） |
 | 処理効率化 実機体感 | P-1〜P-14 すべて実装済み（0a0b293）。起動時間・月送り速度の実機計測は未実施 |
 | B-P4 見送り | `_computeMatchList` の空クエリ時 `_renderDropdown` スキップ。既存動作保護のため見送り（PERF_AUDIT_2026-06 §4 参照） |
